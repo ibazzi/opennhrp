@@ -11,7 +11,7 @@
 #ifndef NHRP_PROTOCOL_H
 #define NHRP_PROTOCOL_H
 
-#define <stdint.h>
+#include <stdint.h>
 #include "afnum.h"
 
 /* NHRP Link layer related defines */
@@ -75,41 +75,47 @@
 
 /* NHRP Packet Structures */
 struct nhrp_packet_header {
-	uint16		ar_afn;
-	uint16		ar_pro_type;
-	uint8		ar_snap[5];
-	uint8		ar_hopcnt;
-	uint16		ar_pktsz;
-	uint16		ar_chksum;
-	uint16		ar_extoff;
-	uint16		ar_op_version;
-	uint16		ar_op_type;
-	uint16		ar_shtl;
-	uint16		ar_sstl;
-};
+	/* Fixed header */
+	uint16_t	afnum;
+	uint16_t	protocol_type;
+	uint8_t		snap[5];
+	uint8_t		hop_count;
+	uint16_t	packet_size;
+	uint16_t	checksum;
+	uint16_t	extension_offset;
+	uint8_t		version;
+	uint8_t		type;
+	uint8_t		src_nbma_address_len;
+	uint8_t		src_nbma_subaddress_len;
 
-struct nhrp_packet_mandatory_part {
-	uint8		src_proto_len;
-	uint8		dst_proto_len;
-	uint16		flags;
-	uint32		request_id;
+	/* Mandatory header */
+	uint8_t		src_protocol_address_len;
+	uint8_t		dst_protocol_address_len;
+	uint16_t	flags;
+	union {
+		uint32_t		request_id;
+		struct {
+			uint16_t	code;
+			uint16_t	offset;
+		} error;
+	} u;
 };
 
 struct nhrp_cie_header {
-	uint8		code;
-	uint8		prefix_length;
-	uint16		unused;
-	uint16		mtu;
-	uint16		holding_time;
-	uint8		cli_nbma_address_len;
-	uint8		cli_nbma_subaddress_len;
-	uint8		cli_protocol_len;
-	uint8		preference;
+	uint8_t		code;
+	uint8_t		prefix_length;
+	uint16_t	unused;
+	uint16_t	mtu;
+	uint16_t	holding_time;
+	uint8_t		nbma_address_len;
+	uint8_t		nbma_subaddress_len;
+	uint8_t		protocol_address_len;
+	uint8_t		preference;
 };
 
 struct nhrp_extension_header {
-	uint16		type;
-	uint16		length;
+	uint16_t	type;
+	uint16_t	length;
 };
 
 #endif
