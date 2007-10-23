@@ -28,10 +28,13 @@ struct nhrp_peer {
 	uint16_t afnum;
 	uint16_t mtu;
 	uint32_t expire_time;
-	uint8_t nbma_address[NHRP_MAX_ADDRESS_LEN];
-	uint8_t nbma_subaddress[NHRP_MAX_SUBADDRESS_LEN];
-	uint8_t protocol_address[NHRP_MAX_ADDRESS_LEN];
-	uint8_t dst_protocol_address[NHRP_MAX_ADDRESS_LEN];
+	struct nhrp_nbma_address nbma_address;
+	struct nhrp_protocol_address protocol_address;
+	struct nhrp_protocol_address dst_protocol_address;
 };
+
+void nhrp_peer_insert(struct nhrp_peer *peer);
+void nhrp_peer_remove(struct nhrp_peer *peer);
+struct nhrp_peer *nhrp_peer_find(struct nhrp_protocol_address *dest, int min_prefix);
 
 #endif

@@ -14,21 +14,32 @@
 #include <sys/queue.h>
 #include "nhrp_protocol.h"
 
-#define NHRP_MAX_ADDRESS_LEN	8
-#define NHRP_MAX_SUBADDRESS_LEN	4
-#define NHRP_MAX_EXTENSIONS	10
+#define NHRP_MAX_ADDRESS_LEN		8
+#define NHRP_MAX_SUBADDRESS_LEN		4
+#define NHRP_MAX_EXTENSIONS		10
 
 struct nhrp_buffer {
 	uint32_t length;
 	uint8_t data[];
 };
 
+struct nhrp_nbma_address {
+	uint8_t addr_len;
+	uint8_t subaddr_len;
+	uint8_t addr[NHRP_MAX_ADDRESS_LEN];
+	uint8_t subadd[NHRP_MAX_SUBADDRESS_LEN];
+};
+
+struct nhrp_protocol_address {
+	uint8_t addr_len;
+	uint8_t addr[NHRP_MAX_ADDRESS_LEN];
+};
+
 struct nhrp_cie {
-	TAILQ_ENTRY(nhrp_cie) cie_list_entry;
-	struct nhrp_cie_header hdr;
-	uint8_t nbma_address[NHRP_MAX_ADDRESS_LEN];
-	uint8_t nbma_subaddress[NHRP_MAX_SUBADDRESS_LEN];
-	uint8_t protocol_address[NHRP_MAX_ADDRESS_LEN];
+	TAILQ_ENTRY(nhrp_cie)		cie_list_entry;
+	struct nhrp_cie_header		hdr;
+	struct nhrp_nbma_address	nbma_address;
+	struct nhrp_protocol_address	protocol_address;
 };
 
 TAILQ_HEAD(nhrp_cie_list_head, nhrp_cie);
@@ -47,13 +58,20 @@ struct nhrp_payload {
 };
 
 struct nhrp_packet {
-	struct nhrp_packet_header hdr;
-	uint8_t src_nbma_address[NHRP_MAX_ADDRESS_LEN];
-	uint8_t src_nbma_subaddress[NHRP_MAX_SUBADDRESS_LEN];
-	uint8_t src_protocol_address[NHRP_MAX_ADDRESS_LEN];
-	uint8_t dst_protocol_address[NHRP_MAX_ADDRESS_LEN];
-	struct nhrp_payload payload;
-	struct nhrp_payload extension[NHRP_MAX_EXTENSIONS];
+	struct nhrp_packet_header	hdr;
+	struct nhrp_nbma_address	src_nbma_address;
+	struct nhrp_protocol_address	src_protocol_address;
+	struct nhrp_protocol_address	dst_protocol_address;
+	struct nhrp_payload		payload;
+	struct nhrp_payload		extension[NHRP_MAX_EXTENSIONS];
 };
+
+struct nhrp_buffer *nhrp_buffer_alloc(uint32_t size);
+void nhrp_buffer_free(struct nhrp_buffer *buffer);
+
+struct nhrp_packet *nhrp_packet_alloc(void);
+void nhrp_packet_free(struct nhrp_packet *packet);
+int nhrp_packet_recv(struct nhrp_packet *packet);
+int nhrp_packet_send(struct nhrp_packet *packet);
 
 #endif
