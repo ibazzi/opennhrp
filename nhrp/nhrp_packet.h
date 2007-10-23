@@ -15,6 +15,7 @@
 #include "nhrp_protocol.h"
 
 #define NHRP_MAX_ADDRESS_LEN	8
+#define NHRP_MAX_SUBADDRESS_LEN	4
 #define NHRP_MAX_EXTENSIONS	10
 
 struct nhrp_buffer {
@@ -26,7 +27,7 @@ struct nhrp_cie {
 	TAILQ_ENTRY(nhrp_cie) cie_list_entry;
 	struct nhrp_cie_header hdr;
 	uint8_t nbma_address[NHRP_MAX_ADDRESS_LEN];
-	uint8_t nbma_subaddress[NHRP_MAX_ADDRESS_LEN];
+	uint8_t nbma_subaddress[NHRP_MAX_SUBADDRESS_LEN];
 	uint8_t protocol_address[NHRP_MAX_ADDRESS_LEN];
 };
 
@@ -48,7 +49,7 @@ struct nhrp_payload {
 struct nhrp_packet {
 	struct nhrp_packet_header hdr;
 	uint8_t src_nbma_address[NHRP_MAX_ADDRESS_LEN];
-	uint8_t src_nbma_subaddress[NHRP_MAX_ADDRESS_LEN];
+	uint8_t src_nbma_subaddress[NHRP_MAX_SUBADDRESS_LEN];
 	uint8_t src_protocol_address[NHRP_MAX_ADDRESS_LEN];
 	uint8_t dst_protocol_address[NHRP_MAX_ADDRESS_LEN];
 	struct nhrp_payload payload;
