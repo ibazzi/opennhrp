@@ -30,19 +30,20 @@ struct nhrp_interface {
 	LIST_ENTRY(nhrp_interface) name_list;
 	LIST_ENTRY(nhrp_interface) index_list;
 
+	/* Configured information */
 	char name[16];
-	unsigned int index;
 	unsigned int flags;
+	struct nhrp_buffer *cisco_authentication;
 
+	/* Cached from kernel */
+	unsigned int index;
 	uint16_t afnum;
 	struct nhrp_nbma_address nbma_address;
-
-	struct nhrp_buffer *cisco_authentication;
 	struct nhrp_interface_address_list address_list;
 };
 
 void nhrp_interface_hash(struct nhrp_interface *iface);
-struct nhrp_interface *nhrp_interface_get_by_name(const char *name);
-struct nhrp_interface *nhrp_interface_get_by_index(unsigned int index);
+struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create);
+struct nhrp_interface *nhrp_interface_get_by_index(unsigned int index, int create);
 
 #endif
