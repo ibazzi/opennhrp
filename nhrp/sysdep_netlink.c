@@ -11,6 +11,7 @@
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
+#include <malloc.h>
 #include <string.h>
 #include <sys/uio.h>
 #include <sys/types.h>
@@ -20,6 +21,7 @@
 
 #include "nhrp_common.h"
 #include "nhrp_interface.h"
+#include "nhrp_peer.h"
 
 typedef void (*netlink_dispatch_f)(struct nlmsghdr *msg);
 
@@ -92,12 +94,36 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 {
 	struct nhrp_interface *iface;
 	struct ifaddrmsg *ifa = NLMSG_DATA(msg);
+	struct rtattr *rta[IFA_MAX+1];
 
+	netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(msg));
 	iface = nhrp_interface_get_by_index(ifa->ifa_index, FALSE);
 	if (iface == NULL)
 		return;
 
-	nhrp_info("Interface '%s' address changed", iface->name);
+	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST) {
+		struct nhrp_peer *peer;
+
+		peer = calloc(1, sizeof(struct nhrp_peer));
+		peer->type = NHRP_PEER_TYPE_LOCAL;
+		peer->afnum = AFNUM_RESERVED;
+		switch (ifa->ifa_family) {
+		case PF_INET:
+			peer->protocol_type = ETH_P_IP;
+			peer->prefix_length = ifa->ifa_prefixlen;
+			peer->dst_protocol_address.addr_len = RTA_PAYLOAD(rta[IFA_LOCAL]);
+			memcpy(peer->dst_protocol_address.addr,
+			       RTA_DATA(rta[IFA_LOCAL]), RTA_PAYLOAD(rta[IFA_LOCAL]));
+			nhrp_peer_insert(peer);
+			break;
+		default:
+			free(peer);
+			peer = NULL;
+			break;
+		}
+	}
+
+
 }
 
 static const netlink_dispatch_f route_dispatch[RTM_MAX] = {

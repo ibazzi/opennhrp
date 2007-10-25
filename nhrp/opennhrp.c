@@ -10,13 +10,60 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <malloc.h>
 #include <stddef.h>
 #include <string.h>
+#include <arpa/inet.h>
 
-#include "nhrp_interface.h"
 #include "nhrp_common.h"
+#include "nhrp_peer.h"
+#include "nhrp_interface.h"
 
-int read_word(FILE *in, int *lineno, size_t len, char *word)
+int nhrp_parse_protocol_address(const char *string, uint16_t *protocol_type,
+				struct nhrp_protocol_address *addr, uint8_t *prefix_len)
+{
+	uint8_t tmp;
+	int r;
+
+	/* Try IP address format */
+	r = sscanf(string, "%hhd.%hhd.%hhd.%hhd/%hhd",
+		   &addr->addr[0], &addr->addr[1],
+		   &addr->addr[2], &addr->addr[3],
+		   prefix_len ? prefix_len : &tmp);
+	if ((r == 4) || (r == 5 && prefix_len != NULL)) {
+		*protocol_type = ETH_P_IP;
+		addr->addr_len = 4;
+		if (r == 4 && prefix_len != NULL)
+			*prefix_len = 32;
+		return 1;
+	}
+
+	return 0;
+}
+
+int nhrp_parse_nbma_address(const char *string, uint16_t *afnum,
+			    struct nhrp_nbma_address *addr)
+{
+	struct in_addr inaddr;
+
+	if (inet_aton(string, &inaddr)) {
+		*afnum = AFNUM_INET;
+		addr->addr_len = 4;
+		memcpy(addr->addr, &inaddr.s_addr, 4);
+		return 1;
+	}
+
+	return 0;
+}
+
+/*
+nhrp_parse_protocol_address(addr, &peer->protocol_type,
+	&peer->protocol_address,
+	&peer->prefix_length);
+nhrp_parse_nbma_address(nbma, &peer->afnum, &peer->nbma_address);
+*/
+
+static int read_word(FILE *in, int *lineno, size_t len, char *word)
 {
 	int ch, i;
 
@@ -42,12 +89,19 @@ int read_word(FILE *in, int *lineno, size_t len, char *word)
 	return 1;
 }
 
-int load_config(const char *config_file)
+static int load_config(const char *config_file)
 {
+#define NEED_INTERFACE() if (iface == NULL) { rc = 2; break; }
+
+	static const char *errors[] = {
+		"syntax error",
+		"missing keyword",
+		"interface context not defined",
+	};
 	struct nhrp_interface *iface = NULL;
-	char word[256];
+	char word[32], nbma[32], addr[32];
 	FILE *in;
-	int lineno = 1, rc = 0;
+	int lineno = 1, rc = -1;
 
 	in = fopen(config_file, "r");
 	if (in == NULL) {
@@ -58,31 +112,61 @@ int load_config(const char *config_file)
 	while (read_word(in, &lineno, sizeof(word), word)) {
 		if (strcmp(word, "interface") == 0) {
 			if (!read_word(in, &lineno, sizeof(word), word)) {
-				rc = -2;
+				rc = 1;
+				break;
+			}
+			iface = nhrp_interface_get_by_name(word, TRUE);
+		} else if (strcmp(word, "map") == 0) {
+			struct nhrp_peer *peer;
+
+			NEED_INTERFACE();
+			read_word(in, &lineno, sizeof(addr), addr);
+			read_word(in, &lineno, sizeof(nbma), nbma);
+			read_word(in, &lineno, sizeof(word), word);
+
+			if (strcmp(word, "register") == 0) {
+
+			} else {
+				rc = 0;
 				break;
 			}
 
-			iface = nhrp_interface_get_by_name(word, TRUE);
-		} else if (strcmp(word, "map") == 0) {
-			read_word(in, &lineno, sizeof(word), word);
-			read_word(in, &lineno, sizeof(word), word);
-			read_word(in, &lineno, sizeof(word), word);
+			peer = calloc(1, sizeof(struct nhrp_peer));
+			peer->type = NHRP_PEER_TYPE_STATIC;
+			nhrp_parse_protocol_address(addr, &peer->protocol_type,
+						    &peer->protocol_address,
+						    &peer->prefix_length);
+			nhrp_parse_nbma_address(nbma, &peer->afnum, &peer->nbma_address);
+			peer->dst_protocol_address = peer->protocol_address;
+			nhrp_peer_insert(peer);
 		} else if (strcmp(word, "cisco-authentication") == 0) {
+			NEED_INTERFACE();
 			read_word(in, &lineno, sizeof(word), word);
 		} else if (strcmp(word, "shortcut") == 0) {
+			NEED_INTERFACE();
+			iface->flags |= NHRP_INTERFACE_FLAG_SHORTCUT;
 		} else if (strcmp(word, "redirect") == 0) {
+			NEED_INTERFACE();
+			iface->flags |= NHRP_INTERFACE_FLAG_REDIRECT;
 		} else if (strcmp(word, "non-caching") == 0) {
+			NEED_INTERFACE();
+			iface->flags |= NHRP_INTERFACE_FLAG_NON_CACHING;
+		} else if (strcmp(word, "shortcut-destination") == 0) {
+			NEED_INTERFACE();
+			iface->flags |= NHRP_INTERFACE_FLAG_SHORTCUT_DEST;
 		} else {
-			rc = -1;
+			rc = 0;
 			break;
 		}
 	}
-
-	if (rc < 0)
-		nhrp_error("Config error in %s:%d, near word '%s'",
-			   config_file, lineno, word);
 	fclose(in);
-	return !rc;
+
+	if (rc >= 0) {
+		nhrp_error("Configuration file %s in %s:%d, near word '%s'",
+			   errors[rc], config_file, lineno, word);
+		return 0;
+	}
+	return 1;
 }
 
 int main(int argc, char **argv)

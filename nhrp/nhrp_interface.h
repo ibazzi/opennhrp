@@ -17,14 +17,7 @@
 #define NHRP_INTERFACE_FLAG_NON_CACHING		0x0001	/* Do not cache entries */
 #define NHRP_INTERFACE_FLAG_SHORTCUT		0x0002	/* Create shortcut routes */
 #define NHRP_INTERFACE_FLAG_REDIRECT		0x0004	/* Send redirects */
-
-struct nhrp_interface_addess {
-	CIRCLEQ_ENTRY(nhrp_interface_address) address_list;
-	uint16_t protocol_type;
-	struct nhrp_protocol_address protocol_address;
-};
-
-CIRCLEQ_HEAD(nhrp_interface_address_list, nhrp_interface_address);
+#define NHRP_INTERFACE_FLAG_SHORTCUT_DEST	0x0008	/* Advertise routes */
 
 struct nhrp_interface {
 	LIST_ENTRY(nhrp_interface) name_list;
@@ -35,11 +28,8 @@ struct nhrp_interface {
 	unsigned int flags;
 	struct nhrp_buffer *cisco_authentication;
 
-	/* Cached from kernel */
+	/* Cached from kernel interface */
 	unsigned int index;
-	uint16_t afnum;
-	struct nhrp_nbma_address nbma_address;
-	struct nhrp_interface_address_list address_list;
 };
 
 void nhrp_interface_hash(struct nhrp_interface *iface);

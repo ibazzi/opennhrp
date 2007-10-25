@@ -8,13 +8,14 @@
 # by the Free Software Foundation. See http://www.gnu.org/ for details.
 
 CC=colorgcc
-CFLAGS=-Wall -Wstrict-prototypes -g
+CFLAGS=-Wall -Wstrict-prototypes -std=gnu99 -g
 LDFLAGS=-g
 
 TARGETS=opennhrp
 
 OPENNHRP_OBJ=\
 	opennhrp.o \
+	nhrp_peer.o \
 	nhrp_interface.o \
 	sysdep_netlink.o \
 	sysdep_poll.o \
