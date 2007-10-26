@@ -14,10 +14,6 @@
 #include <stdint.h>
 #include "afnum.h"
 
-/* NHRP Link layer related defines */
-#define ETH_P_NHRP				0x2001
-#define IPPROTO_NHRP				54
-
 /* NHRP Version */
 #define NHRP_VERSION_RFC2332			1
 
@@ -32,14 +28,15 @@
 #define NHRP_PACKET_TRAFFIC_INDICATION		8
 
 /* NHRP Extension Types */
-#define NHRP_EXTENSION_COMPULSORY		0x8000
-#define NHRP_EXTENSION_END			(0 | NHRP_EXTENSION_COMPULSORY)
-#define NHRP_EXTENSION_RESPONDER_ADDRESS	(3 | NHRP_EXTENSION_COMPULSORY)
-#define NHRP_EXTENSION_FORWARD_TRANSIT_NHS	(4 | NHRP_EXTENSION_COMPULSORY)
-#define NHRP_EXTENSION_REVERSE_TRANSIT_NHS	(5 | NHRP_EXTENSION_COMPULSORY)
-#define NHRP_EXTENSION_AUTHENTICATION		(7 | NHRP_EXTENSION_COMPULSORY)
-#define NHRP_EXTENSION_VENDOR			(8)
-#define NHRP_EXTENSION_CISCO_NAT		(9)
+#define NHRP_EXTENSION_COMPULSORY		constant_htons(0x8000)
+#define NHRP_EXTENSION_END			constant_htons(0)
+#define NHRP_EXTENSION_PAYLOAD			constant_htons(0)
+#define NHRP_EXTENSION_RESPONDER_ADDRESS	constant_htons(3)
+#define NHRP_EXTENSION_FORWARD_TRANSIT_NHS	constant_htons(4)
+#define NHRP_EXTENSION_REVERSE_TRANSIT_NHS	constant_htons(5)
+#define NHRP_EXTENSION_AUTHENTICATION		constant_htons(7)
+#define NHRP_EXTENSION_VENDOR			constant_htons(8)
+#define NHRP_EXTENSION_CISCO_NAT		constant_htons(9)
 
 /* NHRP Error Indication Codes */
 #define NHRP_ERROR_UNRECOGNIZED_EXTENSION	1
@@ -61,17 +58,17 @@
 #define NHRP_CODE_UNIQUE_ADDRESS_REGISTERED     14
 
 /* NHRP Flags for Resolution request/reply */
-#define NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER	0x0001
-#define NHRP_FLAG_RESOLUTION_AUTHORATIVE	0x0002
-#define NHRP_FLAG_RESOLUTION_DESTINATION_STABLE	0x0004
-#define NHRP_FLAG_RESOLUTION_UNIQUE		0x0008
-#define NHRP_FLAG_RESOLUTION_SOURCE_STABLE	0x0010
+#define NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER	constant_htons(0x0001)
+#define NHRP_FLAG_RESOLUTION_AUTHORATIVE	constant_htons(0x0002)
+#define NHRP_FLAG_RESOLUTION_DESTINATION_STABLE	constant_htons(0x0004)
+#define NHRP_FLAG_RESOLUTION_UNIQUE		constant_htons(0x0008)
+#define NHRP_FLAG_RESOLUTION_SOURCE_STABLE	constant_htons(0x0010)
 
 /* NHRP Flags for Registration request/reply */
-#define NHRP_FLAG_REGISTRATION_UNIQUE		0x0001
+#define NHRP_FLAG_REGISTRATION_UNIQUE		constant_htons(0x0001)
 
 /* NHRP Flags for Purge request/reply */
-#define NHRP_FLAG_PURGE_NO_REPLY		0x0001
+#define NHRP_FLAG_PURGE_NO_REPLY		constant_htons(0x0001)
 
 /* NHRP Packet Structures */
 struct nhrp_packet_header {

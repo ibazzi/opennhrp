@@ -1,4 +1,5 @@
-/* afnum.h - RFC 1700 Address Family Number definitions
+/* afnum.h - RFC 1700 Address Family Number and
+ *           ethernet protocol number definitions
  *
  * Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
  * All rights reserved.
@@ -11,8 +12,15 @@
 #ifndef AFNUM_H
 #define AFNUM_H
 
-#define AFNUM_RESERVED		0
-#define AFNUM_INET		1
-#define AFNUM_INET6		2
+#include "nhrp_defines.h"
+
+#define AFNUM_RESERVED		constant_htons(0)
+#define AFNUM_INET		constant_htons(1)
+#define AFNUM_INET6		constant_htons(2)
+
+#define ETH_P_NHRP		0x2001
+
+#define ETHP_IP			constant_htons(ETH_P_IP)
+#define ETHP_NHRP		constant_htons(ETH_P_NHRP)
 
 #endif

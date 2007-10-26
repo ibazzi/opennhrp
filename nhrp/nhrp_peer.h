@@ -38,6 +38,7 @@ struct nhrp_peer {
 
 void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
-struct nhrp_peer *nhrp_peer_find(struct nhrp_protocol_address *dest, int min_prefix);
+struct nhrp_peer *nhrp_peer_find(uint16_t protocol_type,
+	struct nhrp_protocol_address *dest, int min_prefix);
 
 #endif

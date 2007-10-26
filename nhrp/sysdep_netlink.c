@@ -109,7 +109,7 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 		peer->afnum = AFNUM_RESERVED;
 		switch (ifa->ifa_family) {
 		case PF_INET:
-			peer->protocol_type = ETH_P_IP;
+			peer->protocol_type = ETHP_IP;
 			peer->prefix_length = ifa->ifa_prefixlen;
 			peer->dst_protocol_address.addr_len = RTA_PAYLOAD(rta[IFA_LOCAL]);
 			memcpy(peer->dst_protocol_address.addr,

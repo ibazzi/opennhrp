@@ -44,13 +44,15 @@ struct nhrp_cie {
 
 TAILQ_HEAD(nhrp_cie_list_head, nhrp_cie);
 
-#define NHRP_PAYLOAD_NONE		0
-#define NHRP_PAYLOAD_RAW		1
-#define NHRP_PAYLOAD_CIE_LIST		2
+#define NHRP_PAYLOAD_TYPE_NONE		0
+#define NHRP_PAYLOAD_TYPE_RAW		1
+#define NHRP_PAYLOAD_TYPE_CIE_LIST	2
+
+#define NHRP_PAYLOAD_FLAG_COMPULSORY	0x0001
 
 struct nhrp_payload {
 	uint16_t type;
-	uint16_t extension_type;
+	uint16_t flags;
 	union {
 		struct nhrp_buffer *raw;
 		struct nhrp_cie_list_head cie_list_head;
@@ -62,7 +64,6 @@ struct nhrp_packet {
 	struct nhrp_nbma_address	src_nbma_address;
 	struct nhrp_protocol_address	src_protocol_address;
 	struct nhrp_protocol_address	dst_protocol_address;
-	struct nhrp_payload		payload;
 	struct nhrp_payload		extension[NHRP_MAX_EXTENSIONS];
 };
 

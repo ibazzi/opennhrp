@@ -31,7 +31,7 @@ int nhrp_parse_protocol_address(const char *string, uint16_t *protocol_type,
 		   &addr->addr[2], &addr->addr[3],
 		   prefix_len ? prefix_len : &tmp);
 	if ((r == 4) || (r == 5 && prefix_len != NULL)) {
-		*protocol_type = ETH_P_IP;
+		*protocol_type = ETHP_IP;
 		addr->addr_len = 4;
 		if (r == 4 && prefix_len != NULL)
 			*prefix_len = 32;
@@ -39,6 +39,26 @@ int nhrp_parse_protocol_address(const char *string, uint16_t *protocol_type,
 	}
 
 	return 0;
+}
+
+const char *nhrp_format_protocol_address(
+	uint16_t protocol_type,
+	struct nhrp_protocol_address *addr,
+	size_t buflen, char *buffer)
+{
+	switch (protocol_type) {
+	case ETHP_IP:
+		snprintf(buffer, buflen, "%d.%d.%d.%d",
+			 addr->addr[0], addr->addr[1],
+			 addr->addr[2], addr->addr[3]);
+		break;
+	default:
+		snprintf(buffer, buflen, "(unsupported proto 0x%04x)",
+			 protocol_type);
+		break;
+	}
+
+	return buffer;
 }
 
 int nhrp_parse_nbma_address(const char *string, uint16_t *afnum,
@@ -54,6 +74,26 @@ int nhrp_parse_nbma_address(const char *string, uint16_t *afnum,
 	}
 
 	return 0;
+}
+
+const char *nhrp_format_nbma_address(
+	uint16_t afnum,
+	struct nhrp_nbma_address *addr,
+	size_t buflen, char *buffer)
+{
+	switch (afnum) {
+	case AFNUM_INET:
+		snprintf(buffer, buflen, "%d.%d.%d.%d",
+			 addr->addr[0], addr->addr[1],
+			 addr->addr[2], addr->addr[3]);
+		break;
+	default:
+		snprintf(buffer, buflen, "(unsupported afnum 0x%04x)",
+			 afnum);
+		break;
+	}
+
+	return buffer;
 }
 
 /*
