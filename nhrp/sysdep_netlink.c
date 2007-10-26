@@ -23,6 +23,9 @@
 #include "nhrp_interface.h"
 #include "nhrp_peer.h"
 
+#define NLMSG_TAIL(nmsg) \
+	((struct rtattr *) (((void *) (nmsg)) + NLMSG_ALIGN((nmsg)->nlmsg_len)))
+
 typedef void (*netlink_dispatch_f)(struct nlmsghdr *msg);
 
 struct netlink_fd {
@@ -36,6 +39,15 @@ struct netlink_fd {
 
 static struct netlink_fd netlink_fd;
 
+static int protocol_to_pf(uint16_t protocol)
+{
+	switch (protocol) {
+	case ETHP_IP:
+		return AF_INET;
+	}
+	return AF_UNSPEC;
+}
+
 static void netlink_parse_rtattr(struct rtattr *tb[], int max, struct rtattr *rta, int len)
 {
 	memset(tb, 0, sizeof(struct rtattr *) * (max + 1));
@@ -44,6 +56,115 @@ static void netlink_parse_rtattr(struct rtattr *tb[], int max, struct rtattr *rt
 			tb[rta->rta_type] = rta;
 		rta = RTA_NEXT(rta,len);
 	}
+}
+
+static int netlink_add_rtattr_l(struct nlmsghdr *n, int maxlen, int type,
+				const void *data, int alen)
+{
+	int len = RTA_LENGTH(alen);
+	struct rtattr *rta;
+
+	if (NLMSG_ALIGN(n->nlmsg_len) + RTA_ALIGN(len) > maxlen)
+		return FALSE;
+
+	rta = NLMSG_TAIL(n);
+	rta->rta_type = type;
+	rta->rta_len = len;
+	memcpy(RTA_DATA(rta), data, alen);
+	n->nlmsg_len = NLMSG_ALIGN(n->nlmsg_len) + RTA_ALIGN(len);
+	return TRUE;
+}
+
+static int netlink_receive(struct netlink_fd *fd, struct nlmsghdr *reply)
+{
+	struct sockaddr_nl nladdr;
+	struct iovec iov;
+	struct msghdr msg = {
+		.msg_name = &nladdr,
+		.msg_namelen = sizeof(nladdr),
+		.msg_iov = &iov,
+		.msg_iovlen = 1,
+	};
+	int got_reply = FALSE;
+	char buf[16*1024];
+
+	iov.iov_base = buf;
+	while (!got_reply) {
+		int status;
+		struct nlmsghdr *h;
+
+		iov.iov_len = sizeof(buf);
+		status = recvmsg(fd->fd, &msg, MSG_DONTWAIT);
+		if (status < 0) {
+			if (errno == EINTR)
+				continue;
+			if (errno == EAGAIN)
+				return reply == NULL;
+			nhrp_perror("Netlink overrun");
+			continue;
+		}
+
+		if (status == 0) {
+			nhrp_error("Netlink returned EOF");
+			return FALSE;
+		}
+
+		h = (struct nlmsghdr *) buf;
+		while (NLMSG_OK(h, status)) {
+			if (reply != NULL &&
+			    h->nlmsg_seq == reply->nlmsg_seq) {
+				memcpy(reply, h, reply->nlmsg_len);
+				got_reply = TRUE;
+			} else if (h->nlmsg_type <= fd->dispatch_size &&
+				fd->dispatch[h->nlmsg_type] != NULL) {
+				fd->dispatch[h->nlmsg_type](h);
+			} else if (h->nlmsg_type != NLMSG_DONE) {
+				nhrp_info("Unknown NLmsg: 0x%08x, len %d",
+					h->nlmsg_type, h->nlmsg_len);
+			}
+			h = NLMSG_NEXT(h, status);
+		}
+	}
+
+	return TRUE;
+}
+
+int netlink_talk(struct netlink_fd *fd, struct nlmsghdr *req,
+		 size_t replysize, struct nlmsghdr *reply)
+{
+	int status;
+	struct sockaddr_nl nladdr;
+	struct iovec iov = {
+		.iov_base = (void*) req,
+		.iov_len = req->nlmsg_len
+	};
+	struct msghdr msg = {
+		.msg_name = &nladdr,
+		.msg_namelen = sizeof(nladdr),
+		.msg_iov = &iov,
+		.msg_iovlen = 1,
+	};
+
+	memset(&nladdr, 0, sizeof(nladdr));
+	nladdr.nl_family = AF_NETLINK;
+	nladdr.nl_pid = 0;
+	nladdr.nl_groups = 0;
+
+	req->nlmsg_seq = ++fd->seq;
+	if (reply == NULL)
+		req->nlmsg_flags |= NLM_F_ACK;
+
+	status = sendmsg(fd->fd, &msg, 0);
+	if (status < 0) {
+		nhrp_perror("Cannot talk to rtnetlink");
+		return FALSE;
+	}
+
+	if (reply == NULL)
+		return TRUE;
+
+	reply->nlmsg_len = replysize;
+	return netlink_receive(fd, reply);
 }
 
 int netlink_enumerate(struct netlink_fd *fd, int family, int type)
@@ -122,8 +243,6 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 			break;
 		}
 	}
-
-
 }
 
 static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
@@ -137,51 +256,8 @@ static void netlink_read(void *ctx, short events)
 {
 	struct netlink_fd *fd = (struct netlink_fd *) ctx;
 
-	if (events & POLLIN) {
-		struct sockaddr_nl nladdr;
-		struct iovec iov;
-		struct msghdr msg = {
-			.msg_name = &nladdr,
-			.msg_namelen = sizeof(nladdr),
-			.msg_iov = &iov,
-			.msg_iovlen = 1,
-		};
-		char buf[16384];
-
-		iov.iov_base = buf;
-		while (1) {
-			int status;
-			struct nlmsghdr *h;
-
-			iov.iov_len = sizeof(buf);
-			status = recvmsg(fd->fd, &msg, MSG_DONTWAIT);
-			if (status < 0) {
-				if (errno == EINTR)
-					continue;
-				if (errno == EAGAIN)
-					return;
-				nhrp_perror("Netlink overrun");
-				continue;
-			}
-
-			if (status == 0) {
-				nhrp_error("Netlink returned EOF");
-				return;
-			}
-
-			h = (struct nlmsghdr *) buf;
-			while (NLMSG_OK(h, status)) {
-				if (h->nlmsg_type <= fd->dispatch_size &&
-				    fd->dispatch[h->nlmsg_type] != NULL) {
-					fd->dispatch[h->nlmsg_type](h);
-				} else if (h->nlmsg_type != NLMSG_DONE) {
-					nhrp_info("Unknown NLmsg: 0x%08x, len %d",
-						  h->nlmsg_type, h->nlmsg_len);
-				}
-				h = NLMSG_NEXT(h, status);
-			}
-		}
-	}
+	if (events & POLLIN)
+		netlink_receive(fd, NULL);
 }
 
 static void netlink_close(struct netlink_fd *fd)
@@ -253,3 +329,55 @@ int kernel_init(void)
 
 	return TRUE;
 }
+
+int kernel_route(uint16_t protocol,
+		 struct nhrp_protocol_address *dest,
+		 struct nhrp_protocol_address *default_source,
+		 uint16_t *afnum, struct nhrp_nbma_address *next_hop)
+{
+	struct {
+		struct nlmsghdr 	n;
+		struct rtmsg 		r;
+		char   			buf[1024];
+	} req;
+	struct rtmsg *r = NLMSG_DATA(&req.n);
+	struct rtattr *rta[RTA_MAX+1];
+
+	memset(&req, 0, sizeof(req));
+	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+	req.n.nlmsg_flags = NLM_F_REQUEST;
+	req.n.nlmsg_type = RTM_GETROUTE;
+	req.r.rtm_family = protocol_to_pf(protocol);
+	req.r.rtm_table = 0;
+	req.r.rtm_protocol = 0;
+	req.r.rtm_scope = 0;
+	req.r.rtm_type = 0;
+	req.r.rtm_src_len = 0;
+	req.r.rtm_dst_len = 0;
+	req.r.rtm_tos = 0;
+
+	netlink_add_rtattr_l(&req.n, sizeof(req), RTA_DST, dest->addr, dest->addr_len);
+	req.r.rtm_dst_len = dest->addr_len * 8;
+
+	if (!netlink_talk(&netlink_fd, &req.n, sizeof(req), &req.n))
+		return FALSE;
+
+	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(r), RTM_PAYLOAD(&req.n));
+
+	if (rta[RTA_DST])
+		nhrp_hex_dump("to", RTA_DATA(rta[RTA_DST]), RTA_PAYLOAD(rta[RTA_DST]));
+	if (rta[RTA_PREFSRC])
+		nhrp_hex_dump("from", RTA_DATA(rta[RTA_PREFSRC]), RTA_PAYLOAD(rta[RTA_PREFSRC]));
+	if (rta[RTA_GATEWAY])
+		nhrp_hex_dump("via", RTA_DATA(rta[RTA_GATEWAY]), RTA_PAYLOAD(rta[RTA_GATEWAY]));
+
+
+	return FALSE;
+}
+
+int kernel_get_nbma_source(uint16_t afnum, struct nhrp_nbma_address *dest,
+			   struct nhrp_nbma_address *default_source)
+{
+	return FALSE;
+}
+

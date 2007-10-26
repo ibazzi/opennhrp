@@ -42,7 +42,7 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 
 	if (peer->type == NHRP_PEER_TYPE_STATIC) {
 		/* Schedule registration */
-		nhrp_task_schedule(&peer->task, 5000, nhrp_peer_register);
+		nhrp_task_schedule(&peer->task, 1000, nhrp_peer_register);
 	}
 
 	nhrp_info("Peer %s learned at NBMA address %s",

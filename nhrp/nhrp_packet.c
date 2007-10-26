@@ -14,6 +14,7 @@
 #include <ctype.h>
 #include <netinet/in.h>
 #include "nhrp_packet.h"
+#include "nhrp_common.h"
 
 #define MAX_PDU_SIZE 1500
 
@@ -135,45 +136,31 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	return (int)(pos - pdu);
 }
 
-static void hex_dump(const char *name, const uint8_t *buf, int bytes)
-{
-	int i, j;
-	int left;
-
-	fprintf(stderr, "%s:\n", name);
-	for (i = 0; i < bytes; i++) {
-		fprintf(stderr, "%02X ", buf[i]);
-		if (i % 0x10 == 0x0f) {
-			fprintf(stderr, "    ");
-			for (j = 0; j < 0x10; j++)
-				fprintf(stderr, "%c", isgraph(buf[i+j-0xf]) ?
-					buf[i+j-0xf]: '.');
-			fprintf(stderr, "\n");
-		}
-	}
-
-	left = i % 0x10;
-	if (left != 0) {
-		fprintf(stderr, "%*s    ", 3 * (0x10 - left), "");
-
-		for (j = 0; j < left; j++)
-			fprintf(stderr, "%c", isgraph(buf[i+j-left]) ?
-				buf[i+j-left]: '.');
-		fprintf(stderr, "\n");
-	}
-	fprintf(stderr, "\n");
-}
-
 int nhrp_packet_send(struct nhrp_packet *packet)
 {
+	struct nhrp_nbma_address nexthop;
 	uint8_t pdu[MAX_PDU_SIZE];
 	int size;
+
+	if (packet->hdr.afnum == AFNUM_RESERVED ||
+	    packet->src_protocol_address.addr_len == 0 ||
+	    packet->src_nbma_address.addr_len == 0) {
+		if (!kernel_route(packet->hdr.protocol_type,
+				  &packet->dst_protocol_address,
+				  &packet->src_protocol_address,
+				  &packet->hdr.afnum, &nexthop))
+			return FALSE;
+
+		if (!kernel_get_nbma_source(packet->hdr.afnum, &nexthop,
+					    &packet->src_nbma_address))
+			return FALSE;
+	}
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0)
 		return FALSE;
 
-	hex_dump("packet", pdu, size);
+	nhrp_hex_dump("packet", pdu, size);
 
 	return FALSE;
 }
