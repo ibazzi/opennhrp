@@ -27,7 +27,7 @@ struct nhrp_nbma_address {
 	uint8_t addr_len;
 	uint8_t subaddr_len;
 	uint8_t addr[NHRP_MAX_ADDRESS_LEN];
-	uint8_t subadd[NHRP_MAX_SUBADDRESS_LEN];
+	uint8_t subaddr[NHRP_MAX_SUBADDRESS_LEN];
 };
 
 struct nhrp_protocol_address {

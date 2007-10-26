@@ -202,19 +202,17 @@ static int netlink_open(struct netlink_fd *fd, int protocol, int groups)
 	fd->seq = time(NULL);
 	if (fd->fd < 0) {
 		nhrp_perror("Cannot open netlink socket");
-		return 0;
+		return FALSE;
 	}
 
 	if (setsockopt(fd->fd, SOL_SOCKET, SO_SNDBUF, &buf, sizeof(buf)) < 0) {
 		nhrp_perror("SO_SNDBUF");
-		netlink_close(fd);
-		return 0;
+		goto error;
 	}
 
 	if (setsockopt(fd->fd, SOL_SOCKET, SO_RCVBUF, &buf, sizeof(buf)) < 0) {
 		nhrp_perror("SO_RCVBUF");
-		netlink_close(fd);
-		return 0;
+		goto error;
 	}
 
 	memset(&addr, 0, sizeof(addr));
@@ -222,10 +220,14 @@ static int netlink_open(struct netlink_fd *fd, int protocol, int groups)
 	addr.nl_groups = groups;
 	if (bind(fd->fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
 		nhrp_perror("Cannot bind netlink socket");
-		return 0;
+		goto error;
 	}
 
-	return 1;
+	return TRUE;
+
+error:
+	netlink_close(fd);
+	return FALSE;
 }
 
 int kernel_init(void)
@@ -233,14 +235,14 @@ int kernel_init(void)
 	const int groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR;
 
 	if (!netlink_open(&netlink_fd, NETLINK_ROUTE, groups))
-		return 0;
+		return FALSE;
 
 	netlink_fd.dispatch_size = sizeof(route_dispatch) / sizeof(route_dispatch[0]);
 	netlink_fd.dispatch = route_dispatch;
 
 	if (!nhrp_task_poll_fd(netlink_fd.fd, POLLIN, netlink_read, &netlink_fd)) {
 		netlink_close(&netlink_fd);
-		return 0;
+		return FALSE;
 	}
 
 	netlink_enumerate(&netlink_fd, AF_UNSPEC, RTM_GETLINK);
@@ -249,5 +251,5 @@ int kernel_init(void)
 	netlink_enumerate(&netlink_fd, AF_UNSPEC, RTM_GETADDR);
 	netlink_read(&netlink_fd, POLLIN);
 
-	return 1;
+	return TRUE;
 }

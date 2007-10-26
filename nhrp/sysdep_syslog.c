@@ -20,7 +20,7 @@ int log_init(void)
 {
 	openlog("opennhrp", LOG_PERROR | LOG_PID, LOG_DAEMON);
 
-	return 1;
+	return TRUE;
 }
 
 void nhrp_perror(const char *message)

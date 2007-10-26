@@ -39,7 +39,7 @@
 #endif
 
 #ifndef ARRAY_SIZE
-#define ARRAY_SIZE(array) (sizeof(x) / sizeof((x)[0]))
+#define ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
 #endif
 
 #ifndef offsetof

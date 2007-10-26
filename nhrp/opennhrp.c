@@ -35,10 +35,10 @@ int nhrp_parse_protocol_address(const char *string, uint16_t *protocol_type,
 		addr->addr_len = 4;
 		if (r == 4 && prefix_len != NULL)
 			*prefix_len = 32;
-		return 1;
+		return TRUE;
 	}
 
-	return 0;
+	return FALSE;
 }
 
 const char *nhrp_format_protocol_address(
@@ -70,10 +70,10 @@ int nhrp_parse_nbma_address(const char *string, uint16_t *afnum,
 		*afnum = AFNUM_INET;
 		addr->addr_len = 4;
 		memcpy(addr->addr, &inaddr.s_addr, 4);
-		return 1;
+		return TRUE;
 	}
 
-	return 0;
+	return FALSE;
 }
 
 const char *nhrp_format_nbma_address(
@@ -110,7 +110,7 @@ static int read_word(FILE *in, int *lineno, size_t len, char *word)
 	ch = fgetc(in);
 	while (isspace(ch)) {
 		if (ch == EOF)
-			return 0;
+			return FALSE;
 		if (ch == '\n')
 			(*lineno)++;
 		ch = fgetc(in);
@@ -120,13 +120,13 @@ static int read_word(FILE *in, int *lineno, size_t len, char *word)
 		word[i] = ch;
 		ch = fgetc(in);
 		if (ch == EOF)
-			return 0;
+			return FALSE;
 		if (ch == '\n')
 			(*lineno)++;
 	}
 	word[i] = 0;
 
-	return 1;
+	return TRUE;
 }
 
 static int load_config(const char *config_file)
@@ -146,7 +146,7 @@ static int load_config(const char *config_file)
 	in = fopen(config_file, "r");
 	if (in == NULL) {
 		nhrp_error("Unable to open configuration file '%s'.", config_file);
-		return -1;
+		return FALSE;
 	}
 
 	while (read_word(in, &lineno, sizeof(word), word)) {
@@ -204,9 +204,9 @@ static int load_config(const char *config_file)
 	if (rc >= 0) {
 		nhrp_error("Configuration file %s in %s:%d, near word '%s'",
 			   errors[rc], config_file, lineno, word);
-		return 0;
+		return FALSE;
 	}
-	return 1;
+	return TRUE;
 }
 
 int main(int argc, char **argv)

@@ -30,7 +30,7 @@ int nhrp_task_poll_fd(int fd, short events, void (*callback)(void *ctx, short ev
 {
 	if (numfds >= MAX_FDS) {
 		nhrp_error("Poll table full. Increase MAX_FDS in sysdep_poll.c.");
-		return 0;
+		return FALSE;
 	}
 
 	gctx[numfds].callback = callback;
@@ -39,7 +39,7 @@ int nhrp_task_poll_fd(int fd, short events, void (*callback)(void *ctx, short ev
 	gfds[numfds].events = events;
 	numfds++;
 
-	return 1;
+	return TRUE;
 }
 
 void nhrp_task_unpoll_fd(int fd)
