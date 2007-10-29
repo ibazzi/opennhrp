@@ -50,24 +50,29 @@ void nhrp_buffer_free(struct nhrp_buffer *buffer)
 
 void nhrp_payload_set_type(struct nhrp_payload *payload, int type)
 {
-	if (payload->type == type)
+	if (payload->payload_type == type)
 		return;
 
-	payload->type = type;
+	payload->payload_type = type;
 	switch (type) {
 	case NHRP_PAYLOAD_TYPE_CIE_LIST:
 		TAILQ_INIT(&payload->u.cie_list_head);
+		break;
+	default:
+		payload->u.raw = NULL;
 		break;
 	}
 }
 
 void nhrp_payload_set_raw(struct nhrp_payload *payload, struct nhrp_buffer *raw)
 {
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_RAW);
+	payload->u.raw = raw;
 }
 
 void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie)
 {
-	if (payload->type != NHRP_PAYLOAD_TYPE_CIE_LIST)
+	if (payload->payload_type != NHRP_PAYLOAD_TYPE_CIE_LIST)
 		return;
 
 	TAILQ_INSERT_TAIL(&payload->u.cie_list_head, cie, cie_list_entry);
@@ -76,6 +81,26 @@ void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie)
 struct nhrp_packet *nhrp_packet_alloc(void)
 {
 	return calloc(1, sizeof(struct nhrp_packet));
+}
+
+struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet)
+{
+	return nhrp_packet_extension(packet, NHRP_EXTENSION_PAYLOAD);
+}
+
+struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
+					   uint16_t extension)
+{
+	struct nhrp_payload *p;
+
+	if (packet->extension_by_type[extension & 0x7fff] != NULL)
+		return packet->extension_by_type[extension & 0x7fff];
+
+	p = &packet->extension_by_order[packet->num_extensions++];
+	p->extension_type = extension;
+	packet->extension_by_type[extension & 0x7fff] = p;
+
+	return p;
 }
 
 void nhrp_packet_free(struct nhrp_packet *packet)
@@ -139,7 +164,7 @@ static int marshall_payload(uint8_t **pdu, size_t *pduleft, struct nhrp_payload 
 {
 	struct nhrp_cie *cie;
 
-	switch (p->type) {
+	switch (p->payload_type) {
 	case NHRP_PAYLOAD_TYPE_NONE:
 		return TRUE;
 	case NHRP_PAYLOAD_TYPE_RAW:
@@ -172,28 +197,26 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 		return -1;
 	if (!marshall_protocol_address(&pos, &pduleft, &packet->dst_protocol_address))
 		return -1;
-	if (!marshall_payload(&pos, &pduleft, &packet->extension[NHRP_EXTENSION_PAYLOAD]))
+	if (!marshall_payload(&pos, &pduleft, nhrp_packet_payload(packet)))
 		return -1;
 
 	phdr->extension_offset = htons((int)(pos - pdu));
-	for (i = 1; i < ARRAY_SIZE(packet->extension); i++) {
+	for (i = 1; i < packet->num_extensions; i++) {
 		struct nhrp_extension_header *eh = (struct nhrp_extension_header *) pos;
 
-		if (packet->extension[i].type == NHRP_PAYLOAD_TYPE_NONE)
+		if (packet->extension_by_order[i].payload_type == NHRP_PAYLOAD_TYPE_NONE)
 			continue;
 
-		neh.type = htons(i);
-		if (packet->extension[i].flags & NHRP_PAYLOAD_FLAG_COMPULSORY)
-			neh.type |= NHRP_EXTENSION_FLAG_COMPULSORY;
+		neh.type = htons(packet->extension_by_order[i].extension_type);
 		neh.length = 0;
 
 		if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
 			return -1;
-		if (!marshall_payload(&pos, &pduleft, &packet->extension[i]))
+		if (!marshall_payload(&pos, &pduleft, &packet->extension_by_order[i]))
 			return -1;
 		eh->length = htons((pos - (uint8_t *) eh) - sizeof(neh));
 	}
-	neh.type = htons(NHRP_EXTENSION_END) | NHRP_EXTENSION_FLAG_COMPULSORY;
+	neh.type = htons(NHRP_EXTENSION_END | NHRP_EXTENSION_FLAG_COMPULSORY);
 	neh.length = 0;
 	if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
 		return -1;
@@ -217,6 +240,7 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 {
 	struct nhrp_nbma_address nexthop;
 	struct nhrp_interface *iface;
+	struct nhrp_payload *payload;
 	uint8_t pdu[MAX_PDU_SIZE];
 	int size;
 
@@ -225,11 +249,11 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 
 	if (packet->hdr.hop_count == 0)
 		packet->hdr.hop_count = 16;
-	if (packet->extension[NHRP_EXTENSION_AUTHENTICATION].type == NHRP_PAYLOAD_TYPE_NONE &&
+
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_AUTHENTICATION | NHRP_EXTENSION_FLAG_COMPULSORY);
+	if (payload->payload_type == NHRP_PAYLOAD_TYPE_NONE &&
 	    iface->auth_token != NULL) {
-		packet->extension[NHRP_EXTENSION_AUTHENTICATION].type = NHRP_PAYLOAD_TYPE_RAW;
-		packet->extension[NHRP_EXTENSION_AUTHENTICATION].flags = NHRP_PAYLOAD_FLAG_COMPULSORY;
-		packet->extension[NHRP_EXTENSION_AUTHENTICATION].u.raw = iface->auth_token;
+		nhrp_payload_set_raw(payload, iface->auth_token);
 	}
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);

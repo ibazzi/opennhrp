@@ -33,9 +33,11 @@ static void nhrp_peer_register(struct nhrp_task *task)
 		.hdr.holding_time = constant_htons(7200),
 		.hdr.preference = 0,
 	};
+	struct nhrp_payload *payload;
 
-	nhrp_payload_set_type(&r.extension[NHRP_EXTENSION_PAYLOAD], NHRP_PAYLOAD_TYPE_CIE_LIST);
-	nhrp_payload_add_cie(&r.extension[NHRP_EXTENSION_PAYLOAD], &cie);
+	payload = nhrp_packet_payload(&r);
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_payload_add_cie(payload, &cie);
 
 	nhrp_info("Sending NHRP-Register to %s",
 		nhrp_format_protocol_address(peer->protocol_type,
