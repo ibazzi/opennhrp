@@ -26,7 +26,7 @@ struct nhrp_interface {
 	/* Configured information */
 	char name[16];
 	unsigned int flags;
-	struct nhrp_buffer *cisco_authentication;
+	struct nhrp_buffer *auth_token;
 
 	/* Cached from kernel interface */
 	unsigned int index;

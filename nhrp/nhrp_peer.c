@@ -26,6 +26,16 @@ static void nhrp_peer_register(struct nhrp_task *task)
 		.hdr.flags = NHRP_FLAG_REGISTRATION_UNIQUE,
 		.dst_protocol_address = peer->dst_protocol_address,
 	};
+	struct nhrp_cie cie = {
+		.hdr.code = NHRP_CODE_SUCCESS,
+		.hdr.prefix_length = 0xff,
+		.hdr.mtu = 0,
+		.hdr.holding_time = 7200,
+		.hdr.preference = 0,
+	};
+
+	nhrp_payload_set_type(&r.extension[NHRP_EXTENSION_PAYLOAD], NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_payload_add_cie(&r.extension[NHRP_EXTENSION_PAYLOAD], &cie);
 
 	nhrp_info("Sending NHRP-Register to %s",
 		nhrp_format_protocol_address(peer->protocol_type,

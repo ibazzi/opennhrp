@@ -210,8 +210,18 @@ static int load_config(const char *config_file)
 			peer->dst_protocol_address = peer->protocol_address;
 			nhrp_peer_insert(peer);
 		} else if (strcmp(word, "cisco-authentication") == 0) {
+			struct nhrp_buffer *buf;
+			struct nhrp_cisco_authentication_extension *auth;
+
 			NEED_INTERFACE();
 			read_word(in, &lineno, sizeof(word), word);
+
+			buf = nhrp_buffer_alloc(strlen(word) + sizeof(uint32_t));
+			auth = (struct nhrp_cisco_authentication_extension *) buf->data;
+			auth->type = NHRP_AUTHENTICATION_PLAINTEXT;
+			memcpy(auth->secret, word, strlen(word));
+
+			iface->auth_token = buf;
 		} else if (strcmp(word, "shortcut") == 0) {
 			NEED_INTERFACE();
 			iface->flags |= NHRP_INTERFACE_FLAG_SHORTCUT;

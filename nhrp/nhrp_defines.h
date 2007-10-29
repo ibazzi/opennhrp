@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 #include <byteswap.h>
+#include <sys/param.h>
 
 #ifndef NULL
 #define NULL 0L

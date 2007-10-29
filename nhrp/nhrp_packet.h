@@ -70,6 +70,10 @@ struct nhrp_packet {
 struct nhrp_buffer *nhrp_buffer_alloc(uint32_t size);
 void nhrp_buffer_free(struct nhrp_buffer *buffer);
 
+void nhrp_payload_set_type(struct nhrp_payload *payload, int type);
+void nhrp_payload_set_raw(struct nhrp_payload *payload, struct nhrp_buffer *buf);
+void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie);
+
 struct nhrp_packet *nhrp_packet_alloc(void);
 void nhrp_packet_free(struct nhrp_packet *packet);
 int nhrp_packet_recv(struct nhrp_packet *packet);

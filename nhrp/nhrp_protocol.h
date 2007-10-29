@@ -36,7 +36,7 @@
 #define NHRP_EXTENSION_REVERSE_TRANSIT_NHS	5
 #define NHRP_EXTENSION_AUTHENTICATION		7
 #define NHRP_EXTENSION_VENDOR			8
-#define NHRP_EXTENSION_CISCO_NAT		9
+#define NHRP_EXTENSION_NAT_ADDRESS		9
 
 /* NHRP Error Indication Codes */
 #define NHRP_ERROR_UNRECOGNIZED_EXTENSION	1
@@ -58,17 +58,20 @@
 #define NHRP_CODE_UNIQUE_ADDRESS_REGISTERED     14
 
 /* NHRP Flags for Resolution request/reply */
-#define NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER	constant_htons(0x0001)
-#define NHRP_FLAG_RESOLUTION_AUTHORATIVE	constant_htons(0x0002)
-#define NHRP_FLAG_RESOLUTION_DESTINATION_STABLE	constant_htons(0x0004)
-#define NHRP_FLAG_RESOLUTION_UNIQUE		constant_htons(0x0008)
-#define NHRP_FLAG_RESOLUTION_SOURCE_STABLE	constant_htons(0x0010)
+#define NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER	constant_htons(0x8000)
+#define NHRP_FLAG_RESOLUTION_AUTHORATIVE	constant_htons(0x4000)
+#define NHRP_FLAG_RESOLUTION_DESTINATION_STABLE	constant_htons(0x2000)
+#define NHRP_FLAG_RESOLUTION_UNIQUE		constant_htons(0x1000)
+#define NHRP_FLAG_RESOLUTION_SOURCE_STABLE	constant_htons(0x0800)
 
 /* NHRP Flags for Registration request/reply */
-#define NHRP_FLAG_REGISTRATION_UNIQUE		constant_htons(0x0001)
+#define NHRP_FLAG_REGISTRATION_UNIQUE		constant_htons(0x8000)
 
 /* NHRP Flags for Purge request/reply */
-#define NHRP_FLAG_PURGE_NO_REPLY		constant_htons(0x0001)
+#define NHRP_FLAG_PURGE_NO_REPLY		constant_htons(0x8000)
+
+/* NHRP Authentication extension types (ala Cisco) */
+#define NHRP_AUTHENTICATION_PLAINTEXT		constant_htonl(0x00000001)
 
 /* NHRP Packet Structures */
 struct nhrp_packet_header {
@@ -113,6 +116,11 @@ struct nhrp_cie_header {
 struct nhrp_extension_header {
 	uint16_t	type;
 	uint16_t	length;
+};
+
+struct nhrp_cisco_authentication_extension {
+	uint32_t	type;
+	uint8_t		secret[];
 };
 
 #endif

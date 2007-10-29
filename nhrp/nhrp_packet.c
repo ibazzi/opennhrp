@@ -48,6 +48,31 @@ void nhrp_buffer_free(struct nhrp_buffer *buffer)
 	free(buffer);
 }
 
+void nhrp_payload_set_type(struct nhrp_payload *payload, int type)
+{
+	if (payload->type == type)
+		return;
+
+	payload->type = type;
+	switch (type) {
+	case NHRP_PAYLOAD_TYPE_CIE_LIST:
+		TAILQ_INIT(&payload->u.cie_list_head);
+		break;
+	}
+}
+
+void nhrp_payload_set_raw(struct nhrp_payload *payload, struct nhrp_buffer *raw)
+{
+}
+
+void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie)
+{
+	if (payload->type != NHRP_PAYLOAD_TYPE_CIE_LIST)
+		return;
+
+	TAILQ_INSERT_TAIL(&payload->u.cie_list_head, cie, cie_list_entry);
+}
+
 struct nhrp_packet *nhrp_packet_alloc(void)
 {
 	return calloc(1, sizeof(struct nhrp_packet));
@@ -88,13 +113,36 @@ static inline int marshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct n
 	return marshall_binary(pdu, pduleft, na->subaddr_len, na->subaddr);
 }
 
+static int marshall_cie(uint8_t **pdu, size_t *pduleft, struct nhrp_cie *cie)
+{
+	cie->hdr.nbma_address_len = cie->nbma_address.addr_len;
+	cie->hdr.nbma_subaddress_len = cie->nbma_address.subaddr_len;
+	cie->hdr.protocol_address_len = cie->protocol_address.addr_len;
+
+	if (!marshall_binary(pdu, pduleft, sizeof(struct nhrp_cie_header), &cie->hdr))
+		return FALSE;
+	if (!marshall_nbma_address(pdu, pduleft, &cie->nbma_address))
+		return FALSE;
+	return marshall_protocol_address(pdu, pduleft, &cie->protocol_address);
+}
+
 static int marshall_payload(uint8_t **pdu, size_t *pduleft, struct nhrp_payload *p)
 {
+	struct nhrp_cie *cie;
+
 	switch (p->type) {
 	case NHRP_PAYLOAD_TYPE_NONE:
 		return TRUE;
 	case NHRP_PAYLOAD_TYPE_RAW:
+		if (p->u.raw->length == 0)
+			return TRUE;
 		return marshall_binary(pdu, pduleft, p->u.raw->length, p->u.raw->data);
+	case NHRP_PAYLOAD_TYPE_CIE_LIST:
+		TAILQ_FOREACH(cie, &p->u.cie_list_head, cie_list_entry) {
+			if (!marshall_cie(pdu, pduleft, cie))
+				return FALSE;
+		}
+		return TRUE;
 	default:
 		return FALSE;
 	}
@@ -160,18 +208,29 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 {
 	struct nhrp_nbma_address nexthop;
 	struct nhrp_interface *iface;
+	struct nhrp_buffer *empty;
 	uint8_t pdu[MAX_PDU_SIZE];
 	int size;
 
 	if (!kernel_route(packet, &iface, &nexthop))
 		return FALSE;
 
+	empty = nhrp_buffer_alloc(0);
+
 	if (packet->hdr.hop_count == 0)
 		packet->hdr.hop_count = 16;
+	if (packet->extension[NHRP_EXTENSION_AUTHENTICATION].type == NHRP_PAYLOAD_TYPE_NONE &&
+	    iface->auth_token != NULL) {
+		packet->extension[NHRP_EXTENSION_AUTHENTICATION].type = NHRP_PAYLOAD_TYPE_RAW;
+		packet->extension[NHRP_EXTENSION_AUTHENTICATION].flags = NHRP_PAYLOAD_FLAG_COMPULSORY;
+		packet->extension[NHRP_EXTENSION_AUTHENTICATION].u.raw = iface->auth_token;
+	}
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0)
 		return FALSE;
+
+	nhrp_buffer_free(empty);
 
 	nhrp_hex_dump("packet", pdu, size);
 
