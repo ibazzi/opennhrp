@@ -8,6 +8,7 @@
  * by the Free Software Foundation. See http://www.gnu.org/ for details.
  */
 
+#include <string.h>
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
 
@@ -64,6 +65,18 @@ struct nhrp_peer *nhrp_peer_find(uint16_t protocol_type,
 	struct nhrp_peer *p;
 
 	CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
+		if (protocol_type != p->protocol_type)
+			continue;
+
+		if (min_prefix > p->prefix_length)
+			continue;
+
+		if (memcmp(dest->addr, p->dst_protocol_address.addr,
+			   p->prefix_length / 8) != 0)
+			continue;
+
+		/* FIXME: Check remaining bits of address */
+		return p;
 	}
 
 	return NULL;

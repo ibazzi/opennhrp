@@ -30,6 +30,7 @@ struct nhrp_interface {
 
 	/* Cached from kernel interface */
 	unsigned int index;
+	struct nhrp_nbma_address nbma_address;
 };
 
 void nhrp_interface_hash(struct nhrp_interface *iface);

@@ -142,19 +142,8 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	uint8_t pdu[MAX_PDU_SIZE];
 	int size;
 
-	if (packet->hdr.afnum == AFNUM_RESERVED ||
-	    packet->src_protocol_address.addr_len == 0 ||
-	    packet->src_nbma_address.addr_len == 0) {
-		if (!kernel_route(packet->hdr.protocol_type,
-				  &packet->dst_protocol_address,
-				  &packet->src_protocol_address,
-				  &packet->hdr.afnum, &nexthop))
-			return FALSE;
-
-		if (!kernel_get_nbma_source(packet->hdr.afnum, &nexthop,
-					    &packet->src_nbma_address))
-			return FALSE;
-	}
+	if (!kernel_route(packet, &nexthop))
+		return FALSE;
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0)

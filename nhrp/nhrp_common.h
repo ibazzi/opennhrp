@@ -54,13 +54,7 @@ const char *nhrp_format_nbma_address(
 
 /* Initializers for system dependant stuff */
 int kernel_init(void);
-int kernel_route(uint16_t protocol,
-		 struct nhrp_protocol_address *dest,
-		 struct nhrp_protocol_address *default_source,
-		 uint16_t *afnum, struct nhrp_nbma_address *next_hop);
-int kernel_get_nbma_source(uint16_t afnum,
-		      struct nhrp_nbma_address *dest,
-		      struct nhrp_nbma_address *default_source);
+int kernel_route(struct nhrp_packet *p, struct nhrp_nbma_address *next_hop_nbma);
 
 int log_init(void);
 
