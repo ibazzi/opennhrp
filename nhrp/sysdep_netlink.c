@@ -99,7 +99,7 @@ static int netlink_receive(struct netlink_fd *fd, struct nlmsghdr *reply)
 		.msg_iov = &iov,
 		.msg_iovlen = 1,
 	};
-	int got_reply = FALSE;
+	int got_reply = FALSE, len;
 	char buf[16*1024];
 
 	iov.iov_base = buf;
@@ -127,7 +127,12 @@ static int netlink_receive(struct netlink_fd *fd, struct nlmsghdr *reply)
 		while (NLMSG_OK(h, status)) {
 			if (reply != NULL &&
 			    h->nlmsg_seq == reply->nlmsg_seq) {
-				memcpy(reply, h, reply->nlmsg_len);
+				len = h->nlmsg_len;
+				if (len > reply->nlmsg_len) {
+					nhrp_error("Netlink message truncated");
+					len = reply->nlmsg_len;
+				}
+				memcpy(reply, h, len);
 				got_reply = TRUE;
 			} else if (h->nlmsg_type <= fd->dispatch_size &&
 				fd->dispatch[h->nlmsg_type] != NULL) {

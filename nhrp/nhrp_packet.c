@@ -230,7 +230,6 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	phdr->src_nbma_subaddress_len = packet->src_nbma_address.subaddr_len;
 	phdr->src_protocol_address_len = packet->src_protocol_address.addr_len;
 	phdr->dst_protocol_address_len = packet->dst_protocol_address.addr_len;
-
 	phdr->checksum = nhrp_calculate_checksum(pdu, size);
 
 	return size;
