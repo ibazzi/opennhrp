@@ -20,7 +20,17 @@
 
 static uint16_t nhrp_calculate_checksum(uint8_t *pdu, uint16_t len)
 {
-	return 0;
+	uint16_t *pdu16 = (uint16_t *) pdu;
+	uint32_t csum = 0;
+	int i;
+
+	for (i = 0; i < len / 2; i++)
+		csum += pdu16[i];
+
+	while (csum & 0xffff0000)
+		csum = (csum & 0xffff) + (csum >> 16);
+
+	return (~csum) & 0xffff;
 }
 
 struct nhrp_buffer *nhrp_buffer_alloc(uint32_t size)
@@ -130,6 +140,8 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	neh.length = 0;
 	if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
 		return -1;
+	if (((int) pos) & 1)
+		*pos = 0;
 
 	size = (int)(pos - pdu);
 	phdr->packet_size = htons(size);
