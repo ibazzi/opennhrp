@@ -13,7 +13,6 @@
 #include <malloc.h>
 #include <stddef.h>
 #include <string.h>
-#include <arpa/inet.h>
 
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
@@ -47,91 +46,6 @@ void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes)
 	}
 	fprintf(stderr, "\n");
 }
-
-
-int nhrp_parse_protocol_address(const char *string, uint16_t *protocol_type,
-				struct nhrp_protocol_address *addr, uint8_t *prefix_len)
-{
-	uint8_t tmp;
-	int r;
-
-	/* Try IP address format */
-	r = sscanf(string, "%hhd.%hhd.%hhd.%hhd/%hhd",
-		   &addr->addr[0], &addr->addr[1],
-		   &addr->addr[2], &addr->addr[3],
-		   prefix_len ? prefix_len : &tmp);
-	if ((r == 4) || (r == 5 && prefix_len != NULL)) {
-		*protocol_type = ETHP_IP;
-		addr->addr_len = 4;
-		if (r == 4 && prefix_len != NULL)
-			*prefix_len = 32;
-		return TRUE;
-	}
-
-	return FALSE;
-}
-
-const char *nhrp_format_protocol_address(
-	uint16_t protocol_type,
-	struct nhrp_protocol_address *addr,
-	size_t buflen, char *buffer)
-{
-	switch (protocol_type) {
-	case ETHP_IP:
-		snprintf(buffer, buflen, "%d.%d.%d.%d",
-			 addr->addr[0], addr->addr[1],
-			 addr->addr[2], addr->addr[3]);
-		break;
-	default:
-		snprintf(buffer, buflen, "(unsupported proto 0x%04x)",
-			 protocol_type);
-		break;
-	}
-
-	return buffer;
-}
-
-int nhrp_parse_nbma_address(const char *string, uint16_t *afnum,
-			    struct nhrp_nbma_address *addr)
-{
-	struct in_addr inaddr;
-
-	if (inet_aton(string, &inaddr)) {
-		*afnum = AFNUM_INET;
-		addr->addr_len = 4;
-		memcpy(addr->addr, &inaddr.s_addr, 4);
-		return TRUE;
-	}
-
-	return FALSE;
-}
-
-const char *nhrp_format_nbma_address(
-	uint16_t afnum,
-	struct nhrp_nbma_address *addr,
-	size_t buflen, char *buffer)
-{
-	switch (afnum) {
-	case AFNUM_INET:
-		snprintf(buffer, buflen, "%d.%d.%d.%d",
-			 addr->addr[0], addr->addr[1],
-			 addr->addr[2], addr->addr[3]);
-		break;
-	default:
-		snprintf(buffer, buflen, "(unsupported afnum 0x%04x)",
-			 afnum);
-		break;
-	}
-
-	return buffer;
-}
-
-/*
-nhrp_parse_protocol_address(addr, &peer->protocol_type,
-	&peer->protocol_address,
-	&peer->prefix_length);
-nhrp_parse_nbma_address(nbma, &peer->afnum, &peer->nbma_address);
-*/
 
 static int read_word(FILE *in, int *lineno, size_t len, char *word)
 {
@@ -203,10 +117,10 @@ static int load_config(const char *config_file)
 
 			peer = calloc(1, sizeof(struct nhrp_peer));
 			peer->type = NHRP_PEER_TYPE_STATIC;
-			nhrp_parse_protocol_address(addr, &peer->protocol_type,
+			nhrp_protocol_address_parse(addr, &peer->protocol_type,
 						    &peer->protocol_address,
 						    &peer->prefix_length);
-			nhrp_parse_nbma_address(nbma, &peer->afnum, &peer->nbma_address);
+			nhrp_nbma_address_parse(nbma, &peer->afnum, &peer->nbma_address);
 			peer->dst_protocol_address = peer->protocol_address;
 			nhrp_peer_insert(peer);
 		} else if (strcmp(word, "cisco-authentication") == 0) {

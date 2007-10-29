@@ -13,28 +13,13 @@
 
 #include <sys/queue.h>
 #include "nhrp_protocol.h"
-
-#define NHRP_MAX_ADDRESS_LEN		8
-#define NHRP_MAX_SUBADDRESS_LEN		4
-#define NHRP_MAX_EXTENSIONS		10
+#include "nhrp_address.h"
 
 struct nhrp_interface;
 
 struct nhrp_buffer {
 	uint32_t length;
 	uint8_t data[];
-};
-
-struct nhrp_nbma_address {
-	uint8_t addr_len;
-	uint8_t subaddr_len;
-	uint8_t addr[NHRP_MAX_ADDRESS_LEN];
-	uint8_t subaddr[NHRP_MAX_SUBADDRESS_LEN];
-};
-
-struct nhrp_protocol_address {
-	uint8_t addr_len;
-	uint8_t addr[NHRP_MAX_ADDRESS_LEN];
 };
 
 struct nhrp_cie {

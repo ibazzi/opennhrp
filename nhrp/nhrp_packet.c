@@ -115,7 +115,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	char tmp[64];
 
 	nhrp_info("NHRP packet from NBMA %s",
-		  nhrp_format_nbma_address(iface->afnum, from,
+		  nhrp_nbma_address_format(iface->afnum, from,
 					   sizeof(tmp), tmp));
 	nhrp_hex_dump("nhrp packet", pdu, pdulen);
 

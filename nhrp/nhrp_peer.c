@@ -40,7 +40,7 @@ static void nhrp_peer_register(struct nhrp_task *task)
 	nhrp_payload_add_cie(payload, &cie);
 
 	nhrp_info("Sending NHRP-Register to %s",
-		nhrp_format_protocol_address(peer->protocol_type,
+		nhrp_protocol_address_format(peer->protocol_type,
 			&peer->dst_protocol_address, sizeof(dst), dst));
 
 	nhrp_packet_send(&r);
@@ -59,9 +59,9 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 	}
 
 	nhrp_info("Peer %s learned at NBMA address %s",
-		nhrp_format_protocol_address(peer->protocol_type,
+		nhrp_protocol_address_format(peer->protocol_type,
 			&peer->dst_protocol_address, sizeof(dst), dst),
-		nhrp_format_nbma_address(peer->afnum, &peer->nbma_address,
+		nhrp_nbma_address_format(peer->afnum, &peer->nbma_address,
 			sizeof(nbma), nbma));
 }
 

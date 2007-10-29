@@ -38,21 +38,6 @@ void nhrp_error(const char *format, ...);
 void nhrp_perror(const char *message);
 void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes);
 
-/* Address conversions */
-int nhrp_parse_protocol_address(const char *string, uint16_t *protocol_type,
-				struct nhrp_protocol_address *addr, uint8_t *prefix_len);
-const char *nhrp_format_protocol_address(
-	uint16_t protocol_type,
-	struct nhrp_protocol_address *addr,
-	size_t buflen, char *buffer);
-
-int nhrp_parse_nbma_address(const char *string, uint16_t *afnum,
-			    struct nhrp_nbma_address *addr);
-const char *nhrp_format_nbma_address(
-	uint16_t afnum,
-	struct nhrp_nbma_address *addr,
-	size_t buflen, char *buffer);
-
 /* Initializers for system dependant stuff */
 int kernel_init(void);
 int kernel_route(struct nhrp_packet *p, struct nhrp_interface **iface,

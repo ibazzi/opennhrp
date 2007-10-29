@@ -15,6 +15,7 @@ TARGETS=opennhrp
 
 OPENNHRP_OBJ=\
 	opennhrp.o \
+	nhrp_address.o \
 	nhrp_packet.o \
 	nhrp_peer.o \
 	nhrp_interface.o \

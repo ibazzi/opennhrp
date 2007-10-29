@@ -480,7 +480,7 @@ int kernel_route(struct nhrp_packet *p,
 
 	if (rta[RTA_OIF] == NULL) {
 		nhrp_error("Route to %s has no interface",
-			   nhrp_format_protocol_address(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp));
+			   nhrp_protocol_address_format(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp));
 		return FALSE;
 	}
 
@@ -488,7 +488,7 @@ int kernel_route(struct nhrp_packet *p,
 	iface = nhrp_interface_get_by_index(*pindex, FALSE);
 	if (iface == NULL) {
 		nhrp_error("Route to %s goes to interface %d which is not configured for NHRP",
-			   nhrp_format_protocol_address(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp),
+			   nhrp_protocol_address_format(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp),
 			   *pindex);
 		return FALSE;
 	}
@@ -496,7 +496,7 @@ int kernel_route(struct nhrp_packet *p,
 	if (p->src_protocol_address.addr_len == 0) {
 		if (rta[RTA_PREFSRC] == NULL) {
 			nhrp_error("Route to %s does not have default source and it is needed",
-				   nhrp_format_protocol_address(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp));
+				   nhrp_protocol_address_format(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp));
 			return FALSE;
 		}
 
@@ -517,7 +517,7 @@ int kernel_route(struct nhrp_packet *p,
 	peer = nhrp_peer_find(p->hdr.protocol_type, &next_hop, 0);
 	if (peer == NULL) {
 		nhrp_error("Route to %s goes via unknown hop",
-			   nhrp_format_protocol_address(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp));
+			   nhrp_protocol_address_format(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp));
 		return FALSE;
 	}
 
@@ -548,7 +548,7 @@ int kernel_route(struct nhrp_packet *p,
 
 			if (rta[RTA_PREFSRC] == NULL) {
 				nhrp_error("NBMA route to %s does not have default source and it is needed",
-					   nhrp_format_nbma_address(peer->afnum, &peer->nbma_address, sizeof(tmp), tmp));
+					   nhrp_nbma_address_format(peer->afnum, &peer->nbma_address, sizeof(tmp), tmp));
 				return FALSE;
 			}
 

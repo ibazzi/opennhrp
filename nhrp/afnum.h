@@ -12,6 +12,7 @@
 #ifndef AFNUM_H
 #define AFNUM_H
 
+#include <linux/if_ether.h>
 #include "nhrp_defines.h"
 
 #define AFNUM_RESERVED		constant_htons(0)
