@@ -42,6 +42,7 @@ struct netlink_fd {
 
 
 static struct netlink_fd netlink_fd;
+static int packet_fd;
 
 static int protocol_to_pf(uint16_t protocol)
 {
@@ -350,6 +351,12 @@ int kernel_init(void)
 {
 	const int groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR;
 
+	packet_fd = socket(PF_PACKET, SOCK_DGRAM, ETHP_NHRP);
+	if (packet_fd < 0) {
+		nhrp_error("Unable to create PF_PACKET socket");
+		return FALSE;
+	}
+
 	if (!netlink_open(&netlink_fd, NETLINK_ROUTE, groups))
 		return FALSE;
 
@@ -370,7 +377,9 @@ int kernel_init(void)
 	return TRUE;
 }
 
-int kernel_route(struct nhrp_packet *p, struct nhrp_nbma_address *next_hop_nbma)
+int kernel_route(struct nhrp_packet *p,
+		 struct nhrp_interface **outiface,
+		 struct nhrp_nbma_address *next_hop_nbma)
 {
 	struct {
 		struct nlmsghdr 	n;
@@ -490,8 +499,40 @@ int kernel_route(struct nhrp_packet *p, struct nhrp_nbma_address *next_hop_nbma)
 			p->src_nbma_address = iface->nbma_address;
 	}
 
+	*outiface = iface;
 	*next_hop_nbma = peer->nbma_address;
 
 	return TRUE;
 }
 
+int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
+		struct nhrp_nbma_address *to)
+{
+	struct sockaddr_ll lladdr;
+	struct iovec iov = {
+		.iov_base = (void*) packet,
+		.iov_len = bytes
+	};
+	struct msghdr msg = {
+		.msg_name = &lladdr,
+		.msg_namelen = sizeof(lladdr),
+		.msg_iov = &iov,
+		.msg_iovlen = 1,
+	};
+	int status;
+
+	memset(&lladdr, 0, sizeof(lladdr));
+	lladdr.sll_family = AF_PACKET;
+	lladdr.sll_protocol = ETHP_NHRP;
+	lladdr.sll_ifindex = out->index;
+	lladdr.sll_halen = to->addr_len;
+	memcpy(lladdr.sll_addr, to->addr, to->addr_len);
+
+	status = sendmsg(packet_fd, &msg, 0);
+	if (status < 0) {
+		nhrp_perror("Cannot send packet");
+		return FALSE;
+	}
+
+	return TRUE;
+}

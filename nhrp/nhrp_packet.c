@@ -18,6 +18,11 @@
 
 #define MAX_PDU_SIZE 1500
 
+static uint16_t nhrp_calculate_checksum(uint8_t *pdu, uint16_t len)
+{
+	return 0;
+}
+
 struct nhrp_buffer *nhrp_buffer_alloc(uint32_t size)
 {
 	struct nhrp_buffer *buf;
@@ -90,7 +95,7 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	uint8_t *pos = pdu;
 	struct nhrp_packet_header *phdr = (struct nhrp_packet_header *) pdu;
 	struct nhrp_extension_header neh;
-	int i;
+	int i, size;
 
 	if (!marshall_binary(&pos, &pduleft, sizeof(packet->hdr), &packet->hdr))
 		return -1;
@@ -126,24 +131,31 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
 		return -1;
 
-	phdr->packet_size = htons((int)(pos - pdu));
+	size = (int)(pos - pdu);
+	phdr->packet_size = htons(size);
 	phdr->checksum = 0;
 	phdr->src_nbma_address_len = packet->src_nbma_address.addr_len;
 	phdr->src_nbma_subaddress_len = packet->src_nbma_address.subaddr_len;
 	phdr->src_protocol_address_len = packet->src_protocol_address.addr_len;
 	phdr->dst_protocol_address_len = packet->dst_protocol_address.addr_len;
 
-	return (int)(pos - pdu);
+	phdr->checksum = nhrp_calculate_checksum(pdu, size);
+
+	return size;
 }
 
 int nhrp_packet_send(struct nhrp_packet *packet)
 {
 	struct nhrp_nbma_address nexthop;
+	struct nhrp_interface *iface;
 	uint8_t pdu[MAX_PDU_SIZE];
 	int size;
 
-	if (!kernel_route(packet, &nexthop))
+	if (!kernel_route(packet, &iface, &nexthop))
 		return FALSE;
+
+	if (packet->hdr.hop_count == 0)
+		packet->hdr.hop_count = 16;
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0)
@@ -151,6 +163,6 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 
 	nhrp_hex_dump("packet", pdu, size);
 
-	return FALSE;
+	return kernel_send(pdu, size, iface, &nexthop);
 }
 

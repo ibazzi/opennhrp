@@ -17,6 +17,7 @@
 #include <linux/if_ether.h>
 
 #include "nhrp_packet.h"
+#include "nhrp_interface.h"
 
 /* Mainloop and timed tasks */
 struct nhrp_task {
@@ -54,7 +55,10 @@ const char *nhrp_format_nbma_address(
 
 /* Initializers for system dependant stuff */
 int kernel_init(void);
-int kernel_route(struct nhrp_packet *p, struct nhrp_nbma_address *next_hop_nbma);
+int kernel_route(struct nhrp_packet *p, struct nhrp_interface **iface,
+		 struct nhrp_nbma_address *next_hop_nbma);
+int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
+		struct nhrp_nbma_address *to);
 
 int log_init(void);
 
