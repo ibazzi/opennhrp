@@ -251,8 +251,9 @@ static void netlink_link_update(struct nlmsghdr *msg)
 		iface->afnum = AFNUM_INET;
 		do_get_ioctl(ifname, &cfg);
 		if (cfg.iph.saddr) {
-			iface->nbma_address.addr_len = 4;
-			memcpy(iface->nbma_address.addr, &cfg.iph.saddr, 4);
+			nhrp_nbma_address_set(&iface->nbma_address,
+					      4, (uint8_t *) &cfg.iph.saddr,
+					      0, NULL);
 		}
 		break;
 	}
@@ -280,8 +281,9 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 			peer->protocol_type = ETHP_IP;
 			peer->prefix_length = ifa->ifa_prefixlen;
 			peer->dst_protocol_address.addr_len = RTA_PAYLOAD(rta[IFA_LOCAL]);
-			memcpy(peer->dst_protocol_address.addr,
-			       RTA_DATA(rta[IFA_LOCAL]), RTA_PAYLOAD(rta[IFA_LOCAL]));
+			nhrp_protocol_address_set(&peer->dst_protocol_address,
+						  RTA_PAYLOAD(rta[IFA_LOCAL]),
+						  RTA_DATA(rta[IFA_LOCAL]));
 			nhrp_peer_insert(peer);
 			break;
 		default:
@@ -392,10 +394,9 @@ static void pfpacket_read(void *ctx, short events)
 		if (iface == NULL)
 			continue;
 
-		from.addr_len = lladdr.sll_halen;
-		from.subaddr_len = 0;
-		memcpy(from.addr, lladdr.sll_addr, lladdr.sll_halen);
-
+		nhrp_nbma_address_set(&from,
+				      lladdr.sll_halen, lladdr.sll_addr,
+				      0, NULL);
 		nhrp_packet_receive(buf, status, iface, &from);
 	}
 }
@@ -500,16 +501,15 @@ int kernel_route(struct nhrp_packet *p,
 			return FALSE;
 		}
 
-		p->src_protocol_address.addr_len = RTA_PAYLOAD(rta[RTA_PREFSRC]);
-		memcpy(p->src_protocol_address.addr,
-		       RTA_DATA(rta[RTA_PREFSRC]),
-		       RTA_PAYLOAD(rta[RTA_PREFSRC]));
+		nhrp_protocol_address_set(&p->src_protocol_address,
+					  RTA_PAYLOAD(rta[RTA_PREFSRC]),
+					  RTA_DATA(rta[RTA_PREFSRC]));
 	}
 
 	if (rta[RTA_GATEWAY] != NULL) {
-		next_hop.addr_len = RTA_PAYLOAD(rta[RTA_GATEWAY]);
-		memcpy(next_hop.addr, RTA_DATA(rta[RTA_GATEWAY]),
-		       next_hop.addr_len);
+		nhrp_protocol_address_set(&next_hop,
+					  RTA_PAYLOAD(rta[RTA_GATEWAY]),
+					  RTA_DATA(rta[RTA_GATEWAY]));
 	} else {
 		next_hop = p->dst_protocol_address;
 	}
@@ -552,10 +552,10 @@ int kernel_route(struct nhrp_packet *p,
 				return FALSE;
 			}
 
-			p->src_nbma_address.addr_len = RTA_PAYLOAD(rta[RTA_PREFSRC]);
-			memcpy(p->src_nbma_address.addr,
-				RTA_DATA(rta[RTA_PREFSRC]),
-				RTA_PAYLOAD(rta[RTA_PREFSRC]));
+			nhrp_nbma_address_set(&p->src_nbma_address,
+					      RTA_PAYLOAD(rta[RTA_PREFSRC]),
+					      RTA_DATA(rta[RTA_PREFSRC]),
+					      0, NULL);
 		} else
 			p->src_nbma_address = iface->nbma_address;
 	}
@@ -581,6 +581,11 @@ int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 		.msg_iovlen = 1,
 	};
 	int status;
+
+	if (to->addr_len > sizeof(lladdr.sll_addr)) {
+		nhrp_error("Destination NBMA address too long");
+		return FALSE;
+	}
 
 	memset(&lladdr, 0, sizeof(lladdr));
 	lladdr.sll_family = AF_PACKET;

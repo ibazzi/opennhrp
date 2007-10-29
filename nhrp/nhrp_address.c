@@ -44,7 +44,8 @@ int nhrp_protocol_address_set(
 		return FALSE;
 
 	addr->addr_len = len;
-	memcpy(addr->addr, bytes, len);
+	if (len != 0)
+		memcpy(addr->addr, bytes, len);
 	return TRUE;
 }
 
@@ -94,8 +95,10 @@ int nhrp_nbma_address_set(
 
 	addr->addr_len = len;
 	addr->subaddr_len = sublen;
-	memcpy(addr->addr, bytes, len);
-	memcpy(addr->subaddr, subbytes, sublen);
+	if (len != 0)
+		memcpy(addr->addr, bytes, len);
+	if (sublen != 0)
+		memcpy(addr->subaddr, subbytes, sublen);
 	return TRUE;
 }
 
