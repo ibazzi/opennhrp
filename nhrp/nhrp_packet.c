@@ -83,8 +83,17 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 	free(packet);
 }
 
-int nhrp_packet_recv(struct nhrp_packet *packet)
+int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
+			struct nhrp_interface *iface,
+			struct nhrp_nbma_address *from)
 {
+	char tmp[64];
+
+	nhrp_info("NHRP packet from NBMA %s",
+		  nhrp_format_nbma_address(iface->afnum, from,
+					   sizeof(tmp), tmp));
+	nhrp_hex_dump("nhrp packet", pdu, pdulen);
+
 	return FALSE;
 }
 
@@ -208,14 +217,11 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 {
 	struct nhrp_nbma_address nexthop;
 	struct nhrp_interface *iface;
-	struct nhrp_buffer *empty;
 	uint8_t pdu[MAX_PDU_SIZE];
 	int size;
 
 	if (!kernel_route(packet, &iface, &nexthop))
 		return FALSE;
-
-	empty = nhrp_buffer_alloc(0);
 
 	if (packet->hdr.hop_count == 0)
 		packet->hdr.hop_count = 16;
@@ -229,8 +235,6 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0)
 		return FALSE;
-
-	nhrp_buffer_free(empty);
 
 	nhrp_hex_dump("packet", pdu, size);
 

@@ -18,6 +18,8 @@
 #define NHRP_MAX_SUBADDRESS_LEN		4
 #define NHRP_MAX_EXTENSIONS		10
 
+struct nhrp_interface;
+
 struct nhrp_buffer {
 	uint32_t length;
 	uint8_t data[];
@@ -76,7 +78,9 @@ void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie);
 
 struct nhrp_packet *nhrp_packet_alloc(void);
 void nhrp_packet_free(struct nhrp_packet *packet);
-int nhrp_packet_recv(struct nhrp_packet *packet);
+int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
+			struct nhrp_interface *iface,
+			struct nhrp_nbma_address *from);
 int nhrp_packet_send(struct nhrp_packet *packet);
 
 #endif

@@ -30,6 +30,7 @@ struct nhrp_interface {
 
 	/* Cached from kernel interface */
 	unsigned int index;
+	uint16_t afnum;
 	struct nhrp_nbma_address nbma_address;
 };
 

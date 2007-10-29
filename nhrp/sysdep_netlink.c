@@ -243,6 +243,7 @@ static void netlink_link_update(struct nlmsghdr *msg)
 
 	switch (ifi->ifi_type) {
 	case ARPHRD_IPGRE:
+		iface->afnum = AFNUM_INET;
 		do_get_ioctl(ifname, &cfg);
 		if (cfg.iph.saddr) {
 			iface->nbma_address.addr_len = 4;
@@ -347,6 +348,53 @@ error:
 	return FALSE;
 }
 
+static void pfpacket_read(void *ctx, short events)
+{
+	int fd = (int) ctx;
+	struct sockaddr_ll lladdr;
+	struct nhrp_interface *iface;
+	struct iovec iov;
+	struct msghdr msg = {
+		.msg_name = &lladdr,
+		.msg_namelen = sizeof(lladdr),
+		.msg_iov = &iov,
+		.msg_iovlen = 1,
+	};
+	uint8_t buf[1500];
+	struct nhrp_nbma_address from;
+
+	iov.iov_base = buf;
+	while (1) {
+		int status;
+
+		iov.iov_len = sizeof(buf);
+		status = recvmsg(fd, &msg, MSG_DONTWAIT);
+		if (status < 0) {
+			if (errno == EINTR)
+				continue;
+			if (errno == EAGAIN)
+				return;
+			nhrp_perror("PF_PACKET overrun");
+			continue;
+		}
+
+		if (status == 0) {
+			nhrp_error("PF_PACKET returned EOF");
+			return;
+		}
+
+		iface = nhrp_interface_get_by_index(lladdr.sll_ifindex, FALSE);
+		if (iface == NULL)
+			continue;
+
+		from.addr_len = lladdr.sll_halen;
+		from.subaddr_len = 0;
+		memcpy(from.addr, lladdr.sll_addr, lladdr.sll_halen);
+
+		nhrp_packet_receive(buf, status, iface, &from);
+	}
+}
+
 int kernel_init(void)
 {
 	const int groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR;
@@ -356,17 +404,17 @@ int kernel_init(void)
 		nhrp_error("Unable to create PF_PACKET socket");
 		return FALSE;
 	}
+	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfpacket_read, (void*) packet_fd))
+		goto err_close_packetfd;
 
 	if (!netlink_open(&netlink_fd, NETLINK_ROUTE, groups))
-		return FALSE;
+		goto err_remove_packetfd;
 
 	netlink_fd.dispatch_size = sizeof(route_dispatch) / sizeof(route_dispatch[0]);
 	netlink_fd.dispatch = route_dispatch;
 
-	if (!nhrp_task_poll_fd(netlink_fd.fd, POLLIN, netlink_read, &netlink_fd)) {
-		netlink_close(&netlink_fd);
-		return FALSE;
-	}
+	if (!nhrp_task_poll_fd(netlink_fd.fd, POLLIN, netlink_read, &netlink_fd))
+		goto err_close_netlink;
 
 	netlink_enumerate(&netlink_fd, AF_UNSPEC, RTM_GETLINK);
 	netlink_read(&netlink_fd, POLLIN);
@@ -375,6 +423,14 @@ int kernel_init(void)
 	netlink_read(&netlink_fd, POLLIN);
 
 	return TRUE;
+
+err_close_netlink:
+	netlink_close(&netlink_fd);
+err_remove_packetfd:
+	nhrp_task_unpoll_fd(packet_fd);
+err_close_packetfd:
+	close(packet_fd);
+	return FALSE;
 }
 
 int kernel_route(struct nhrp_packet *p,

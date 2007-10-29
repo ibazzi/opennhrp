@@ -30,7 +30,7 @@ static void nhrp_peer_register(struct nhrp_task *task)
 		.hdr.code = NHRP_CODE_SUCCESS,
 		.hdr.prefix_length = 0xff,
 		.hdr.mtu = 0,
-		.hdr.holding_time = 7200,
+		.hdr.holding_time = constant_htons(7200),
 		.hdr.preference = 0,
 	};
 
