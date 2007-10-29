@@ -188,7 +188,7 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	neh.length = 0;
 	if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
 		return -1;
-	if (((int) pos) & 1)
+	if (((uintptr_t) pos) & 1)
 		*pos = 0;
 
 	size = (int)(pos - pdu);
