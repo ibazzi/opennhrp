@@ -26,6 +26,8 @@ static uint16_t nhrp_calculate_checksum(uint8_t *pdu, uint16_t len)
 
 	for (i = 0; i < len / 2; i++)
 		csum += pdu16[i];
+	if (len & 1)
+		csum += htons(pdu[len - 1]);
 
 	while (csum & 0xffff0000)
 		csum = (csum & 0xffff) + (csum >> 16);
@@ -108,16 +110,130 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 	free(packet);
 }
 
+static int unmarshall_binary(uint8_t **pdu, size_t *pduleft, size_t size, void *raw)
+{
+	if (*pduleft < size)
+		return FALSE;
+
+	memcpy(raw, *pdu, size);
+	*pdu += size;
+	*pduleft -= size;
+	return TRUE;
+}
+
+static inline int unmarshall_protocol_address(uint8_t **pdu, size_t *pduleft, struct nhrp_protocol_address *pa)
+{
+	if (*pduleft < pa->addr_len)
+		return FALSE;
+
+	if (!nhrp_protocol_address_set(pa, pa->addr_len, *pdu))
+		return FALSE;
+
+	*pdu += pa->addr_len;
+	*pduleft -= pa->addr_len;
+	return TRUE;
+}
+
+static inline int unmarshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct nhrp_nbma_address *na)
+{
+	if (*pduleft < na->addr_len + na->subaddr_len)
+		return FALSE;
+
+	if (!nhrp_nbma_address_set(na,
+				   na->addr_len, *pdu,
+				   na->subaddr_len, *pdu + na->addr_len))
+		return FALSE;
+
+	*pdu += na->addr_len + na->subaddr_len;
+	*pduleft -= na->addr_len + na->subaddr_len;
+	return TRUE;
+}
+
+static int unmarshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *packet)
+{
+	uint8_t *pos = pdu;
+	struct nhrp_packet_header *phdr = (struct nhrp_packet_header *) pdu;
+
+	if (!unmarshall_binary(&pos, &pduleft, sizeof(packet->hdr), &packet->hdr))
+		return FALSE;
+
+	packet->src_nbma_address.addr_len = phdr->src_nbma_address_len;
+	packet->src_nbma_address.subaddr_len = phdr->src_nbma_subaddress_len;
+	packet->src_protocol_address.addr_len = phdr->src_protocol_address_len;
+	packet->dst_protocol_address.addr_len = phdr->dst_protocol_address_len;
+
+	if (!unmarshall_nbma_address(&pos, &pduleft, &packet->src_nbma_address))
+		return FALSE;
+	if (!unmarshall_protocol_address(&pos, &pduleft, &packet->src_protocol_address))
+		return FALSE;
+	if (!unmarshall_protocol_address(&pos, &pduleft, &packet->dst_protocol_address))
+		return FALSE;
+
+#if 0
+	if (!unmarshall_payload(&pos, &pduleft, nhrp_packet_payload(packet)))
+		return -1;
+
+	phdr->extension_offset = htons((int)(pos - pdu));
+	for (i = 1; i < packet->num_extensions; i++) {
+		struct nhrp_extension_header *eh = (struct nhrp_extension_header *) pos;
+
+		if (packet->extension_by_order[i].payload_type == NHRP_PAYLOAD_TYPE_NONE)
+			continue;
+
+		neh.type = htons(packet->extension_by_order[i].extension_type);
+		neh.length = 0;
+
+		if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
+			return -1;
+		if (!marshall_payload(&pos, &pduleft, &packet->extension_by_order[i]))
+			return -1;
+		eh->length = htons((pos - (uint8_t *) eh) - sizeof(neh));
+	}
+	neh.type = htons(NHRP_EXTENSION_END | NHRP_EXTENSION_FLAG_COMPULSORY);
+	neh.length = 0;
+	if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
+		return -1;
+
+	size = (int)(pos - pdu);
+	phdr->packet_size = htons(size);
+	phdr->checksum = 0;
+	phdr->checksum = nhrp_calculate_checksum(pdu, size);
+#endif
+
+	return TRUE;
+}
+
 int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,
 			struct nhrp_nbma_address *from)
 {
-	char tmp[64];
+	char tmp[64], tmp2[64], tmp3[64];
+	struct nhrp_packet p;
 
 	nhrp_info("NHRP packet from NBMA %s",
 		  nhrp_nbma_address_format(iface->afnum, from,
 					   sizeof(tmp), tmp));
 	nhrp_hex_dump("nhrp packet", pdu, pdulen);
+
+	if (nhrp_calculate_checksum(pdu, pdulen) != 0) {
+		nhrp_error("Bad checksum in packet from %s",
+			   nhrp_nbma_address_format(iface->afnum, from,
+						    sizeof(tmp), tmp));
+		return FALSE;
+	}
+
+	if (!unmarshall_packet(pdu, pdulen, &p)) {
+		nhrp_error("Failed to unmarshall packet");
+		return FALSE;
+	}
+
+	nhrp_info("Packet nbma src %s, proto src %s, proto dst %s",
+		  nhrp_nbma_address_format(p.hdr.afnum, &p.src_nbma_address,
+					   sizeof(tmp), tmp),
+		  nhrp_protocol_address_format(p.hdr.protocol_type, &p.src_protocol_address,
+					       sizeof(tmp2), tmp2),
+		  nhrp_protocol_address_format(p.hdr.protocol_type, &p.dst_protocol_address,
+					       sizeof(tmp3), tmp3));
 
 	return FALSE;
 }
@@ -220,8 +336,6 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	neh.length = 0;
 	if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
 		return -1;
-	if (((uintptr_t) pos) & 1)
-		*pos = 0;
 
 	size = (int)(pos - pdu);
 	phdr->packet_size = htons(size);
