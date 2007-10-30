@@ -14,6 +14,7 @@
 #include <syslog.h>
 #include <stdarg.h>
 
+#include "nhrp_defines.h"
 #include "nhrp_common.h"
 
 int log_init(void)

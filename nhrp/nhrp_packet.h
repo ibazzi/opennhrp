@@ -14,6 +14,7 @@
 #include <sys/queue.h>
 #include "nhrp_protocol.h"
 #include "nhrp_address.h"
+#include "nhrp_common.h"
 
 struct nhrp_interface;
 
@@ -53,10 +54,18 @@ struct nhrp_packet {
 	int				num_extensions;
 	struct nhrp_payload		extension_by_order[NHRP_MAX_EXTENSIONS];
 	struct nhrp_payload *		extension_by_type[NHRP_MAX_EXTENSIONS];
+
+	TAILQ_ENTRY(nhrp_packet)	request_list_entry;
+	struct nhrp_task		timeout;
+	void				(*handler)(void *ctx, struct nhrp_packet *packet);
+	void *				handler_ctx;
 };
 
 struct nhrp_buffer *nhrp_buffer_alloc(uint32_t size);
 void nhrp_buffer_free(struct nhrp_buffer *buffer);
+
+struct nhrp_cie *nhrp_cie_alloc(void);
+void nhrp_cie_free(struct nhrp_cie *cie);
 
 void nhrp_payload_set_type(struct nhrp_payload *payload, int type);
 void nhrp_payload_set_raw(struct nhrp_payload *payload, struct nhrp_buffer *buf);
@@ -70,5 +79,8 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,
 			struct nhrp_nbma_address *from);
 int nhrp_packet_send(struct nhrp_packet *packet);
+int nhrp_packet_send_request(struct nhrp_packet *packet,
+			     void (*handler)(void *ctx, struct nhrp_packet *packet),
+			     void *ctx);
 
 #endif

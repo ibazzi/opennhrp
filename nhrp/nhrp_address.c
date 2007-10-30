@@ -49,6 +49,15 @@ int nhrp_protocol_address_set(
 	return TRUE;
 }
 
+int nhrp_protocol_address_cmp(struct nhrp_protocol_address *a, struct nhrp_protocol_address *b)
+{
+	if (a->addr_len > b->addr_len)
+		return 1;
+	if (a->addr_len < b->addr_len)
+		return -1;
+	return memcmp(a->addr, b->addr, a->addr_len);
+}
+
 const char *nhrp_protocol_address_format(
 	uint16_t protocol_type,
 	struct nhrp_protocol_address *addr,
@@ -100,6 +109,25 @@ int nhrp_nbma_address_set(
 	if (sublen != 0)
 		memcpy(addr->subaddr, subbytes, sublen);
 	return TRUE;
+}
+
+int nhrp_nbma_address_cmp(
+	struct nhrp_nbma_address *a, struct nhrp_nbma_address *b)
+{
+	int r;
+
+	if (a->addr_len > b->addr_len)
+		return 1;
+	if (a->addr_len < b->addr_len)
+		return -1;
+	if (a->subaddr_len > b->subaddr_len)
+		return 1;
+	if (a->subaddr_len < b->subaddr_len)
+		return -1;
+	r = memcmp(a->addr, b->addr, a->addr_len);
+	if (r != 0)
+		return r;
+	return memcmp(a->subaddr, b->subaddr, a->subaddr_len);
 }
 
 const char *nhrp_nbma_address_format(

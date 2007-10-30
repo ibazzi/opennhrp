@@ -12,13 +12,51 @@
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
 
+#define HOLDING_TIME 7200
+
 static struct nhrp_peer_list peer_cache = CIRCLEQ_HEAD_INITIALIZER(peer_cache);
+
+static void nhrp_peer_register(struct nhrp_task *task);
+
+static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *reply)
+{
+	struct nhrp_peer *peer = (struct nhrp_peer *) ctx;
+	char dst[64];
+
+	if (reply == NULL ||
+	    reply->hdr.type != NHRP_PACKET_REGISTRATION_REPLY) {
+		nhrp_info("Failed to register to %s",
+			  nhrp_protocol_address_format(peer->protocol_type,
+				  		       &peer->dst_protocol_address,
+						       sizeof(dst), dst));
+		nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register);
+		return;
+	}
+
+	nhrp_info("Received Registration Reply from %s",
+		  nhrp_protocol_address_format(peer->protocol_type,
+					       &peer->dst_protocol_address,
+					       sizeof(dst), dst));
+
+	/* Re-register after holding time expires */
+	nhrp_task_schedule(&peer->task, (HOLDING_TIME - 60) * 1000,
+			   nhrp_peer_register);
+}
 
 static void nhrp_peer_register(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
 	char dst[64];
-	struct nhrp_packet r = {
+	struct nhrp_packet *packet;
+	struct nhrp_cie *cie;
+	struct nhrp_payload *payload;
+	int sent = FALSE;
+
+	packet = nhrp_packet_alloc();
+	if (packet == NULL)
+		goto error;
+
+	*packet = (struct nhrp_packet) {
 		.hdr.afnum = peer->afnum,
 		.hdr.protocol_type = peer->protocol_type,
 		.hdr.version = NHRP_VERSION_RFC2332,
@@ -26,25 +64,37 @@ static void nhrp_peer_register(struct nhrp_task *task)
 		.hdr.flags = NHRP_FLAG_REGISTRATION_UNIQUE,
 		.dst_protocol_address = peer->dst_protocol_address,
 	};
-	struct nhrp_cie cie = {
+
+	cie = nhrp_cie_alloc();
+	if (cie == NULL)
+		goto error;
+
+        *cie = (struct nhrp_cie) {
 		.hdr.code = NHRP_CODE_SUCCESS,
 		.hdr.prefix_length = 0xff,
 		.hdr.mtu = 0,
-		.hdr.holding_time = constant_htons(7200),
+		.hdr.holding_time = constant_htons(HOLDING_TIME),
 		.hdr.preference = 0,
 	};
-	struct nhrp_payload *payload;
 
-	payload = nhrp_packet_payload(&r);
+	payload = nhrp_packet_payload(packet);
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
-	nhrp_payload_add_cie(payload, &cie);
+	nhrp_payload_add_cie(payload, cie);
 
-	nhrp_info("Sending NHRP-Register to %s",
-		nhrp_protocol_address_format(peer->protocol_type,
-			&peer->dst_protocol_address, sizeof(dst), dst));
+	nhrp_info("Sending Registration Request to %s",
+		  nhrp_protocol_address_format(peer->protocol_type,
+					       &peer->dst_protocol_address,
+					       sizeof(dst), dst));
 
-	nhrp_packet_send(&r);
-	nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register);
+	sent = nhrp_packet_send_request(packet,
+		nhrp_peer_handle_registration_reply, peer);
+
+error:
+	if (!sent) {
+		nhrp_packet_free(packet);
+		/* Try again later */
+		nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register);
+	}
 }
 
 void nhrp_peer_insert(struct nhrp_peer *peer)
@@ -75,6 +125,9 @@ struct nhrp_peer *nhrp_peer_find(uint16_t protocol_type,
 				 int min_prefix)
 {
 	struct nhrp_peer *p;
+
+	if (min_prefix == 0xff)
+		min_prefix = dest->addr_len * 8;
 
 	CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
 		if (protocol_type != p->protocol_type)

@@ -122,7 +122,7 @@ struct nhrp_extension_header {
 
 struct nhrp_cisco_authentication_extension {
 	uint32_t	type;
-	uint8_t		secret[];
+	uint8_t		secret[8];
 };
 
 #endif

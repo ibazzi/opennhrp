@@ -9,6 +9,7 @@
  */
 
 #include <poll.h>
+#include "nhrp_defines.h"
 #include "nhrp_common.h"
 
 #define MAX_FDS 8
@@ -63,8 +64,9 @@ void nhrp_task_schedule(struct nhrp_task *task, int timeout, void (*callback)(st
 
 	gettimeofday(&task->execute_time, NULL);
 	task->callback = callback;
-	task->execute_time.tv_usec += timeout * 1000;
-	task->execute_time.tv_sec += task->execute_time.tv_usec / 1000000;
+	task->execute_time.tv_usec += (timeout % 1000) * 1000;
+	task->execute_time.tv_sec += timeout / 1000 +
+		(task->execute_time.tv_usec / 1000000);
 	task->execute_time.tv_usec %= 1000000;
 
 	for (next = LIST_FIRST(&tasks);
@@ -76,6 +78,11 @@ void nhrp_task_schedule(struct nhrp_task *task, int timeout, void (*callback)(st
 		LIST_INSERT_AFTER(after, task, task_list);
 	else
 		LIST_INSERT_HEAD(&tasks, task, task_list);
+}
+
+void nhrp_task_cancel(struct nhrp_task *task)
+{
+	LIST_REMOVE(task, task_list);
 }
 
 void nhrp_task_run(void)

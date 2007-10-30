@@ -262,6 +262,7 @@ static void netlink_link_update(struct nlmsghdr *msg)
 static void netlink_addr_update(struct nlmsghdr *msg)
 {
 	struct nhrp_interface *iface;
+	struct nhrp_peer *peer;
 	struct ifaddrmsg *ifa = NLMSG_DATA(msg);
 	struct rtattr *rta[IFA_MAX+1];
 
@@ -270,27 +271,25 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 	if (iface == NULL)
 		return;
 
-	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST) {
-		struct nhrp_peer *peer;
-
-		peer = calloc(1, sizeof(struct nhrp_peer));
-		peer->type = NHRP_PEER_TYPE_LOCAL;
-		peer->afnum = AFNUM_RESERVED;
-		switch (ifa->ifa_family) {
-		case PF_INET:
-			peer->protocol_type = ETHP_IP;
+	peer = calloc(1, sizeof(struct nhrp_peer));
+	peer->type = NHRP_PEER_TYPE_LOCAL;
+	peer->afnum = AFNUM_RESERVED;
+	switch (ifa->ifa_family) {
+	case PF_INET:
+		peer->protocol_type = ETHP_IP;
+		nhrp_protocol_address_set(&peer->dst_protocol_address,
+					  RTA_PAYLOAD(rta[IFA_LOCAL]),
+					  RTA_DATA(rta[IFA_LOCAL]));
+		if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)
 			peer->prefix_length = ifa->ifa_prefixlen;
-			peer->dst_protocol_address.addr_len = RTA_PAYLOAD(rta[IFA_LOCAL]);
-			nhrp_protocol_address_set(&peer->dst_protocol_address,
-						  RTA_PAYLOAD(rta[IFA_LOCAL]),
-						  RTA_DATA(rta[IFA_LOCAL]));
-			nhrp_peer_insert(peer);
-			break;
-		default:
-			free(peer);
-			peer = NULL;
-			break;
-		}
+		else
+			peer->prefix_length = peer->dst_protocol_address.addr_len * 8;
+		nhrp_peer_insert(peer);
+		break;
+	default:
+		free(peer);
+		peer = NULL;
+		break;
 	}
 }
 
