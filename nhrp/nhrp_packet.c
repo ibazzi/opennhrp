@@ -179,6 +179,9 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 			sizeof(tmp), tmp));
 
 	packet->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
+	packet->hdr.flags |=
+		NHRP_FLAG_RESOLUTION_DESTINATION_STABLE |
+		NHRP_FLAG_RESOLUTION_AUTHORATIVE;
 	packet->hdr.hop_count = 0;
 
 	cie = nhrp_cie_alloc();
