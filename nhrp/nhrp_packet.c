@@ -99,6 +99,21 @@ void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie)
 	TAILQ_INSERT_TAIL(&payload->u.cie_list_head, cie, cie_list_entry);
 }
 
+void nhrp_payload_free(struct nhrp_payload *payload)
+{
+	struct nhrp_cie *cie;
+
+	switch (payload->payload_type) {
+	case NHRP_PAYLOAD_TYPE_RAW:
+		nhrp_buffer_free(payload->u.raw);
+		break;
+	case NHRP_PAYLOAD_TYPE_CIE_LIST:
+		TAILQ_FOREACH(cie, &payload->u.cie_list_head, cie_list_entry)
+			nhrp_cie_free(cie);
+		break;
+	}
+}
+
 struct nhrp_packet *nhrp_packet_alloc(void)
 {
 	return calloc(1, sizeof(struct nhrp_packet));
@@ -126,6 +141,10 @@ struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
 
 void nhrp_packet_free(struct nhrp_packet *packet)
 {
+	int i;
+
+	for (i = 0; i < packet->num_extensions; i++)
+		nhrp_payload_free(&packet->extension_by_order[i]);
 	if (packet->handler)
 		TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
 	free(packet);
@@ -151,7 +170,7 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 		return FALSE;
 	}
 
-	nhrp_info("Traffic Indication from proto src %s; make direct tunnel to %s",
+	nhrp_info("Traffic Indication from proto src %s; about packet to %s",
 		nhrp_protocol_address_format(
 			packet->hdr.protocol_type,
 			&packet->src_protocol_address,
@@ -287,8 +306,7 @@ static int unmarshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *p
 		size = pduleft;
 	} else {
 		/* Extensions present; exclude those from payload */
-		size = ntohs(packet->hdr.extension_offset) -
-			(pos - pdu);
+		size = ntohs(packet->hdr.extension_offset) - (pos - pdu);
 		if (size < 0 || size > pduleft)
 			return FALSE;
 	}
