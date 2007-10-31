@@ -106,9 +106,10 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 		nhrp_task_schedule(&peer->task, 1000, nhrp_peer_register);
 	}
 
-	nhrp_info("Peer %s learned at NBMA address %s",
+	nhrp_info("Peer %s/%d learned at NBMA address %s",
 		nhrp_protocol_address_format(peer->protocol_type,
 			&peer->dst_protocol_address, sizeof(dst), dst),
+		peer->prefix_length,
 		nhrp_nbma_address_format(peer->afnum, &peer->nbma_address,
 			sizeof(nbma), nbma));
 }
@@ -123,6 +124,7 @@ struct nhrp_peer *nhrp_peer_find(uint16_t protocol_type,
 				 int min_prefix)
 {
 	struct nhrp_peer *p;
+	int prefix;
 
 	if (min_prefix == 0xff)
 		min_prefix = dest->addr_len * 8;
@@ -131,11 +133,15 @@ struct nhrp_peer *nhrp_peer_find(uint16_t protocol_type,
 		if (protocol_type != p->protocol_type)
 			continue;
 
-		if (min_prefix > p->prefix_length)
+		if (min_prefix < p->prefix_length)
 			continue;
 
+		prefix = min_prefix;
+		if (p->prefix_length < min_prefix)
+			prefix = p->prefix_length;
+
 		if (memcmp(dest->addr, p->dst_protocol_address.addr,
-			   p->prefix_length / 8) != 0)
+			   prefix / 8) != 0)
 			continue;
 
 		/* FIXME: Check remaining bits of address */
