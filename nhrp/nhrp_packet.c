@@ -238,6 +238,7 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 	struct nhrp_protocol_address dst;
 	struct iphdr *iph;
 	struct nhrp_payload *pl;
+	struct nhrp_peer *peer;
 
 	pl = nhrp_packet_payload(packet);
 	switch (packet->hdr.protocol_type) {
@@ -261,7 +262,19 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 			packet->hdr.protocol_type,
 			&dst, sizeof(tmp2), tmp2));
 
-	return FALSE;
+	peer = nhrp_peer_find(packet->hdr.protocol_type, &dst, 0xff);
+	if (peer != NULL)
+		return TRUE;
+
+	peer = calloc(1, sizeof(struct nhrp_peer));
+	peer->type = NHRP_PEER_TYPE_INCOMPLITE;
+	peer->afnum = packet->hdr.afnum;
+	peer->protocol_type = packet->hdr.protocol_type;
+	peer->dst_protocol_address = dst;
+	peer->prefix_length = packet->dst_protocol_address.addr_len * 8;
+	nhrp_peer_insert(peer);
+
+	return TRUE;
 }
 
 struct {
