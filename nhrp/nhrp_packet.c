@@ -54,6 +54,15 @@ struct nhrp_buffer *nhrp_buffer_alloc(uint32_t size)
 	return buf;
 }
 
+struct nhrp_buffer *nhrp_buffer_copy(struct nhrp_buffer *buffer)
+{
+	struct nhrp_buffer *copy;
+
+	copy = nhrp_buffer_alloc(buffer->length);
+	memcpy(copy->data, buffer->data, buffer->length);
+	return copy;
+}
+
 void nhrp_buffer_free(struct nhrp_buffer *buffer)
 {
 	free(buffer);
@@ -69,11 +78,31 @@ void nhrp_cie_free(struct nhrp_cie *cie)
 	free(cie);
 }
 
+void nhrp_payload_free(struct nhrp_payload *payload)
+{
+	struct nhrp_cie *cie;
+
+	switch (payload->payload_type) {
+	case NHRP_PAYLOAD_TYPE_RAW:
+		nhrp_buffer_free(payload->u.raw);
+		break;
+	case NHRP_PAYLOAD_TYPE_CIE_LIST:
+		while (!TAILQ_EMPTY(&payload->u.cie_list_head)) {
+			cie = TAILQ_FIRST(&payload->u.cie_list_head);
+			TAILQ_REMOVE(&payload->u.cie_list_head, cie, cie_list_entry);
+			nhrp_cie_free(cie);
+		}
+		break;
+	}
+	payload->payload_type = NHRP_PAYLOAD_TYPE_NONE;
+}
+
 void nhrp_payload_set_type(struct nhrp_payload *payload, int type)
 {
 	if (payload->payload_type == type)
 		return;
 
+	nhrp_payload_free(payload);
 	payload->payload_type = type;
 	switch (type) {
 	case NHRP_PAYLOAD_TYPE_CIE_LIST:
@@ -97,24 +126,6 @@ void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie)
 		return;
 
 	TAILQ_INSERT_TAIL(&payload->u.cie_list_head, cie, cie_list_entry);
-}
-
-void nhrp_payload_free(struct nhrp_payload *payload)
-{
-	struct nhrp_cie *cie;
-
-	switch (payload->payload_type) {
-	case NHRP_PAYLOAD_TYPE_RAW:
-		nhrp_buffer_free(payload->u.raw);
-		break;
-	case NHRP_PAYLOAD_TYPE_CIE_LIST:
-		while (!TAILQ_EMPTY(&payload->u.cie_list_head)) {
-			cie = TAILQ_FIRST(&payload->u.cie_list_head);
-			TAILQ_REMOVE(&payload->u.cie_list_head, cie, cie_list_entry);
-			nhrp_cie_free(cie);
-		}
-		break;
-	}
 }
 
 struct nhrp_packet *nhrp_packet_alloc(void)
@@ -153,6 +164,71 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 	free(packet);
 }
 
+static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
+{
+	char tmp[64];
+	struct nhrp_payload *payload;
+	struct nhrp_cie *cie;
+	struct nhrp_protocol_address proto_nexthop;
+	int r;
+
+	nhrp_info("Resolution Request from proto src %s",
+		nhrp_protocol_address_format(
+			packet->hdr.protocol_type,
+			&packet->src_protocol_address,
+			sizeof(tmp), tmp));
+
+	packet->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
+	packet->hdr.hop_count = 0;
+
+	cie = nhrp_cie_alloc();
+	if (cie == NULL)
+		return FALSE;
+
+	cie->hdr = (struct nhrp_cie_header) {
+		.code = NHRP_CODE_SUCCESS,
+		.prefix_length = packet->dst_peer->prefix_length,
+		.holding_time = constant_htons(NHRP_HOLDING_TIME),
+	};
+
+	payload = nhrp_packet_payload(packet);
+	nhrp_payload_free(payload);
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_payload_add_cie(payload, cie);
+
+	r = kernel_route_protocol(packet->hdr.protocol_type,
+				  &packet->src_protocol_address,
+				  &cie->protocol_address,
+				  &proto_nexthop,
+				  NULL);
+	if (!r) {
+		nhrp_error("No route to protocol address %s",
+			nhrp_protocol_address_format(
+				packet->hdr.protocol_type,
+				&packet->src_protocol_address,
+				sizeof(tmp), tmp));
+		return FALSE;
+	}
+	packet->dst_peer = nhrp_peer_find(packet->hdr.protocol_type,
+					  &proto_nexthop, 0xff);
+	if (packet->dst_peer == NULL)
+		return FALSE;
+	r = kernel_route_nbma(packet->hdr.afnum,
+			      &packet->dst_peer->nbma_address,
+			      &cie->nbma_address,
+			      NULL, NULL);
+	if (!r) {
+		nhrp_error("No route to NBMA address %s",
+			nhrp_nbma_address_format(
+				packet->hdr.afnum,
+				&packet->dst_peer->nbma_address,
+				sizeof(tmp), tmp));
+		return FALSE;
+	}
+
+	return nhrp_packet_send(packet);
+}
+
 static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64];
@@ -160,7 +236,7 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 	struct iphdr *iph;
 	struct nhrp_payload *pl;
 
-        pl = nhrp_packet_payload(packet);
+	pl = nhrp_packet_payload(packet);
 	switch (packet->hdr.protocol_type) {
 	case ETHP_IP:
 		if (pl == NULL || pl->u.raw->length < sizeof(struct iphdr))
@@ -192,6 +268,7 @@ struct {
 } packet_types[] = {
 	[NHRP_PACKET_RESOLUTION_REQUEST] = {
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
+		.handler = nhrp_handle_resolution_request,
 	},
 	[NHRP_PACKET_RESOLUTION_REPLY] = {
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
@@ -381,14 +458,14 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 
 		if (!unmarshall_payload(&pos, &pduleft,
 					payload_type, ntohs(eh.length),
-					nhrp_packet_extension(packet, extension_type)))
+					nhrp_packet_extension(packet, ntohs(eh.type))))
 			return FALSE;
 	} while (1);
 
 	return TRUE;
 }
 
-static int nhrp_packet_forward(struct nhrp_packet *packet, struct nhrp_nbma_address *from)
+static int nhrp_packet_forward(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64], tmp3[64];
 
@@ -406,7 +483,7 @@ static int nhrp_packet_forward(struct nhrp_packet *packet, struct nhrp_nbma_addr
 	return FALSE;
 }
 
-static int nhrp_packet_receive_local(struct nhrp_packet *packet, struct nhrp_nbma_address *from)
+static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 {
 	struct nhrp_packet *req;
 
@@ -487,10 +564,14 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 		dest = &packet->dst_protocol_address;
 
 	peer = nhrp_peer_find(packet->hdr.protocol_type, dest, 0xff);
+	packet->src_linklayer_address = *from;
+	packet->src_iface = iface;
+	packet->dst_peer = peer;
+
 	if (peer == NULL || peer->type != NHRP_PEER_TYPE_LOCAL)
-		ret = nhrp_packet_forward(packet, from);
+		ret = nhrp_packet_forward(packet);
 	else
-		ret = nhrp_packet_receive_local(packet, from);
+		ret = nhrp_packet_receive_local(packet);
 
 error:
 	nhrp_packet_free(packet);
@@ -610,29 +691,92 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 
 int nhrp_packet_send(struct nhrp_packet *packet)
 {
-	struct nhrp_nbma_address nexthop;
-	struct nhrp_interface *iface;
+	struct nhrp_protocol_address proto_nexthop, *proto_dest;
 	struct nhrp_payload *payload;
 	uint8_t pdu[MAX_PDU_SIZE];
-	int size;
+	char tmp[64];
+	int size, oif_index = -1;
+	int r, do_nbma, do_protocol;
 
-	if (!kernel_route(packet, &iface, &nexthop))
-		return FALSE;
+	if (packet_types[packet->hdr.type].reply)
+		proto_dest = &packet->src_protocol_address;
+	else
+		proto_dest = &packet->dst_protocol_address;
+
+	do_nbma = (packet->src_nbma_address.addr_len == 0);
+	do_protocol = (packet->src_protocol_address.addr_len == 0) ||
+		      (packet->dst_peer == NULL) ||
+		      (packet->dst_iface == NULL);
+
+	if (do_protocol) {
+		r = kernel_route_protocol(
+			packet->hdr.protocol_type,
+			proto_dest,
+			packet->src_protocol_address.addr_len == 0 ? &packet->src_protocol_address : NULL,
+			&proto_nexthop,
+			&oif_index);
+		if (!r) {
+			nhrp_error("No route to protocol address %s",
+				nhrp_protocol_address_format(
+					packet->hdr.protocol_type,
+					proto_dest, sizeof(tmp), tmp));
+			return FALSE;
+		}
+		if (packet->dst_iface == NULL)
+			packet->dst_iface = nhrp_interface_get_by_index(oif_index, FALSE);
+		if (packet->dst_iface == NULL) {
+			nhrp_error("Protocol address %s routed to non-NHRP interface",
+				nhrp_protocol_address_format(
+					packet->hdr.protocol_type,
+					proto_dest, sizeof(tmp), tmp));
+			return FALSE;
+		}
+		if (packet->dst_peer == NULL) {
+			packet->dst_peer = nhrp_peer_find(
+				packet->hdr.protocol_type,
+				&proto_nexthop, 0xff);
+			if (packet->dst_peer == NULL) {
+				nhrp_error("Protocol next hop %s is not our peer",
+					nhrp_protocol_address_format(
+						packet->hdr.protocol_type,
+						proto_dest,
+						sizeof(tmp), tmp));
+				return FALSE;
+			}
+		}
+	}
+	if (do_nbma) {
+		r = kernel_route_nbma(packet->hdr.afnum,
+				      &packet->dst_peer->nbma_address,
+				      &packet->src_nbma_address,
+				      NULL, NULL);
+		if (!r) {
+			nhrp_error("No route to NBMA address %s",
+				nhrp_nbma_address_format(
+					packet->hdr.afnum,
+					&packet->dst_peer->nbma_address,
+					sizeof(tmp), tmp));
+			return FALSE;
+		}
+	}
 
 	if (packet->hdr.hop_count == 0)
 		packet->hdr.hop_count = 16;
 
+	/* RFC2332 states authentication is link specific and
+	 * regenerated at each hop */
 	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_AUTHENTICATION | NHRP_EXTENSION_FLAG_COMPULSORY);
-	if (payload->payload_type == NHRP_PAYLOAD_TYPE_NONE &&
-	    iface->auth_token != NULL) {
-		nhrp_payload_set_raw(payload, iface->auth_token);
-	}
+	nhrp_payload_free(payload);
+	if (packet->dst_iface->auth_token != NULL)
+		nhrp_payload_set_raw(payload,
+			nhrp_buffer_copy(packet->dst_iface->auth_token));
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0)
 		return FALSE;
 
-	return kernel_send(pdu, size, iface, &nexthop);
+	return kernel_send(pdu, size, packet->dst_iface,
+			   &packet->dst_peer->nbma_address);
 }
 
 static void nhrp_packet_xmit_timeout(struct nhrp_task *task)

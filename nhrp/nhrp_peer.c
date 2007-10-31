@@ -12,8 +12,6 @@
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
 
-#define HOLDING_TIME 7200
-
 static struct nhrp_peer_list peer_cache = CIRCLEQ_HEAD_INITIALIZER(peer_cache);
 
 static void nhrp_peer_register(struct nhrp_task *task);
@@ -39,7 +37,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 					       sizeof(dst), dst));
 
 	/* Re-register after holding time expires */
-	nhrp_task_schedule(&peer->task, (HOLDING_TIME - 60) * 1000,
+	nhrp_task_schedule(&peer->task, (NHRP_HOLDING_TIME - 60) * 1000,
 			   nhrp_peer_register);
 }
 
@@ -73,7 +71,7 @@ static void nhrp_peer_register(struct nhrp_task *task)
 		.hdr.code = NHRP_CODE_SUCCESS,
 		.hdr.prefix_length = 0xff,
 		.hdr.mtu = 0,
-		.hdr.holding_time = constant_htons(HOLDING_TIME),
+		.hdr.holding_time = constant_htons(NHRP_HOLDING_TIME),
 		.hdr.preference = 0,
 	};
 

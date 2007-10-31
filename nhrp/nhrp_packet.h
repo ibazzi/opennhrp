@@ -59,9 +59,15 @@ struct nhrp_packet {
 	struct nhrp_task		timeout;
 	void				(*handler)(void *ctx, struct nhrp_packet *packet);
 	void *				handler_ctx;
+
+	struct nhrp_interface *		src_iface;
+	struct nhrp_nbma_address	src_linklayer_address;
+        struct nhrp_interface *		dst_iface;
+	struct nhrp_peer *		dst_peer;
 };
 
 struct nhrp_buffer *nhrp_buffer_alloc(uint32_t size);
+struct nhrp_buffer *nhrp_buffer_copy(struct nhrp_buffer *buffer);
 void nhrp_buffer_free(struct nhrp_buffer *buffer);
 
 struct nhrp_cie *nhrp_cie_alloc(void);

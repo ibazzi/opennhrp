@@ -20,6 +20,7 @@
 struct nhrp_packet;
 struct nhrp_interface;
 struct nhrp_nbma_address;
+struct nhrp_protocol_address;
 
 /* Mainloop and timed tasks */
 struct nhrp_task {
@@ -43,8 +44,16 @@ void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes);
 
 /* Initializers for system dependant stuff */
 int kernel_init(void);
-int kernel_route(struct nhrp_packet *p, struct nhrp_interface **iface,
-		 struct nhrp_nbma_address *next_hop_nbma);
+int kernel_route_protocol(uint16_t protocol_type,
+			  struct nhrp_protocol_address *dest,
+			  struct nhrp_protocol_address *default_source,
+			  struct nhrp_protocol_address *next_hop,
+			  int *oif_index);
+int kernel_route_nbma(uint16_t afnum,
+		      struct nhrp_nbma_address *dest,
+		      struct nhrp_nbma_address *default_source,
+		      struct nhrp_nbma_address *next_hop,
+		      int *oif_index);
 int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 		struct nhrp_nbma_address *to);
 

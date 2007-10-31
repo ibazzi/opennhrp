@@ -438,9 +438,11 @@ err_close_packetfd:
 	return FALSE;
 }
 
-int kernel_route(struct nhrp_packet *p,
-		 struct nhrp_interface **outiface,
-		 struct nhrp_nbma_address *next_hop_nbma)
+int kernel_route_protocol(uint16_t protocol_type,
+			  struct nhrp_protocol_address *dest,
+			  struct nhrp_protocol_address *default_source,
+			  struct nhrp_protocol_address *next_hop,
+			  int *oif_index)
 {
 	struct {
 		struct nlmsghdr 	n;
@@ -449,118 +451,93 @@ int kernel_route(struct nhrp_packet *p,
 	} req;
 	struct rtmsg *r = NLMSG_DATA(&req.n);
 	struct rtattr *rta[RTA_MAX+1];
-	struct nhrp_interface *iface;
-	struct nhrp_peer *peer;
-	struct nhrp_protocol_address next_hop;
-	char tmp[64];
-	int *pindex;
 
 	memset(&req, 0, sizeof(req));
 	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
 	req.n.nlmsg_flags = NLM_F_REQUEST;
 	req.n.nlmsg_type = RTM_GETROUTE;
-	req.r.rtm_family = protocol_to_pf(p->hdr.protocol_type);
-	req.r.rtm_table = 0;
-	req.r.rtm_protocol = 0;
-	req.r.rtm_scope = 0;
-	req.r.rtm_type = 0;
-	req.r.rtm_src_len = 0;
-	req.r.rtm_dst_len = 0;
-	req.r.rtm_tos = 0;
+	req.r.rtm_family = protocol_to_pf(protocol_type);
 
 	netlink_add_rtattr_l(&req.n, sizeof(req), RTA_DST,
-			     p->dst_protocol_address.addr,
-			     p->dst_protocol_address.addr_len);
-	req.r.rtm_dst_len = p->dst_protocol_address.addr_len * 8;
+			     dest->addr, dest->addr_len);
+	req.r.rtm_dst_len = dest->addr_len * 8;
 
 	if (!netlink_talk(&netlink_fd, &req.n, sizeof(req), &req.n))
 		return FALSE;
 
 	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(r), RTM_PAYLOAD(&req.n));
 
-	if (rta[RTA_OIF] == NULL) {
-		nhrp_error("Route to %s has no interface",
-			   nhrp_protocol_address_format(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp));
-		return FALSE;
-	}
+	if (oif_index != NULL && rta[RTA_OIF] != NULL)
+		*oif_index = *(int *) RTA_DATA(rta[RTA_OIF]);
 
-	pindex = (int *) RTA_DATA(rta[RTA_OIF]);
-	iface = nhrp_interface_get_by_index(*pindex, FALSE);
-	if (iface == NULL) {
-		nhrp_error("Route to %s goes to interface %d which is not configured for NHRP",
-			   nhrp_protocol_address_format(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp),
-			   *pindex);
-		return FALSE;
-	}
-
-	if (p->src_protocol_address.addr_len == 0) {
-		if (rta[RTA_PREFSRC] == NULL) {
-			nhrp_error("Route to %s does not have default source and it is needed",
-				   nhrp_protocol_address_format(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp));
-			return FALSE;
-		}
-
-		nhrp_protocol_address_set(&p->src_protocol_address,
+	if (default_source != NULL && rta[RTA_PREFSRC] != NULL) {
+		nhrp_protocol_address_set(default_source,
 					  RTA_PAYLOAD(rta[RTA_PREFSRC]),
 					  RTA_DATA(rta[RTA_PREFSRC]));
 	}
 
-	if (rta[RTA_GATEWAY] != NULL) {
-		nhrp_protocol_address_set(&next_hop,
-					  RTA_PAYLOAD(rta[RTA_GATEWAY]),
-					  RTA_DATA(rta[RTA_GATEWAY]));
-	} else {
-		next_hop = p->dst_protocol_address;
+	if (next_hop != NULL) {
+		if (rta[RTA_GATEWAY] != NULL) {
+			nhrp_protocol_address_set(next_hop,
+				RTA_PAYLOAD(rta[RTA_GATEWAY]),
+				RTA_DATA(rta[RTA_GATEWAY]));
+		} else {
+			*next_hop = *dest;
+		}
 	}
 
-	peer = nhrp_peer_find(p->hdr.protocol_type, &next_hop, 0);
-	if (peer == NULL) {
-		nhrp_error("Route to %s goes via unknown hop",
-			   nhrp_protocol_address_format(p->hdr.protocol_type, &p->dst_protocol_address, sizeof(tmp), tmp));
+	return TRUE;
+}
+
+int kernel_route_nbma(uint16_t afnum,
+		      struct nhrp_nbma_address *dest,
+		      struct nhrp_nbma_address *default_source,
+		      struct nhrp_nbma_address *next_hop,
+		      int *oif_index)
+{
+	struct {
+		struct nlmsghdr 	n;
+		struct rtmsg 		r;
+		char   			buf[1024];
+	} req;
+	struct rtmsg *r = NLMSG_DATA(&req.n);
+	struct rtattr *rta[RTA_MAX+1];
+
+	memset(&req, 0, sizeof(req));
+	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+	req.n.nlmsg_flags = NLM_F_REQUEST;
+	req.n.nlmsg_type = RTM_GETROUTE;
+	req.r.rtm_family = afnum_to_pf(afnum);
+
+	netlink_add_rtattr_l(&req.n, sizeof(req), RTA_DST,
+			     dest->addr, dest->addr_len);
+	req.r.rtm_dst_len = dest->addr_len * 8;
+
+	if (!netlink_talk(&netlink_fd, &req.n, sizeof(req), &req.n))
 		return FALSE;
+
+	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(r), RTM_PAYLOAD(&req.n));
+
+	if (oif_index != NULL && rta[RTA_OIF] != NULL)
+		*oif_index = *(int *) RTA_DATA(rta[RTA_OIF]);
+
+	if (default_source != NULL && rta[RTA_PREFSRC] != NULL) {
+		nhrp_nbma_address_set(default_source,
+				      RTA_PAYLOAD(rta[RTA_PREFSRC]),
+				      RTA_DATA(rta[RTA_PREFSRC]),
+				      0, NULL);
 	}
 
-	if (p->src_nbma_address.addr_len == 0) {
-		if (iface->nbma_address.addr_len == 0) {
-			memset(&req, 0, sizeof(req));
-			req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
-			req.n.nlmsg_flags = NLM_F_REQUEST;
-			req.n.nlmsg_type = RTM_GETROUTE;
-			req.r.rtm_family = afnum_to_pf(peer->afnum);
-			req.r.rtm_table = 0;
-			req.r.rtm_protocol = 0;
-			req.r.rtm_scope = 0;
-			req.r.rtm_type = 0;
-			req.r.rtm_src_len = 0;
-			req.r.rtm_dst_len = 0;
-			req.r.rtm_tos = 0;
-
-			netlink_add_rtattr_l(&req.n, sizeof(req), RTA_DST,
-				peer->nbma_address.addr,
-				peer->nbma_address.addr_len);
-			req.r.rtm_dst_len = peer->nbma_address.addr_len * 8;
-
-			if (!netlink_talk(&netlink_fd, &req.n, sizeof(req), &req.n))
-				return FALSE;
-
-			netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(r), RTM_PAYLOAD(&req.n));
-
-			if (rta[RTA_PREFSRC] == NULL) {
-				nhrp_error("NBMA route to %s does not have default source and it is needed",
-					   nhrp_nbma_address_format(peer->afnum, &peer->nbma_address, sizeof(tmp), tmp));
-				return FALSE;
-			}
-
-			nhrp_nbma_address_set(&p->src_nbma_address,
-					      RTA_PAYLOAD(rta[RTA_PREFSRC]),
-					      RTA_DATA(rta[RTA_PREFSRC]),
-					      0, NULL);
-		} else
-			p->src_nbma_address = iface->nbma_address;
+	if (next_hop != NULL) {
+		if (rta[RTA_GATEWAY] != NULL) {
+			nhrp_nbma_address_set(next_hop,
+				RTA_PAYLOAD(rta[RTA_GATEWAY]),
+				RTA_DATA(rta[RTA_GATEWAY]),
+				0, NULL);
+		} else {
+			*next_hop = *dest;
+		}
 	}
-
-	*outiface = iface;
-	*next_hop_nbma = peer->nbma_address;
 
 	return TRUE;
 }
