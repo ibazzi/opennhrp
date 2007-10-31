@@ -108,8 +108,11 @@ void nhrp_payload_free(struct nhrp_payload *payload)
 		nhrp_buffer_free(payload->u.raw);
 		break;
 	case NHRP_PAYLOAD_TYPE_CIE_LIST:
-		TAILQ_FOREACH(cie, &payload->u.cie_list_head, cie_list_entry)
+		while (!TAILQ_EMPTY(&payload->u.cie_list_head)) {
+			cie = TAILQ_FIRST(&payload->u.cie_list_head);
+			TAILQ_REMOVE(&payload->u.cie_list_head, cie, cie_list_entry);
 			nhrp_cie_free(cie);
+		}
 		break;
 	}
 }
@@ -216,6 +219,12 @@ struct {
 		.payload_type = NHRP_PAYLOAD_TYPE_RAW,
 	}
 };
+int extension_types[] = {
+	[NHRP_EXTENSION_RESPONDER_ADDRESS] = NHRP_PAYLOAD_TYPE_CIE_LIST,
+	[NHRP_EXTENSION_FORWARD_TRANSIT_NHS] = NHRP_PAYLOAD_TYPE_CIE_LIST,
+	[NHRP_EXTENSION_REVERSE_TRANSIT_NHS] = NHRP_PAYLOAD_TYPE_CIE_LIST,
+	[NHRP_EXTENSION_NAT_ADDRESS] = NHRP_PAYLOAD_TYPE_CIE_LIST
+};
 
 static int unmarshall_binary(uint8_t **pdu, size_t *pduleft, size_t size, void *raw)
 {
@@ -256,10 +265,26 @@ static inline int unmarshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct
 	return TRUE;
 }
 
+static int unmarshall_cie(uint8_t **pdu, size_t *pduleft, struct nhrp_cie *cie)
+{
+	cie->nbma_address.addr_len = cie->hdr.nbma_address_len;
+	cie->nbma_address.subaddr_len = cie->hdr.nbma_subaddress_len;
+	cie->protocol_address.addr_len = cie->hdr.protocol_address_len;
+
+	if (!unmarshall_binary(pdu, pduleft, sizeof(struct nhrp_cie_header), &cie->hdr))
+		return FALSE;
+	if (!unmarshall_nbma_address(pdu, pduleft, &cie->nbma_address))
+		return FALSE;
+	return unmarshall_protocol_address(pdu, pduleft, &cie->protocol_address);
+}
+
 static int unmarshall_payload(uint8_t **pdu, size_t *pduleft,
 			      int type, size_t size,
 			      struct nhrp_payload *p)
 {
+	struct nhrp_cie *cie;
+	size_t cieleft;
+
 	if (*pduleft < size)
 		return FALSE;
 
@@ -272,6 +297,16 @@ static int unmarshall_payload(uint8_t **pdu, size_t *pduleft,
 	case NHRP_PAYLOAD_TYPE_RAW:
 		p->u.raw = nhrp_buffer_alloc(size);
 		return unmarshall_binary(pdu, pduleft, size, p->u.raw->data);
+	case NHRP_PAYLOAD_TYPE_CIE_LIST:
+		cieleft = size;
+		while (cieleft) {
+			cie = nhrp_cie_alloc();
+			TAILQ_INSERT_TAIL(&p->u.cie_list_head, cie, cie_list_entry);
+			if (!unmarshall_cie(pdu, &cieleft, cie))
+				return FALSE;
+		}
+		*pduleft -= size;
+		return TRUE;
 	default:
 		return FALSE;
 	}
@@ -280,7 +315,7 @@ static int unmarshall_payload(uint8_t **pdu, size_t *pduleft,
 static int unmarshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *packet)
 {
 	uint8_t *pos = pdu;
-	int size;
+	int size, extension_offset;
 	struct nhrp_packet_header *phdr = (struct nhrp_packet_header *) pdu;
 
 	if (!unmarshall_binary(&pos, &pduleft, sizeof(packet->hdr), &packet->hdr))
@@ -301,12 +336,13 @@ static int unmarshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *p
 	if (!unmarshall_protocol_address(&pos, &pduleft, &packet->dst_protocol_address))
 		return FALSE;
 
-	if (ntohs(packet->hdr.extension_offset) == 0) {
+	extension_offset = ntohs(packet->hdr.extension_offset);
+	if (extension_offset == 0) {
 		/* No extensions; rest of data is payload */
 		size = pduleft;
 	} else {
 		/* Extensions present; exclude those from payload */
-		size = ntohs(packet->hdr.extension_offset) - (pos - pdu);
+		size = extension_offset - (pos - pdu);
 		if (size < 0 || size > pduleft)
 			return FALSE;
 	}
@@ -314,38 +350,40 @@ static int unmarshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *p
 	if (!unmarshall_payload(&pos, &pduleft,
 				packet_types[packet->hdr.type].payload_type,
 				size, nhrp_packet_payload(packet)))
-		return -1;
+		return FALSE;
 
-#if 0
-	phdr->extension_offset = htons((int)(pos - pdu));
-	for (i = 1; i < packet->num_extensions; i++) {
-		struct nhrp_extension_header *eh = (struct nhrp_extension_header *) pos;
+	if (extension_offset == 0)
+		return TRUE;
 
-		if (packet->extension_by_order[i].payload_type == NHRP_PAYLOAD_TYPE_NONE)
-			continue;
+	do {
+		struct nhrp_extension_header eh;
+		int extension_type, payload_type;
 
-		neh.type = htons(packet->extension_by_order[i].extension_type);
-		neh.length = 0;
+		if (!unmarshall_binary(&pos, &pduleft, sizeof(eh), &eh))
+			return FALSE;
 
-		if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
-			return -1;
-		if (!marshall_payload(&pos, &pduleft, &packet->extension_by_order[i]))
-			return -1;
-		eh->length = htons((pos - (uint8_t *) eh) - sizeof(neh));
-	}
-	neh.type = htons(NHRP_EXTENSION_END | NHRP_EXTENSION_FLAG_COMPULSORY);
-	neh.length = 0;
-	if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
-		return -1;
+		extension_type = ntohs(eh.type) & ~NHRP_EXTENSION_FLAG_COMPULSORY;
+		if (extension_type == NHRP_EXTENSION_END)
+			break;
 
-	size = (int)(pos - pdu);
-	phdr->packet_size = htons(size);
-	phdr->checksum = 0;
-	phdr->checksum = nhrp_calculate_checksum(pdu, size);
-#endif
+		payload_type = NHRP_PAYLOAD_TYPE_NONE;
+		if (extension_type < ARRAY_SIZE(extension_types))
+			payload_type = extension_types[extension_type];
+		if (payload_type == NHRP_PAYLOAD_TYPE_NONE)
+			payload_type = NHRP_PAYLOAD_TYPE_RAW;
+		if (payload_type == NHRP_PAYLOAD_TYPE_RAW &&
+		    ntohs(eh.length) == 0)
+			payload_type = NHRP_PAYLOAD_TYPE_NONE;
+
+		if (!unmarshall_payload(&pos, &pduleft,
+					payload_type, ntohs(eh.length),
+					nhrp_packet_extension(packet, extension_type)))
+			return FALSE;
+	} while (1);
 
 	return TRUE;
 }
+
 static int nhrp_packet_forward(struct nhrp_packet *packet, struct nhrp_nbma_address *from)
 {
 	char tmp[64], tmp2[64], tmp3[64];
