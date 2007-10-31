@@ -267,12 +267,13 @@ static inline int unmarshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct
 
 static int unmarshall_cie(uint8_t **pdu, size_t *pduleft, struct nhrp_cie *cie)
 {
+	if (!unmarshall_binary(pdu, pduleft, sizeof(struct nhrp_cie_header), &cie->hdr))
+		return FALSE;
+
 	cie->nbma_address.addr_len = cie->hdr.nbma_address_len;
 	cie->nbma_address.subaddr_len = cie->hdr.nbma_subaddress_len;
 	cie->protocol_address.addr_len = cie->hdr.protocol_address_len;
 
-	if (!unmarshall_binary(pdu, pduleft, sizeof(struct nhrp_cie_header), &cie->hdr))
-		return FALSE;
 	if (!unmarshall_nbma_address(pdu, pduleft, &cie->nbma_address))
 		return FALSE;
 	return unmarshall_protocol_address(pdu, pduleft, &cie->protocol_address);
@@ -312,8 +313,9 @@ static int unmarshall_payload(uint8_t **pdu, size_t *pduleft,
 	}
 }
 
-static int unmarshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *packet)
+static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *packet)
 {
+	size_t pduleft = pdusize;
 	uint8_t *pos = pdu;
 	int size, extension_offset;
 	struct nhrp_packet_header *phdr = (struct nhrp_packet_header *) pdu;
@@ -355,6 +357,8 @@ static int unmarshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *p
 	if (extension_offset == 0)
 		return TRUE;
 
+	pos = &pdu[extension_offset];
+	pduleft = pdusize - extension_offset;
 	do {
 		struct nhrp_extension_header eh;
 		int extension_type, payload_type;
