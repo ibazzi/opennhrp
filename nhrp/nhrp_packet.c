@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <netinet/in.h>
+#include <linux/ip.h>
 #include "nhrp_packet.h"
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
@@ -130,10 +131,42 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 	free(packet);
 }
 
+static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
+{
+	char tmp[64], tmp2[64];
+	struct nhrp_protocol_address dst;
+	struct iphdr *iph;
+	struct nhrp_payload *pl;
+
+        pl = nhrp_packet_payload(packet);
+	switch (packet->hdr.protocol_type) {
+	case ETHP_IP:
+		if (pl == NULL || pl->u.raw->length < sizeof(struct iphdr))
+			return FALSE;
+
+		iph = (struct iphdr *) pl->u.raw->data;
+		nhrp_protocol_address_set(&dst, 4, (uint8_t *) &iph->daddr);
+		break;
+	default:
+		return FALSE;
+	}
+
+	nhrp_info("Traffic Indication from proto src %s; make direct tunnel to %s",
+		nhrp_protocol_address_format(
+			packet->hdr.protocol_type,
+			&packet->src_protocol_address,
+			sizeof(tmp), tmp),
+		nhrp_protocol_address_format(
+			packet->hdr.protocol_type,
+			&dst, sizeof(tmp2), tmp2));
+
+	return FALSE;
+}
+
 struct {
 	uint16_t payload_type;
 	int reply;
-	void (*handler)(struct nhrp_packet *packet);
+	int (*handler)(struct nhrp_packet *packet);
 } packet_types[] = {
 	[NHRP_PACKET_RESOLUTION_REQUEST] = {
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
@@ -160,6 +193,7 @@ struct {
 		.payload_type = NHRP_PAYLOAD_TYPE_RAW,
 	},
 	[NHRP_PACKET_TRAFFIC_INDICATION] = {
+		.handler = nhrp_handle_traffic_indication,
 		.payload_type = NHRP_PAYLOAD_TYPE_RAW,
 	}
 };
@@ -203,9 +237,31 @@ static inline int unmarshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct
 	return TRUE;
 }
 
+static int unmarshall_payload(uint8_t **pdu, size_t *pduleft,
+			      int type, size_t size,
+			      struct nhrp_payload *p)
+{
+	if (*pduleft < size)
+		return FALSE;
+
+	nhrp_payload_set_type(p, type);
+	switch (p->payload_type) {
+	case NHRP_PAYLOAD_TYPE_NONE:
+		*pdu += size;
+		*pduleft -= size;
+		return TRUE;
+	case NHRP_PAYLOAD_TYPE_RAW:
+		p->u.raw = nhrp_buffer_alloc(size);
+		return unmarshall_binary(pdu, pduleft, size, p->u.raw->data);
+	default:
+		return FALSE;
+	}
+}
+
 static int unmarshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *packet)
 {
 	uint8_t *pos = pdu;
+	int size;
 	struct nhrp_packet_header *phdr = (struct nhrp_packet_header *) pdu;
 
 	if (!unmarshall_binary(&pos, &pduleft, sizeof(packet->hdr), &packet->hdr))
@@ -226,10 +282,23 @@ static int unmarshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *p
 	if (!unmarshall_protocol_address(&pos, &pduleft, &packet->dst_protocol_address))
 		return FALSE;
 
-#if 0
-	if (!unmarshall_payload(&pos, &pduleft, nhrp_packet_payload(packet)))
+	if (ntohs(packet->hdr.extension_offset) == 0) {
+		/* No extensions; rest of data is payload */
+		size = pduleft;
+	} else {
+		/* Extensions present; exclude those from payload */
+		size = ntohs(packet->hdr.extension_offset) -
+			(pos - pdu);
+		if (size < 0 || size > pduleft)
+			return FALSE;
+	}
+
+	if (!unmarshall_payload(&pos, &pduleft,
+				packet_types[packet->hdr.type].payload_type,
+				size, nhrp_packet_payload(packet)))
 		return -1;
 
+#if 0
 	phdr->extension_offset = htons((int)(pos - pdu));
 	for (i = 1; i < packet->num_extensions; i++) {
 		struct nhrp_extension_header *eh = (struct nhrp_extension_header *) pos;
@@ -261,12 +330,27 @@ static int unmarshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *p
 }
 static int nhrp_packet_forward(struct nhrp_packet *packet, struct nhrp_nbma_address *from)
 {
+	char tmp[64], tmp2[64], tmp3[64];
+
+	nhrp_info("Packet nbma src %s, proto src %s, proto dst %s needs to be forwarded",
+		nhrp_nbma_address_format(packet->hdr.afnum,
+					 &packet->src_nbma_address,
+					 sizeof(tmp), tmp),
+		nhrp_protocol_address_format(packet->hdr.protocol_type,
+					     &packet->src_protocol_address,
+					     sizeof(tmp2), tmp2),
+		nhrp_protocol_address_format(packet->hdr.protocol_type,
+					     &packet->dst_protocol_address,
+					     sizeof(tmp3), tmp3));
+
 	return FALSE;
 }
 
 static int nhrp_packet_receive_local(struct nhrp_packet *packet, struct nhrp_nbma_address *from)
 {
 	struct nhrp_packet *req;
+
+	/* FIXME: Check authentication extension first */
 
 	if (packet_types[packet->hdr.type].reply) {
 		TAILQ_FOREACH(req, &pending_requests, request_list_entry) {
@@ -289,14 +373,31 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet, struct nhrp_nbm
 		return FALSE;
 	}
 
-	return FALSE;
+	if (packet_types[packet->hdr.type].handler == NULL) {
+		char tmp[64], tmp2[64], tmp3[64];
+
+		nhrp_info("Packet type %d from nbma src %s, proto src %s, proto dst %s not supported",
+			  packet->hdr.type,
+			  nhrp_nbma_address_format(packet->hdr.afnum,
+						   &packet->src_nbma_address,
+						   sizeof(tmp), tmp),
+			  nhrp_protocol_address_format(packet->hdr.protocol_type,
+						       &packet->src_protocol_address,
+						       sizeof(tmp2), tmp2),
+			  nhrp_protocol_address_format(packet->hdr.protocol_type,
+						       &packet->dst_protocol_address,
+						       sizeof(tmp3), tmp3));
+		return FALSE;
+	}
+
+	return packet_types[packet->hdr.type].handler(packet);
 }
 
 int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,
 			struct nhrp_nbma_address *from)
 {
-	char tmp[64], tmp2[64], tmp3[64];
+	char tmp[64];
 	struct nhrp_packet *packet;
 	struct nhrp_protocol_address *dest;
 	struct nhrp_peer *peer;
@@ -319,17 +420,6 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 						    sizeof(tmp), tmp));
 		goto error;
 	}
-
-	nhrp_info("Packet nbma src %s, proto src %s, proto dst %s",
-		nhrp_nbma_address_format(packet->hdr.afnum,
-					 &packet->src_nbma_address,
-					 sizeof(tmp), tmp),
-		nhrp_protocol_address_format(packet->hdr.protocol_type,
-					     &packet->src_protocol_address,
-					     sizeof(tmp2), tmp2),
-		nhrp_protocol_address_format(packet->hdr.protocol_type,
-					     &packet->dst_protocol_address,
-					     sizeof(tmp3), tmp3));
 
 	if (packet_types[packet->hdr.type].reply)
 		dest = &packet->src_protocol_address;
