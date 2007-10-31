@@ -356,7 +356,7 @@ error:
 
 static void pfpacket_read(void *ctx, short events)
 {
-	int fd = (int) ctx;
+	int fd = (uintptr_t) ctx;
 	struct sockaddr_ll lladdr;
 	struct nhrp_interface *iface;
 	struct iovec iov;
@@ -409,7 +409,7 @@ int kernel_init(void)
 		nhrp_error("Unable to create PF_PACKET socket");
 		return FALSE;
 	}
-	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfpacket_read, (void*) packet_fd))
+	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfpacket_read, (void*)(uintptr_t) packet_fd))
 		goto err_close_packetfd;
 
 	if (!netlink_open(&netlink_fd, NETLINK_ROUTE, groups))
