@@ -66,8 +66,11 @@ struct nhrp_packet {
 	struct nhrp_peer *		dst_peer;
 };
 
+#define NHRP_EXTENSION_FLAG_NOCREATE	0x00010000
+
 struct nhrp_buffer *nhrp_buffer_alloc(uint32_t size);
 struct nhrp_buffer *nhrp_buffer_copy(struct nhrp_buffer *buffer);
+int nhrp_buffer_cmp(struct nhrp_buffer *a, struct nhrp_buffer *b);
 void nhrp_buffer_free(struct nhrp_buffer *buffer);
 
 struct nhrp_cie *nhrp_cie_alloc(void);
@@ -79,7 +82,7 @@ void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie);
 
 struct nhrp_packet *nhrp_packet_alloc(void);
 struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet);
-struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet, uint16_t extension);
+struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet, uint32_t extension);
 void nhrp_packet_free(struct nhrp_packet *packet);
 int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,

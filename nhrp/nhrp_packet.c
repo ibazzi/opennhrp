@@ -63,6 +63,15 @@ struct nhrp_buffer *nhrp_buffer_copy(struct nhrp_buffer *buffer)
 	return copy;
 }
 
+int nhrp_buffer_cmp(struct nhrp_buffer *a, struct nhrp_buffer *b)
+{
+	if (a->length > b->length)
+		return 1;
+	if (a->length < b->length)
+		return -1;
+	return memcmp(a->data, b->data, a->length);
+}
+
 void nhrp_buffer_free(struct nhrp_buffer *buffer)
 {
 	free(buffer);
@@ -139,15 +148,18 @@ struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet)
 }
 
 struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
-					   uint16_t extension)
+					   uint32_t extension)
 {
 	struct nhrp_payload *p;
 
 	if (packet->extension_by_type[extension & 0x7fff] != NULL)
 		return packet->extension_by_type[extension & 0x7fff];
 
+	if (extension & NHRP_EXTENSION_FLAG_NOCREATE)
+		return NULL;
+
 	p = &packet->extension_by_order[packet->num_extensions++];
-	p->extension_type = extension;
+	p->extension_type = extension & 0xffff;
 	packet->extension_by_type[extension & 0x7fff] = p;
 
 	return p;
@@ -503,8 +515,6 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 {
 	struct nhrp_packet *req;
 
-	/* FIXME: Check authentication extension first */
-
 	if (packet_types[packet->hdr.type].reply) {
 		TAILQ_FOREACH(req, &pending_requests, request_list_entry) {
 			if (packet->hdr.u.request_id != req->hdr.u.request_id)
@@ -583,6 +593,17 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
 	packet->dst_peer = peer;
+
+	/* RFC2332 5.3.4 - Authentication is always done pairwise on an NHRP
+	 * hop-by-hop basis; i.e. regenerated at each hop. */
+	if (packet->src_iface->auth_token) {
+		struct nhrp_payload *p;
+		p = nhrp_packet_extension(packet, NHRP_EXTENSION_AUTHENTICATION | NHRP_EXTENSION_FLAG_NOCREATE);
+		if (p == NULL)
+			return FALSE;
+		if (nhrp_buffer_cmp(packet->src_iface->auth_token, p->u.raw) != 0)
+			return FALSE;
+	}
 
 	if (peer == NULL || peer->type != NHRP_PEER_TYPE_LOCAL)
 		ret = nhrp_packet_forward(packet);
@@ -779,8 +800,8 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	if (packet->hdr.hop_count == 0)
 		packet->hdr.hop_count = 16;
 
-	/* RFC2332 states authentication is link specific and
-	 * regenerated at each hop */
+	/* RFC2332 5.3.4 - Authentication is always done pairwise on an NHRP
+	 * hop-by-hop basis; i.e. regenerated at each hop. */
 	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_AUTHENTICATION | NHRP_EXTENSION_FLAG_COMPULSORY);
 	nhrp_payload_free(payload);
 	if (packet->dst_iface->auth_token != NULL)
