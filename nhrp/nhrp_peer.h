@@ -35,6 +35,7 @@ struct nhrp_peer {
 	struct nhrp_nbma_address nbma_address;
 	struct nhrp_protocol_address protocol_address;
 	struct nhrp_protocol_address dst_protocol_address;
+	struct nhrp_interface *interface;
 };
 
 void nhrp_peer_insert(struct nhrp_peer *peer);

@@ -8,10 +8,14 @@
  * by the Free Software Foundation. See http://www.gnu.org/ for details.
  */
 
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
 #include <string.h>
 #include <netinet/in.h>
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
+#include "nhrp_interface.h"
 
 static struct nhrp_peer_list peer_cache = CIRCLEQ_HEAD_INITIALIZER(peer_cache);
 
@@ -19,6 +23,58 @@ static void nhrp_peer_register(struct nhrp_task *task);
 
 static void nhrp_peer_prune(struct nhrp_task *task)
 {
+}
+
+static char *env(const char *key, const char *value)
+{
+	char *buf;
+	buf = malloc(strlen(key)+strlen(value)+2);
+	if (buf == NULL)
+		return NULL;
+	sprintf(buf, "%s=%s", key, value);
+	return buf;
+}
+
+static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action)
+{
+	char *argv[] = { "./peer-updown", action, NULL };
+	char *envp[32];
+	char tmp[64];
+	pid_t pid;
+	int i = 0;
+
+	pid = fork();
+	if (pid == -1)
+		return FALSE;
+	if (pid > 0)
+		return TRUE;
+
+	envp[i++] = env(
+		"NHRP_PEER_PROTOCOL_ADDRESS",
+		nhrp_protocol_address_format(
+			peer->protocol_type,
+			&peer->protocol_address,
+			sizeof(tmp), tmp));
+	envp[i++] = env("NHRP_PEER_NBMA_ADDRESS",
+		nhrp_nbma_address_format(
+			peer->afnum,
+			&peer->nbma_address,
+			sizeof(tmp), tmp));
+	if (peer->interface != NULL)
+		envp[i++] = env("NHRP_PEER_INTERFACE", peer->interface->name);
+
+	envp[i++] = env("NHRP_ROUTE_DEST",
+		nhrp_protocol_address_format(
+			peer->protocol_type,
+			&peer->dst_protocol_address,
+			sizeof(tmp), tmp));
+	sprintf(tmp, "%d", peer->prefix_length);
+	envp[i++] = env("NHRP_ROUTE_PREFIX", tmp);
+
+	envp[i++] = NULL;
+
+	execve("peer-updown", argv, envp);
+	exit(1);
 }
 
 static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *reply)
@@ -40,6 +96,8 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 		  nhrp_protocol_address_format(peer->protocol_type,
 					       &peer->dst_protocol_address,
 					       sizeof(dst), dst));
+
+	nhrp_peer_run_script(peer, "peer-up");
 
 	/* Re-register after holding time expires */
 	nhrp_task_schedule(&peer->task, (NHRP_HOLDING_TIME - 60) * 1000,
@@ -91,6 +149,7 @@ static void nhrp_peer_register(struct nhrp_task *task)
 
 	sent = nhrp_packet_send_request(packet,
 		nhrp_peer_handle_registration_reply, peer);
+	peer->interface = packet->dst_iface;
 
 error:
 	if (!sent) {
@@ -130,6 +189,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	peer->protocol_address = cie->protocol_address;
 	/* peer->expire_time; */
 
+	nhrp_protocol_address_mask(&peer->dst_protocol_address, peer->prefix_length);
+
 	nhrp_info("Received Resolution Reply %s/%d is at proto %s nbma %s",
 		  nhrp_protocol_address_format(peer->protocol_type,
 					       &peer->dst_protocol_address,
@@ -141,6 +202,10 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		  nhrp_nbma_address_format(peer->afnum,
 			  		   &peer->nbma_address,
 			  		   sizeof(nbma), nbma));
+
+	nhrp_peer_run_script(peer, "peer-up");
+	if (nhrp_protocol_address_cmp(&peer->protocol_address, &peer->dst_protocol_address) != 0)
+		nhrp_peer_run_script(peer, "route-up");
 
 	nhrp_task_schedule(&peer->task,
 			   (ntohs(cie->hdr.holding_time) - 60) * 1000,
@@ -192,6 +257,7 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 
 	sent = nhrp_packet_send_request(packet,
 		nhrp_peer_handle_resolution_reply, peer);
+	peer->interface = packet->dst_iface;
 
 error:
 	if (!sent) {

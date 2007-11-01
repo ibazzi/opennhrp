@@ -58,6 +58,14 @@ int nhrp_protocol_address_cmp(struct nhrp_protocol_address *a, struct nhrp_proto
 	return memcmp(a->addr, b->addr, a->addr_len);
 }
 
+void nhrp_protocol_address_mask(struct nhrp_protocol_address *addr, int prefix)
+{
+	int i, bits = 8 * addr->addr_len;
+
+	for (i = prefix; i < bits; i++)
+		addr->addr[i / 8] &= ~(0x80 >> (i % 8));
+}
+
 const char *nhrp_protocol_address_format(
 	uint16_t protocol_type,
 	struct nhrp_protocol_address *addr,

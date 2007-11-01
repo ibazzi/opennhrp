@@ -36,6 +36,7 @@ int nhrp_protocol_address_set(
 	struct nhrp_protocol_address *addr, uint8_t len, uint8_t *bytes);
 int nhrp_protocol_address_cmp(
 	struct nhrp_protocol_address *a, struct nhrp_protocol_address *b);
+void nhrp_protocol_address_mask(struct nhrp_protocol_address *addr, int prefix);
 const char *nhrp_protocol_address_format(
 	uint16_t protocol_type, struct nhrp_protocol_address *addr,
 	size_t buflen, char *buffer);

@@ -1,0 +1,23 @@
+#!/bin/sh
+
+case $1 in
+peer-up)
+	echo "Neighbor $NHRP_PEER_PROTOCOL_ADDRESS is up"
+	ip neigh replace $NHRP_PEER_PROTOCOL_ADDRESS lladdr $NHRP_PEER_NBMA_ADDRESS nud permanent dev $NHRP_PEER_INTERFACE
+	;;
+peer-down)
+	echo "Neighbor $NHRP_PEER_PROTOCOL_ADDRESS is down"
+	ip neigh del $NHRP_PEER_PROTOCOL_ADDRESS dev $NHRP_PEER_INTERFACE
+	;;
+route-up)
+	echo "Route $NHRP_ROUTE_DEST/$NHRP_ROUTE_PREFIX is up"
+	ip route replace $NHRP_ROUTE_DEST/$NHRP_ROUTE_PREFIX proto 42 metric 10 via $NHRP_PEER_PROTOCOL_ADDRESS
+	ip route flush cache
+	;;
+route-down)
+	echo "Route $NHRP_ROUTE_DEST/$NHRP_ROUTE_PREFIX is down"
+	ip route del $NHRP_ROUTE_DEST/$NHRP_ROUTE_PREFIX proto 42
+	ip route flush cache
+	;;
+esac
+

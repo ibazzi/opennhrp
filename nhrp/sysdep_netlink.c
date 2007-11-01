@@ -274,6 +274,7 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 	peer = calloc(1, sizeof(struct nhrp_peer));
 	peer->type = NHRP_PEER_TYPE_LOCAL;
 	peer->afnum = AFNUM_RESERVED;
+	peer->interface = iface;
 	switch (ifa->ifa_family) {
 	case PF_INET:
 		peer->protocol_type = ETHP_IP;
