@@ -181,8 +181,6 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	char tmp[64];
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
-	struct nhrp_protocol_address proto_nexthop;
-	int r;
 
 	nhrp_info("Resolution Request from proto src %s",
 		nhrp_protocol_address_format(
@@ -195,6 +193,9 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 		NHRP_FLAG_RESOLUTION_DESTINATION_STABLE |
 		NHRP_FLAG_RESOLUTION_AUTHORATIVE;
 	packet->hdr.hop_count = 0;
+
+	if (!nhrp_packet_route(packet))
+		return FALSE;
 
 	cie = nhrp_cie_alloc();
 	if (cie == NULL)
@@ -211,35 +212,8 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
-	r = kernel_route_protocol(packet->hdr.protocol_type,
-				  &packet->src_protocol_address,
-				  &cie->protocol_address,
-				  &proto_nexthop,
-				  NULL);
-	if (!r) {
-		nhrp_error("No route to protocol address %s",
-			nhrp_protocol_address_format(
-				packet->hdr.protocol_type,
-				&packet->src_protocol_address,
-				sizeof(tmp), tmp));
-		return FALSE;
-	}
-	packet->dst_peer = nhrp_peer_find(packet->hdr.protocol_type,
-					  &proto_nexthop, 0xff);
-	if (packet->dst_peer == NULL)
-		return FALSE;
-	r = kernel_route_nbma(packet->hdr.afnum,
-			      &packet->dst_peer->nbma_address,
-			      &cie->nbma_address,
-			      NULL, NULL);
-	if (!r) {
-		nhrp_error("No route to NBMA address %s",
-			nhrp_nbma_address_format(
-				packet->hdr.afnum,
-				&packet->dst_peer->nbma_address,
-				sizeof(tmp), tmp));
-		return FALSE;
-	}
+	cie->nbma_address = packet->my_nbma_address;
+	cie->protocol_address = packet->my_protocol_address;
 
 	return nhrp_packet_send(packet);
 }
@@ -726,77 +700,86 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	return size;
 }
 
-int nhrp_packet_send(struct nhrp_packet *packet)
+int nhrp_packet_route(struct nhrp_packet *packet)
 {
-	struct nhrp_protocol_address proto_nexthop, *proto_dest;
-	struct nhrp_payload *payload;
-	uint8_t pdu[MAX_PDU_SIZE];
+	struct nhrp_protocol_address proto_nexthop, *dest;
 	char tmp[64];
-	int size, oif_index = -1;
-	int r, do_nbma, do_protocol;
+	int r, ifindex = -1;
 
 	if (packet_types[packet->hdr.type].reply)
-		proto_dest = &packet->src_protocol_address;
+		dest = &packet->src_protocol_address;
 	else
-		proto_dest = &packet->dst_protocol_address;
+		dest = &packet->dst_protocol_address;
 
-	do_nbma = (packet->src_nbma_address.addr_len == 0);
-	do_protocol = (packet->src_protocol_address.addr_len == 0) ||
-		      (packet->dst_peer == NULL) ||
-		      (packet->dst_iface == NULL);
-
-	if (do_protocol) {
-		r = kernel_route_protocol(
-			packet->hdr.protocol_type,
-			proto_dest,
-			packet->src_protocol_address.addr_len == 0 ? &packet->src_protocol_address : NULL,
-			&proto_nexthop,
-			&oif_index);
-		if (!r) {
-			nhrp_error("No route to protocol address %s",
-				nhrp_protocol_address_format(
-					packet->hdr.protocol_type,
-					proto_dest, sizeof(tmp), tmp));
-			return FALSE;
-		}
-		if (packet->dst_iface == NULL)
-			packet->dst_iface = nhrp_interface_get_by_index(oif_index, FALSE);
-		if (packet->dst_iface == NULL) {
-			nhrp_error("Protocol address %s routed to non-NHRP interface",
-				nhrp_protocol_address_format(
-					packet->hdr.protocol_type,
-					proto_dest, sizeof(tmp), tmp));
-			return FALSE;
-		}
-		if (packet->dst_peer == NULL) {
-			packet->dst_peer = nhrp_peer_find(
+	r = kernel_route_protocol(packet->hdr.protocol_type,
+				  dest,
+				  &packet->my_protocol_address,
+				  &proto_nexthop,
+				  &ifindex);
+	if (!r) {
+		nhrp_error("No route to protocol address %s",
+			nhrp_protocol_address_format(
 				packet->hdr.protocol_type,
-				&proto_nexthop, 0xff);
-			if (packet->dst_peer == NULL) {
-				nhrp_error("Protocol next hop %s is not our peer",
-					nhrp_protocol_address_format(
-						packet->hdr.protocol_type,
-						proto_dest,
-						sizeof(tmp), tmp));
-				return FALSE;
-			}
-		}
-	}
-	if (do_nbma) {
-		r = kernel_route_nbma(packet->hdr.afnum,
-				      &packet->dst_peer->nbma_address,
-				      &packet->src_nbma_address,
-				      NULL, NULL);
-		if (!r) {
-			nhrp_error("No route to NBMA address %s",
-				nhrp_nbma_address_format(
-					packet->hdr.afnum,
-					&packet->dst_peer->nbma_address,
-					sizeof(tmp), tmp));
-			return FALSE;
-		}
+				dest,
+				sizeof(tmp), tmp));
+		return FALSE;
 	}
 
+	if (packet->dst_iface == NULL)
+		packet->dst_iface = nhrp_interface_get_by_index(ifindex, FALSE);
+	if (packet->dst_iface == NULL) {
+		nhrp_error("Protocol address %s routed to non-NHRP interface",
+			nhrp_protocol_address_format(
+				packet->hdr.protocol_type,
+				dest, sizeof(tmp), tmp));
+		return FALSE;
+	}
+
+	packet->dst_peer = nhrp_peer_find(packet->hdr.protocol_type,
+					  &proto_nexthop, 0xff);
+	if (packet->dst_peer == NULL) {
+		nhrp_error("No peer entry for protocol address %s",
+			nhrp_protocol_address_format(
+				packet->hdr.protocol_type,
+				&proto_nexthop,
+				sizeof(tmp), tmp));
+		return FALSE;
+	}
+
+	r = kernel_route_nbma(packet->hdr.afnum,
+			      &packet->dst_peer->nbma_address,
+			      &packet->my_nbma_address,
+			      NULL, NULL);
+	if (!r) {
+		nhrp_error("No route to NBMA address %s",
+			nhrp_nbma_address_format(
+				packet->hdr.afnum,
+				&packet->dst_peer->nbma_address,
+				sizeof(tmp), tmp));
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+int nhrp_packet_send(struct nhrp_packet *packet)
+{
+	struct nhrp_payload *payload;
+	uint8_t pdu[MAX_PDU_SIZE];
+	int size;
+
+	if (packet->dst_peer == NULL ||
+	    packet->dst_iface == NULL ||
+	    packet->my_nbma_address.addr_len == 0 ||
+	    packet->my_protocol_address.addr_len == 0) {
+		if (!nhrp_packet_route(packet))
+			return FALSE;
+	}
+
+	if (packet->src_nbma_address.addr_len == 0)
+		packet->src_nbma_address = packet->my_nbma_address;
+	if (packet->src_protocol_address.addr_len == 0)
+		packet->src_protocol_address = packet->my_protocol_address;
 	if (packet->hdr.hop_count == 0)
 		packet->hdr.hop_count = 16;
 
@@ -836,7 +819,6 @@ int nhrp_packet_send_request(struct nhrp_packet *packet,
 	packet->handler = handler;
 	packet->handler_ctx = ctx;
 	TAILQ_INSERT_TAIL(&pending_requests, packet, request_list_entry);
-	nhrp_task_schedule(&packet->timeout, 5000,
-			   nhrp_packet_xmit_timeout);
+	nhrp_task_schedule(&packet->timeout, 5000, nhrp_packet_xmit_timeout);
 	return TRUE;
 }
