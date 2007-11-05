@@ -44,24 +44,6 @@ struct netlink_fd {
 static struct netlink_fd netlink_fd;
 static int packet_fd;
 
-static int protocol_to_pf(uint16_t protocol)
-{
-	switch (protocol) {
-	case ETHP_IP:
-		return AF_INET;
-	}
-	return AF_UNSPEC;
-}
-
-static int afnum_to_pf(uint16_t afnum)
-{
-	switch (afnum) {
-	case AFNUM_INET:
-		return AF_INET;
-	}
-	return AF_UNSPEC;
-}
-
 static void netlink_parse_rtattr(struct rtattr *tb[], int max, struct rtattr *rta, int len)
 {
 	memset(tb, 0, sizeof(struct rtattr *) * (max + 1));
@@ -251,9 +233,8 @@ static void netlink_link_update(struct nlmsghdr *msg)
 		iface->afnum = AFNUM_INET;
 		do_get_ioctl(ifname, &cfg);
 		if (cfg.iph.saddr) {
-			nhrp_nbma_address_set(&iface->nbma_address,
-					      4, (uint8_t *) &cfg.iph.saddr,
-					      0, NULL);
+			nhrp_address_set(&iface->nbma_address, PF_INET,
+					 4, (uint8_t *) &cfg.iph.saddr);
 		}
 		break;
 	}
@@ -275,12 +256,13 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 	peer->type = NHRP_PEER_TYPE_LOCAL;
 	peer->afnum = AFNUM_RESERVED;
 	peer->interface = iface;
+	nhrp_address_set(&peer->dst_protocol_address,
+			 ifa->ifa_family,
+			 RTA_PAYLOAD(rta[IFA_LOCAL]),
+			 RTA_DATA(rta[IFA_LOCAL]));
 	switch (ifa->ifa_family) {
 	case PF_INET:
-		peer->protocol_type = ETHP_IP;
-		nhrp_protocol_address_set(&peer->dst_protocol_address,
-					  RTA_PAYLOAD(rta[IFA_LOCAL]),
-					  RTA_DATA(rta[IFA_LOCAL]));
+		peer->protocol_type = ETHPROTO_IP;
 		if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)
 			peer->prefix_length = ifa->ifa_prefixlen;
 		else
@@ -367,7 +349,7 @@ static void pfpacket_read(void *ctx, int fd, short events)
 		.msg_iovlen = 1,
 	};
 	uint8_t buf[1500];
-	struct nhrp_nbma_address from;
+	struct nhrp_address from;
 
 	iov.iov_base = buf;
 	while (1) {
@@ -393,9 +375,7 @@ static void pfpacket_read(void *ctx, int fd, short events)
 		if (iface == NULL)
 			continue;
 
-		nhrp_nbma_address_set(&from,
-				      lladdr.sll_halen, lladdr.sll_addr,
-				      0, NULL);
+		nhrp_address_set(&from, PF_INET, lladdr.sll_halen, lladdr.sll_addr);
 		nhrp_packet_receive(buf, status, iface, &from);
 	}
 }
@@ -404,7 +384,7 @@ int kernel_init(void)
 {
 	const int groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR;
 
-	packet_fd = socket(PF_PACKET, SOCK_DGRAM, ETHP_NHRP);
+	packet_fd = socket(PF_PACKET, SOCK_DGRAM, ETHPROTO_NHRP);
 	if (packet_fd < 0) {
 		nhrp_error("Unable to create PF_PACKET socket");
 		return FALSE;
@@ -438,11 +418,10 @@ err_close_packetfd:
 	return FALSE;
 }
 
-int kernel_route_protocol(uint16_t protocol_type,
-			  struct nhrp_protocol_address *dest,
-			  struct nhrp_protocol_address *default_source,
-			  struct nhrp_protocol_address *next_hop,
-			  int *oif_index)
+int kernel_route(struct nhrp_address *dest,
+		 struct nhrp_address *default_source,
+		 struct nhrp_address *next_hop,
+		 int *oif_index)
 {
 	struct {
 		struct nlmsghdr 	n;
@@ -456,7 +435,7 @@ int kernel_route_protocol(uint16_t protocol_type,
 	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
 	req.n.nlmsg_flags = NLM_F_REQUEST;
 	req.n.nlmsg_type = RTM_GETROUTE;
-	req.r.rtm_family = protocol_to_pf(protocol_type);
+	req.r.rtm_family = dest->type;
 
 	netlink_add_rtattr_l(&req.n, sizeof(req), RTA_DST,
 			     dest->addr, dest->addr_len);
@@ -471,69 +450,16 @@ int kernel_route_protocol(uint16_t protocol_type,
 		*oif_index = *(int *) RTA_DATA(rta[RTA_OIF]);
 
 	if (default_source != NULL && rta[RTA_PREFSRC] != NULL) {
-		nhrp_protocol_address_set(default_source,
-					  RTA_PAYLOAD(rta[RTA_PREFSRC]),
-					  RTA_DATA(rta[RTA_PREFSRC]));
+		nhrp_address_set(default_source, dest->type,
+				 RTA_PAYLOAD(rta[RTA_PREFSRC]),
+				 RTA_DATA(rta[RTA_PREFSRC]));
 	}
 
 	if (next_hop != NULL) {
 		if (rta[RTA_GATEWAY] != NULL) {
-			nhrp_protocol_address_set(next_hop,
-				RTA_PAYLOAD(rta[RTA_GATEWAY]),
-				RTA_DATA(rta[RTA_GATEWAY]));
-		} else {
-			*next_hop = *dest;
-		}
-	}
-
-	return TRUE;
-}
-
-int kernel_route_nbma(uint16_t afnum,
-		      struct nhrp_nbma_address *dest,
-		      struct nhrp_nbma_address *default_source,
-		      struct nhrp_nbma_address *next_hop,
-		      int *oif_index)
-{
-	struct {
-		struct nlmsghdr 	n;
-		struct rtmsg 		r;
-		char   			buf[1024];
-	} req;
-	struct rtmsg *r = NLMSG_DATA(&req.n);
-	struct rtattr *rta[RTA_MAX+1];
-
-	memset(&req, 0, sizeof(req));
-	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
-	req.n.nlmsg_flags = NLM_F_REQUEST;
-	req.n.nlmsg_type = RTM_GETROUTE;
-	req.r.rtm_family = afnum_to_pf(afnum);
-
-	netlink_add_rtattr_l(&req.n, sizeof(req), RTA_DST,
-			     dest->addr, dest->addr_len);
-	req.r.rtm_dst_len = dest->addr_len * 8;
-
-	if (!netlink_talk(&netlink_fd, &req.n, sizeof(req), &req.n))
-		return FALSE;
-
-	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(r), RTM_PAYLOAD(&req.n));
-
-	if (oif_index != NULL && rta[RTA_OIF] != NULL)
-		*oif_index = *(int *) RTA_DATA(rta[RTA_OIF]);
-
-	if (default_source != NULL && rta[RTA_PREFSRC] != NULL) {
-		nhrp_nbma_address_set(default_source,
-				      RTA_PAYLOAD(rta[RTA_PREFSRC]),
-				      RTA_DATA(rta[RTA_PREFSRC]),
-				      0, NULL);
-	}
-
-	if (next_hop != NULL) {
-		if (rta[RTA_GATEWAY] != NULL) {
-			nhrp_nbma_address_set(next_hop,
-				RTA_PAYLOAD(rta[RTA_GATEWAY]),
-				RTA_DATA(rta[RTA_GATEWAY]),
-				0, NULL);
+			nhrp_address_set(next_hop, dest->type,
+					 RTA_PAYLOAD(rta[RTA_GATEWAY]),
+					 RTA_DATA(rta[RTA_GATEWAY]));
 		} else {
 			*next_hop = *dest;
 		}
@@ -543,7 +469,7 @@ int kernel_route_nbma(uint16_t afnum,
 }
 
 int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
-		struct nhrp_nbma_address *to)
+		struct nhrp_address *to)
 {
 	struct sockaddr_ll lladdr;
 	struct iovec iov = {
@@ -565,7 +491,7 @@ int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 
 	memset(&lladdr, 0, sizeof(lladdr));
 	lladdr.sll_family = AF_PACKET;
-	lladdr.sll_protocol = ETHP_NHRP;
+	lladdr.sll_protocol = ETHPROTO_NHRP;
 	lladdr.sll_ifindex = out->index;
 	lladdr.sll_halen = to->addr_len;
 	memcpy(lladdr.sll_addr, to->addr, to->addr_len);

@@ -34,16 +34,15 @@ struct nhrp_peer {
 	uint16_t protocol_type;
 	uint16_t mtu;
 	uint32_t expire_time;
-	struct nhrp_nbma_address nbma_address;
-	struct nhrp_protocol_address protocol_address;
-	struct nhrp_protocol_address dst_protocol_address;
+	struct nhrp_address nbma_address;
+	struct nhrp_address protocol_address;
+	struct nhrp_address dst_protocol_address;
 	struct nhrp_interface *interface;
 };
 
 int nhrp_peer_init(void);
 void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
-struct nhrp_peer *nhrp_peer_find(uint16_t protocol_type,
-	struct nhrp_protocol_address *dest, int min_prefix);
+struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest, int min_prefix);
 
 #endif

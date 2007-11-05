@@ -16,6 +16,8 @@
 #include "nhrp_address.h"
 #include "nhrp_common.h"
 
+#define NHRP_MAX_EXTENSIONS		10
+
 struct nhrp_interface;
 
 struct nhrp_buffer {
@@ -24,10 +26,10 @@ struct nhrp_buffer {
 };
 
 struct nhrp_cie {
-	TAILQ_ENTRY(nhrp_cie)		cie_list_entry;
-	struct nhrp_cie_header		hdr;
-	struct nhrp_nbma_address	nbma_address;
-	struct nhrp_protocol_address	protocol_address;
+	TAILQ_ENTRY(nhrp_cie)	cie_list_entry;
+	struct nhrp_cie_header	hdr;
+	struct nhrp_address	nbma_address;
+	struct nhrp_address	protocol_address;
 };
 
 TAILQ_HEAD(nhrp_cie_list_head, nhrp_cie);
@@ -47,9 +49,9 @@ struct nhrp_payload {
 
 struct nhrp_packet {
 	struct nhrp_packet_header	hdr;
-	struct nhrp_nbma_address	src_nbma_address;
-	struct nhrp_protocol_address	src_protocol_address;
-	struct nhrp_protocol_address	dst_protocol_address;
+	struct nhrp_address		src_nbma_address;
+	struct nhrp_address		src_protocol_address;
+	struct nhrp_address		dst_protocol_address;
 
 	int				num_extensions;
 	struct nhrp_payload		extension_by_order[NHRP_MAX_EXTENSIONS];
@@ -61,11 +63,11 @@ struct nhrp_packet {
 	void *				handler_ctx;
 
 	struct nhrp_interface *		src_iface;
-	struct nhrp_nbma_address	src_linklayer_address;
+	struct nhrp_address		src_linklayer_address;
 	struct nhrp_interface *		dst_iface;
 	struct nhrp_peer *		dst_peer;
-	struct nhrp_nbma_address	my_nbma_address;
-	struct nhrp_protocol_address	my_protocol_address;
+	struct nhrp_address		my_nbma_address;
+	struct nhrp_address		my_protocol_address;
 };
 
 #define NHRP_EXTENSION_FLAG_NOCREATE	0x00010000
@@ -88,7 +90,7 @@ struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet, uint32_t 
 void nhrp_packet_free(struct nhrp_packet *packet);
 int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,
-			struct nhrp_nbma_address *from);
+			struct nhrp_address *from);
 int nhrp_packet_route(struct nhrp_packet *packet);
 int nhrp_packet_send(struct nhrp_packet *packet);
 int nhrp_packet_send_request(struct nhrp_packet *packet,

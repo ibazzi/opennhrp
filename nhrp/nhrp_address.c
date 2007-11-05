@@ -15,8 +15,45 @@
 #include "afnum.h"
 #include "nhrp_address.h"
 
-int nhrp_protocol_address_parse(const char *string, uint16_t *protocol_type,
-				struct nhrp_protocol_address *addr, uint8_t *prefix_len)
+uint16_t nhrp_protocol_from_pf(uint16_t pf)
+{
+	switch (pf) {
+	case PF_INET:
+		return ETHPROTO_IP;
+	}
+	return 0;
+}
+
+uint16_t nhrp_pf_from_protocol(uint16_t protocol)
+{
+	switch (protocol) {
+	case ETHPROTO_IP:
+		return PF_INET;
+	}
+	return PF_UNSPEC;
+}
+
+uint16_t nhrp_afnum_from_pf(uint16_t pf)
+{
+	switch (pf) {
+	case PF_INET:
+		return AFNUM_INET;
+	}
+	return AFNUM_RESERVED;
+}
+
+uint16_t nhrp_pf_from_afnum(uint16_t afnum)
+{
+	switch (afnum) {
+	case AFNUM_INET:
+		return PF_INET;
+	}
+	return PF_UNSPEC;
+}
+
+int nhrp_address_parse(const char *string,
+		       struct nhrp_address *addr,
+		       uint8_t *prefix_len)
 {
 	uint8_t tmp;
 	int r;
@@ -27,8 +64,9 @@ int nhrp_protocol_address_parse(const char *string, uint16_t *protocol_type,
 		   &addr->addr[2], &addr->addr[3],
 		   prefix_len ? prefix_len : &tmp);
 	if ((r == 4) || (r == 5 && prefix_len != NULL)) {
-		*protocol_type = ETHP_IP;
+		addr->type = PF_INET;
 		addr->addr_len = 4;
+		addr->subaddr_len = 0;
 		if (r == 4 && prefix_len != NULL)
 			*prefix_len = 32;
 		return TRUE;
@@ -37,28 +75,46 @@ int nhrp_protocol_address_parse(const char *string, uint16_t *protocol_type,
 	return FALSE;
 }
 
-int nhrp_protocol_address_set(
-	struct nhrp_protocol_address *addr, uint8_t len, uint8_t *bytes)
+int nhrp_address_set(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes)
 {
 	if (len > NHRP_MAX_ADDRESS_LEN)
 		return FALSE;
 
+	addr->type = type;
 	addr->addr_len = len;
+	addr->subaddr_len = 0;
 	if (len != 0)
 		memcpy(addr->addr, bytes, len);
 	return TRUE;
 }
 
-int nhrp_protocol_address_cmp(struct nhrp_protocol_address *a, struct nhrp_protocol_address *b)
+int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type,
+			  uint8_t len, uint8_t *bytes,
+			  uint8_t sublen, uint8_t *subbytes)
 {
-	if (a->addr_len > b->addr_len)
-		return 1;
-	if (a->addr_len < b->addr_len)
-		return -1;
-	return memcmp(a->addr, b->addr, a->addr_len);
+	if (len + sublen > NHRP_MAX_ADDRESS_LEN)
+		return FALSE;
+
+	addr->type = type;
+	addr->addr_len = len;
+	addr->subaddr_len = 0;
+	if (len != 0)
+		memcpy(addr->addr, bytes, len);
+	if (sublen != 0)
+		memcpy(&addr->addr[len], subbytes, sublen);
+	return TRUE;
 }
 
-void nhrp_protocol_address_mask(struct nhrp_protocol_address *addr, int prefix)
+int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b)
+{
+	if (a->addr_len > b->addr_len || a->subaddr_len > b->subaddr_len)
+		return 1;
+	if (a->addr_len < b->addr_len || a->subaddr_len < b->subaddr_len)
+		return -1;
+	return memcmp(a->addr, b->addr, a->addr_len + a->subaddr_len);
+}
+
+void nhrp_address_mask(struct nhrp_address *addr, int prefix)
 {
 	int i, bits = 8 * addr->addr_len;
 
@@ -66,94 +122,21 @@ void nhrp_protocol_address_mask(struct nhrp_protocol_address *addr, int prefix)
 		addr->addr[i / 8] &= ~(0x80 >> (i % 8));
 }
 
-const char *nhrp_protocol_address_format(
-	uint16_t protocol_type,
-	struct nhrp_protocol_address *addr,
-	size_t buflen, char *buffer)
+const char *nhrp_address_format(struct nhrp_address *addr,
+				size_t buflen, char *buffer)
 {
-	switch (protocol_type) {
-	case ETHP_IP:
+	switch (addr->type) {
+	case PF_INET:
 		snprintf(buffer, buflen, "%d.%d.%d.%d",
 			 addr->addr[0], addr->addr[1],
 			 addr->addr[2], addr->addr[3]);
 		break;
 	default:
-		snprintf(buffer, buflen, "(unsupported proto 0x%04x)",
-			 protocol_type);
+		snprintf(buffer, buflen, "(proto 0x%04x)",
+			 addr->type);
 		break;
 	}
 
 	return buffer;
 }
 
-int nhrp_nbma_address_parse(const char *string, uint16_t *afnum,
-			    struct nhrp_nbma_address *addr)
-{
-	struct in_addr inaddr;
-
-	if (inet_aton(string, &inaddr)) {
-		*afnum = AFNUM_INET;
-		addr->addr_len = 4;
-		memcpy(addr->addr, &inaddr.s_addr, 4);
-		return TRUE;
-	}
-
-	return FALSE;
-}
-
-int nhrp_nbma_address_set(
-	struct nhrp_nbma_address *addr,
-	uint8_t len, uint8_t *bytes,
-	uint8_t sublen, uint8_t *subbytes)
-{
-	if (len > NHRP_MAX_ADDRESS_LEN ||
-	    sublen > NHRP_MAX_SUBADDRESS_LEN)
-		return FALSE;
-
-	addr->addr_len = len;
-	addr->subaddr_len = sublen;
-	if (len != 0)
-		memcpy(addr->addr, bytes, len);
-	if (sublen != 0)
-		memcpy(addr->subaddr, subbytes, sublen);
-	return TRUE;
-}
-
-int nhrp_nbma_address_cmp(
-	struct nhrp_nbma_address *a, struct nhrp_nbma_address *b)
-{
-	int r;
-
-	if (a->addr_len > b->addr_len)
-		return 1;
-	if (a->addr_len < b->addr_len)
-		return -1;
-	if (a->subaddr_len > b->subaddr_len)
-		return 1;
-	if (a->subaddr_len < b->subaddr_len)
-		return -1;
-	r = memcmp(a->addr, b->addr, a->addr_len);
-	if (r != 0)
-		return r;
-	return memcmp(a->subaddr, b->subaddr, a->subaddr_len);
-}
-
-const char *nhrp_nbma_address_format(
-	uint16_t afnum,
-	struct nhrp_nbma_address *addr,
-	size_t buflen, char *buffer)
-{
-	switch (afnum) {
-	case AFNUM_INET:
-		snprintf(buffer, buflen, "%d.%d.%d.%d",
-			 addr->addr[0], addr->addr[1],
-			 addr->addr[2], addr->addr[3]);
-		break;
-	default:
-		snprintf(buffer, buflen, "(unsupported afnum 0x%04x)",
-			 afnum);
-		break;
-	}
-
-	return buffer;
-}

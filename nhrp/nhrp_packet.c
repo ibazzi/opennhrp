@@ -183,10 +183,8 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	struct nhrp_cie *cie;
 
 	nhrp_info("Resolution Request from proto src %s",
-		nhrp_protocol_address_format(
-			packet->hdr.protocol_type,
-			&packet->src_protocol_address,
-			sizeof(tmp), tmp));
+		nhrp_address_format(&packet->src_protocol_address,
+				    sizeof(tmp), tmp));
 
 	packet->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
 	packet->hdr.flags |=
@@ -221,34 +219,32 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64];
-	struct nhrp_protocol_address dst;
+	struct nhrp_address dst;
 	struct iphdr *iph;
 	struct nhrp_payload *pl;
 	struct nhrp_peer *peer;
+	int pf;
 
+	pf = nhrp_pf_from_protocol(packet->hdr.protocol_type);
 	pl = nhrp_packet_payload(packet);
 	switch (packet->hdr.protocol_type) {
-	case ETHP_IP:
+	case ETHPROTO_IP:
 		if (pl == NULL || pl->u.raw->length < sizeof(struct iphdr))
 			return FALSE;
 
 		iph = (struct iphdr *) pl->u.raw->data;
-		nhrp_protocol_address_set(&dst, 4, (uint8_t *) &iph->daddr);
+		nhrp_address_set(&dst, pf, 4, (uint8_t *) &iph->daddr);
 		break;
 	default:
 		return FALSE;
 	}
 
 	nhrp_info("Traffic Indication from proto src %s; about packet to %s",
-		nhrp_protocol_address_format(
-			packet->hdr.protocol_type,
-			&packet->src_protocol_address,
-			sizeof(tmp), tmp),
-		nhrp_protocol_address_format(
-			packet->hdr.protocol_type,
-			&dst, sizeof(tmp2), tmp2));
+		nhrp_address_format(&packet->src_protocol_address,
+				    sizeof(tmp), tmp),
+		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
 
-	peer = nhrp_peer_find(packet->hdr.protocol_type, &dst, 0xff);
+	peer = nhrp_peer_find(&dst, 0xff);
 	if (peer != NULL)
 		return TRUE;
 
@@ -316,12 +312,12 @@ static int unmarshall_binary(uint8_t **pdu, size_t *pduleft, size_t size, void *
 	return TRUE;
 }
 
-static inline int unmarshall_protocol_address(uint8_t **pdu, size_t *pduleft, struct nhrp_protocol_address *pa)
+static inline int unmarshall_protocol_address(uint8_t **pdu, size_t *pduleft, struct nhrp_address *pa)
 {
 	if (*pduleft < pa->addr_len)
 		return FALSE;
 
-	if (!nhrp_protocol_address_set(pa, pa->addr_len, *pdu))
+	if (!nhrp_address_set(pa, pa->type, pa->addr_len, *pdu))
 		return FALSE;
 
 	*pdu += pa->addr_len;
@@ -329,12 +325,12 @@ static inline int unmarshall_protocol_address(uint8_t **pdu, size_t *pduleft, st
 	return TRUE;
 }
 
-static inline int unmarshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct nhrp_nbma_address *na)
+static inline int unmarshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct nhrp_address *na)
 {
 	if (*pduleft < na->addr_len + na->subaddr_len)
 		return FALSE;
 
-	if (!nhrp_nbma_address_set(na,
+	if (!nhrp_address_set_full(na, na->type,
 				   na->addr_len, *pdu,
 				   na->subaddr_len, *pdu + na->addr_len))
 		return FALSE;
@@ -344,13 +340,15 @@ static inline int unmarshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct
 	return TRUE;
 }
 
-static int unmarshall_cie(uint8_t **pdu, size_t *pduleft, struct nhrp_cie *cie)
+static int unmarshall_cie(uint8_t **pdu, size_t *pduleft, struct nhrp_packet *p, struct nhrp_cie *cie)
 {
 	if (!unmarshall_binary(pdu, pduleft, sizeof(struct nhrp_cie_header), &cie->hdr))
 		return FALSE;
 
+	cie->nbma_address.type = nhrp_pf_from_afnum(p->hdr.afnum);
 	cie->nbma_address.addr_len = cie->hdr.nbma_address_len;
 	cie->nbma_address.subaddr_len = cie->hdr.nbma_subaddress_len;
+	cie->protocol_address.type = nhrp_pf_from_protocol(p->hdr.protocol_type);
 	cie->protocol_address.addr_len = cie->hdr.protocol_address_len;
 
 	if (!unmarshall_nbma_address(pdu, pduleft, &cie->nbma_address))
@@ -359,6 +357,7 @@ static int unmarshall_cie(uint8_t **pdu, size_t *pduleft, struct nhrp_cie *cie)
 }
 
 static int unmarshall_payload(uint8_t **pdu, size_t *pduleft,
+			      struct nhrp_packet *packet,
 			      int type, size_t size,
 			      struct nhrp_payload *p)
 {
@@ -382,7 +381,7 @@ static int unmarshall_payload(uint8_t **pdu, size_t *pduleft,
 		while (cieleft) {
 			cie = nhrp_cie_alloc();
 			TAILQ_INSERT_TAIL(&p->u.cie_list_head, cie, cie_list_entry);
-			if (!unmarshall_cie(pdu, &cieleft, cie))
+			if (!unmarshall_cie(pdu, &cieleft, packet, cie))
 				return FALSE;
 		}
 		*pduleft -= size;
@@ -405,9 +404,12 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 	if (packet->hdr.type >= ARRAY_SIZE(packet_types))
 		return FALSE;
 
+	packet->src_nbma_address.type = nhrp_pf_from_afnum(packet->hdr.afnum);
 	packet->src_nbma_address.addr_len = phdr->src_nbma_address_len;
 	packet->src_nbma_address.subaddr_len = phdr->src_nbma_subaddress_len;
+	packet->src_protocol_address.type = nhrp_pf_from_protocol(packet->hdr.protocol_type);
 	packet->src_protocol_address.addr_len = phdr->src_protocol_address_len;
+	packet->dst_protocol_address.type = nhrp_pf_from_protocol(packet->hdr.protocol_type);
 	packet->dst_protocol_address.addr_len = phdr->dst_protocol_address_len;
 
 	if (!unmarshall_nbma_address(&pos, &pduleft, &packet->src_nbma_address))
@@ -428,7 +430,7 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 			return FALSE;
 	}
 
-	if (!unmarshall_payload(&pos, &pduleft,
+	if (!unmarshall_payload(&pos, &pduleft, packet,
 				packet_types[packet->hdr.type].payload_type,
 				size, nhrp_packet_payload(packet)))
 		return FALSE;
@@ -458,7 +460,7 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 		    ntohs(eh.length) == 0)
 			payload_type = NHRP_PAYLOAD_TYPE_NONE;
 
-		if (!unmarshall_payload(&pos, &pduleft,
+		if (!unmarshall_payload(&pos, &pduleft, packet,
 					payload_type, ntohs(eh.length),
 					nhrp_packet_extension(packet, ntohs(eh.type))))
 			return FALSE;
@@ -472,15 +474,12 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 	char tmp[64], tmp2[64], tmp3[64];
 
 	nhrp_info("Packet nbma src %s, proto src %s, proto dst %s needs to be forwarded",
-		nhrp_nbma_address_format(packet->hdr.afnum,
-					 &packet->src_nbma_address,
-					 sizeof(tmp), tmp),
-		nhrp_protocol_address_format(packet->hdr.protocol_type,
-					     &packet->src_protocol_address,
-					     sizeof(tmp2), tmp2),
-		nhrp_protocol_address_format(packet->hdr.protocol_type,
-					     &packet->dst_protocol_address,
-					     sizeof(tmp3), tmp3));
+		nhrp_address_format(&packet->src_nbma_address,
+				    sizeof(tmp), tmp),
+		nhrp_address_format(&packet->src_protocol_address,
+				    sizeof(tmp2), tmp2),
+		nhrp_address_format(&packet->dst_protocol_address,
+				    sizeof(tmp3), tmp3));
 
 	return FALSE;
 }
@@ -493,11 +492,11 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 		TAILQ_FOREACH(req, &pending_requests, request_list_entry) {
 			if (packet->hdr.u.request_id != req->hdr.u.request_id)
 				continue;
-			if (nhrp_nbma_address_cmp(&packet->src_nbma_address,
-						  &req->src_nbma_address))
+			if (nhrp_address_cmp(&packet->src_nbma_address,
+					     &req->src_nbma_address))
 				continue;
-			if (nhrp_protocol_address_cmp(&packet->src_protocol_address,
-						      &req->src_protocol_address))
+			if (nhrp_address_cmp(&packet->src_protocol_address,
+					     &req->src_protocol_address))
 				continue;
 
 			nhrp_task_cancel(&req->timeout);
@@ -515,15 +514,12 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 
 		nhrp_info("Packet type %d from nbma src %s, proto src %s, proto dst %s not supported",
 			  packet->hdr.type,
-			  nhrp_nbma_address_format(packet->hdr.afnum,
-						   &packet->src_nbma_address,
-						   sizeof(tmp), tmp),
-			  nhrp_protocol_address_format(packet->hdr.protocol_type,
-						       &packet->src_protocol_address,
-						       sizeof(tmp2), tmp2),
-			  nhrp_protocol_address_format(packet->hdr.protocol_type,
-						       &packet->dst_protocol_address,
-						       sizeof(tmp3), tmp3));
+			  nhrp_address_format(&packet->src_nbma_address,
+					      sizeof(tmp), tmp),
+			  nhrp_address_format(&packet->src_protocol_address,
+					      sizeof(tmp2), tmp2),
+			  nhrp_address_format(&packet->dst_protocol_address,
+					      sizeof(tmp3), tmp3));
 		return FALSE;
 	}
 
@@ -532,18 +528,17 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 
 int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,
-			struct nhrp_nbma_address *from)
+			struct nhrp_address *from)
 {
 	char tmp[64];
 	struct nhrp_packet *packet;
-	struct nhrp_protocol_address *dest;
+	struct nhrp_address *dest;
 	struct nhrp_peer *peer;
 	int ret = FALSE;
 
 	if (nhrp_calculate_checksum(pdu, pdulen) != 0) {
 		nhrp_error("Bad checksum in packet from %s",
-			   nhrp_nbma_address_format(iface->afnum, from,
-						    sizeof(tmp), tmp));
+			   nhrp_address_format(from, sizeof(tmp), tmp));
 		return FALSE;
 	}
 
@@ -553,8 +548,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 
 	if (!unmarshall_packet(pdu, pdulen, packet)) {
 		nhrp_error("Failed to unmarshall packet from %s",
-			   nhrp_nbma_address_format(iface->afnum, from,
-						    sizeof(tmp), tmp));
+			   nhrp_address_format(from, sizeof(tmp), tmp));
 		goto error;
 	}
 
@@ -563,7 +557,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	else
 		dest = &packet->dst_protocol_address;
 
-	peer = nhrp_peer_find(packet->hdr.protocol_type, dest, 0xff);
+	peer = nhrp_peer_find(dest, 0xff);
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
 	packet->dst_peer = peer;
@@ -601,17 +595,16 @@ static int marshall_binary(uint8_t **pdu, size_t *pduleft, size_t size, void *ra
 	return TRUE;
 }
 
-static inline int marshall_protocol_address(uint8_t **pdu, size_t *pduleft, struct nhrp_protocol_address *pa)
+static inline int marshall_protocol_address(uint8_t **pdu, size_t *pduleft, struct nhrp_address *pa)
 {
+	if (pa->subaddr_len != 0)
+		return FALSE;
 	return marshall_binary(pdu, pduleft, pa->addr_len, pa->addr);
 }
 
-static inline int marshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct nhrp_nbma_address *na)
+static inline int marshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct nhrp_address *na)
 {
-	if (!marshall_binary(pdu, pduleft, na->addr_len, na->addr))
-		return FALSE;
-
-	return marshall_binary(pdu, pduleft, na->subaddr_len, na->subaddr);
+	return marshall_binary(pdu, pduleft, na->addr_len + na->subaddr_len, na->addr);
 }
 
 static int marshall_cie(uint8_t **pdu, size_t *pduleft, struct nhrp_cie *cie)
@@ -702,7 +695,7 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 
 int nhrp_packet_route(struct nhrp_packet *packet)
 {
-	struct nhrp_protocol_address proto_nexthop, *dest;
+	struct nhrp_address proto_nexthop, *dest;
 	char tmp[64];
 	int r, ifindex = -1;
 
@@ -711,17 +704,11 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	else
 		dest = &packet->dst_protocol_address;
 
-	r = kernel_route_protocol(packet->hdr.protocol_type,
-				  dest,
-				  &packet->my_protocol_address,
-				  &proto_nexthop,
-				  &ifindex);
+	r = kernel_route(dest, &packet->my_protocol_address,
+			 &proto_nexthop, &ifindex);
 	if (!r) {
 		nhrp_error("No route to protocol address %s",
-			nhrp_protocol_address_format(
-				packet->hdr.protocol_type,
-				dest,
-				sizeof(tmp), tmp));
+			nhrp_address_format( dest, sizeof(tmp), tmp));
 		return FALSE;
 	}
 
@@ -729,34 +716,28 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 		packet->dst_iface = nhrp_interface_get_by_index(ifindex, FALSE);
 	if (packet->dst_iface == NULL) {
 		nhrp_error("Protocol address %s routed to non-NHRP interface",
-			nhrp_protocol_address_format(
-				packet->hdr.protocol_type,
-				dest, sizeof(tmp), tmp));
+			nhrp_address_format(dest, sizeof(tmp), tmp));
 		return FALSE;
 	}
+	packet->my_nbma_address = packet->dst_iface->nbma_address;
 
-	packet->dst_peer = nhrp_peer_find(packet->hdr.protocol_type,
-					  &proto_nexthop, 0xff);
+	packet->dst_peer = nhrp_peer_find(&proto_nexthop, 0xff);
 	if (packet->dst_peer == NULL) {
 		nhrp_error("No peer entry for protocol address %s",
-			nhrp_protocol_address_format(
-				packet->hdr.protocol_type,
-				&proto_nexthop,
-				sizeof(tmp), tmp));
+			nhrp_address_format(&proto_nexthop, sizeof(tmp), tmp));
 		return FALSE;
 	}
 
-	r = kernel_route_nbma(packet->hdr.afnum,
-			      &packet->dst_peer->nbma_address,
-			      &packet->my_nbma_address,
-			      NULL, NULL);
-	if (!r) {
-		nhrp_error("No route to NBMA address %s",
-			nhrp_nbma_address_format(
-				packet->hdr.afnum,
-				&packet->dst_peer->nbma_address,
-				sizeof(tmp), tmp));
-		return FALSE;
+	if (packet->my_nbma_address.type == PF_UNSPEC) {
+		r = kernel_route(&packet->dst_peer->nbma_address,
+				 &packet->my_nbma_address, NULL, NULL);
+		if (!r) {
+			nhrp_error("No route to NBMA address %s",
+				nhrp_address_format(
+					&packet->dst_peer->nbma_address,
+					sizeof(tmp), tmp));
+			return FALSE;
+		}
 	}
 
 	return TRUE;

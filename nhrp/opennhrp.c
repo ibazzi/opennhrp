@@ -118,10 +118,11 @@ static int load_config(const char *config_file)
 			peer = calloc(1, sizeof(struct nhrp_peer));
 			peer->type = NHRP_PEER_TYPE_STATIC;
 			peer->interface = iface;
-			nhrp_protocol_address_parse(addr, &peer->protocol_type,
-						    &peer->protocol_address,
-						    &peer->prefix_length);
-			nhrp_nbma_address_parse(nbma, &peer->afnum, &peer->nbma_address);
+			nhrp_address_parse(addr, &peer->protocol_address,
+					   &peer->prefix_length);
+			peer->protocol_type = nhrp_protocol_from_pf(peer->protocol_address.type);
+			nhrp_address_parse(nbma, &peer->nbma_address, NULL);
+			peer->afnum = nhrp_afnum_from_pf(peer->nbma_address.type);
 			peer->dst_protocol_address = peer->protocol_address;
 			nhrp_peer_insert(peer);
 		} else if (strcmp(word, "cisco-authentication") == 0) {

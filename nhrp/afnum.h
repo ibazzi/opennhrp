@@ -21,7 +21,7 @@
 
 #define ETH_P_NHRP		0x2001
 
-#define ETHP_IP			constant_htons(ETH_P_IP)
-#define ETHP_NHRP		constant_htons(ETH_P_NHRP)
+#define ETHPROTO_IP		constant_htons(ETH_P_IP)
+#define ETHPROTO_NHRP		constant_htons(ETH_P_NHRP)
 
 #endif

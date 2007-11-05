@@ -13,46 +13,27 @@
 
 #include <stdint.h>
 
-#define NHRP_MAX_ADDRESS_LEN		8
-#define NHRP_MAX_SUBADDRESS_LEN		4
-#define NHRP_MAX_EXTENSIONS		10
+#define NHRP_MAX_ADDRESS_LEN            6
 
-struct nhrp_nbma_address {
+struct nhrp_address {
+	uint16_t type;
 	uint8_t addr_len;
 	uint8_t subaddr_len;
 	uint8_t addr[NHRP_MAX_ADDRESS_LEN];
-	uint8_t subaddr[NHRP_MAX_SUBADDRESS_LEN];
 };
 
-struct nhrp_protocol_address {
-	uint8_t addr_len;
-	uint8_t addr[NHRP_MAX_ADDRESS_LEN];
-};
+uint16_t nhrp_protocol_from_pf(uint16_t pf);
+uint16_t nhrp_pf_from_protocol(uint16_t protocol);
+uint16_t nhrp_afnum_from_pf(uint16_t pf);
+uint16_t nhrp_pf_from_afnum(uint16_t afnum);
 
-int nhrp_protocol_address_parse(
-	const char *string, uint16_t *protocol_type,
-	struct nhrp_protocol_address *addr, uint8_t *prefix_len);
-int nhrp_protocol_address_set(
-	struct nhrp_protocol_address *addr, uint8_t len, uint8_t *bytes);
-int nhrp_protocol_address_cmp(
-	struct nhrp_protocol_address *a, struct nhrp_protocol_address *b);
-void nhrp_protocol_address_mask(struct nhrp_protocol_address *addr, int prefix);
-const char *nhrp_protocol_address_format(
-	uint16_t protocol_type, struct nhrp_protocol_address *addr,
-	size_t buflen, char *buffer);
-
-int nhrp_nbma_address_parse(
-	const char *string,
-	uint16_t *afnum,
-	struct nhrp_nbma_address *addr);
-int nhrp_nbma_address_set(
-	struct nhrp_nbma_address *addr,
-	uint8_t len, uint8_t *bytes,
-	uint8_t sublen, uint8_t *subbytes);
-int nhrp_nbma_address_cmp(
-	struct nhrp_nbma_address *a, struct nhrp_nbma_address *ab);
-const char *nhrp_nbma_address_format(
-	uint16_t afnum, struct nhrp_nbma_address *addr,
-	size_t buflen, char *buffer);
+int nhrp_address_parse(const char *string, struct nhrp_address *addr, uint8_t *prefix_len);
+void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type);
+int nhrp_address_set(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes);
+int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes, uint8_t sublen, uint8_t *subbytes);
+int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b);
+void nhrp_address_mask(struct nhrp_address *addr, int prefix);
+const char *nhrp_address_format(struct nhrp_address *addr,
+				size_t buflen, char *buffer);
 
 #endif

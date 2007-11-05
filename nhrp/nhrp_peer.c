@@ -54,25 +54,12 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 		return TRUE;
 	}
 
-	envp[i++] = env(
-		"NHRP_PEER_PROTOCOL_ADDRESS",
-		nhrp_protocol_address_format(
-			peer->protocol_type,
-			&peer->protocol_address,
-			sizeof(tmp), tmp));
-	envp[i++] = env("NHRP_PEER_NBMA_ADDRESS",
-		nhrp_nbma_address_format(
-			peer->afnum,
-			&peer->nbma_address,
-			sizeof(tmp), tmp));
+	envp[i++] = env("NHRP_PEER_PROTOCOL_ADDRESS", nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp));
+	envp[i++] = env("NHRP_PEER_NBMA_ADDRESS", nhrp_address_format(&peer->nbma_address, sizeof(tmp), tmp));
 	if (peer->interface != NULL)
 		envp[i++] = env("NHRP_PEER_INTERFACE", peer->interface->name);
 
-	envp[i++] = env("NHRP_ROUTE_DEST",
-		nhrp_protocol_address_format(
-			peer->protocol_type,
-			&peer->dst_protocol_address,
-			sizeof(tmp), tmp));
+	envp[i++] = env("NHRP_ROUTE_DEST", nhrp_address_format(&peer->dst_protocol_address, sizeof(tmp), tmp));
 	sprintf(tmp, "%d", peer->prefix_length);
 	envp[i++] = env("NHRP_ROUTE_PREFIX", tmp);
 
@@ -90,17 +77,15 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	if (reply == NULL ||
 	    reply->hdr.type != NHRP_PACKET_REGISTRATION_REPLY) {
 		nhrp_info("Failed to register to %s",
-			  nhrp_protocol_address_format(peer->protocol_type,
-				  		       &peer->dst_protocol_address,
-						       sizeof(dst), dst));
+			  nhrp_address_format(&peer->dst_protocol_address,
+					      sizeof(dst), dst));
 		nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register_task);
 		return;
 	}
 
 	nhrp_info("Received Registration Reply from %s",
-		  nhrp_protocol_address_format(peer->protocol_type,
-					       &peer->dst_protocol_address,
-					       sizeof(dst), dst));
+		  nhrp_address_format(&peer->dst_protocol_address,
+				      sizeof(dst), dst));
 
 	/* Re-register after holding time expires */
 	nhrp_task_schedule(&peer->task, (NHRP_HOLDING_TIME - 60) * 1000,
@@ -150,9 +135,8 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 	nhrp_payload_add_cie(payload, cie);
 
 	nhrp_info("Sending Registration Request to %s",
-		  nhrp_protocol_address_format(peer->protocol_type,
-					       &peer->dst_protocol_address,
-					       sizeof(dst), dst));
+		  nhrp_address_format(&peer->dst_protocol_address,
+				      sizeof(dst), dst));
 
 	sent = nhrp_packet_send_request(packet,
 		nhrp_peer_handle_registration_reply, peer);
@@ -162,13 +146,13 @@ error:
 	if (!sent) {
 		nhrp_packet_free(packet);
 		/* Try again later */
-		nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register);
+		nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register_task);
 	}
 }
 
 static void nhrp_peer_route_up(struct nhrp_peer *peer)
 {
-	if (nhrp_protocol_address_cmp(&peer->protocol_address, &peer->dst_protocol_address) != 0)
+	if (nhrp_address_cmp(&peer->protocol_address, &peer->dst_protocol_address) != 0)
 		nhrp_peer_run_script(peer, "route-up", NULL);
 }
 
@@ -182,9 +166,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	if (reply == NULL ||
 	    reply->hdr.type != NHRP_PACKET_RESOLUTION_REPLY) {
 		nhrp_info("Failed to resolve %s",
-			  nhrp_protocol_address_format(peer->protocol_type,
-				  		       &peer->dst_protocol_address,
-				  		       sizeof(dst), dst));
+			  nhrp_address_format(&peer->dst_protocol_address,
+				  	      sizeof(dst), dst));
 		/* FIXME: Negative cache for some time and prune later */
 		nhrp_task_schedule(&peer->task, 3 * 60 * 1000, nhrp_peer_prune);
 		return;
@@ -202,19 +185,16 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	peer->protocol_address = cie->protocol_address;
 	/* peer->expire_time; */
 
-	nhrp_protocol_address_mask(&peer->dst_protocol_address, peer->prefix_length);
+	nhrp_address_mask(&peer->dst_protocol_address, peer->prefix_length);
 
 	nhrp_info("Received Resolution Reply %s/%d is at proto %s nbma %s",
-		  nhrp_protocol_address_format(peer->protocol_type,
-					       &peer->dst_protocol_address,
-					       sizeof(dst), dst),
+		  nhrp_address_format(&peer->dst_protocol_address,
+				      sizeof(dst), dst),
 		  peer->prefix_length,
-		  nhrp_protocol_address_format(peer->protocol_type,
-					       &peer->protocol_address,
-					       sizeof(tmp), tmp),
-		  nhrp_nbma_address_format(peer->afnum,
-			  		   &peer->nbma_address,
-			  		   sizeof(nbma), nbma));
+		  nhrp_address_format(&peer->protocol_address,
+				      sizeof(tmp), tmp),
+		  nhrp_address_format(&peer->nbma_address,
+			  	      sizeof(nbma), nbma));
 
 	nhrp_peer_run_script(peer, "peer-up", nhrp_peer_route_up);
 	nhrp_task_schedule(&peer->task,
@@ -261,9 +241,8 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 	nhrp_payload_add_cie(payload, cie);
 
 	nhrp_info("Sending Resolution Request to %s",
-		  nhrp_protocol_address_format(peer->protocol_type,
-					       &peer->dst_protocol_address,
-					       sizeof(dst), dst));
+		  nhrp_address_format(&peer->dst_protocol_address,
+				      sizeof(dst), dst));
 
 	sent = nhrp_packet_send_request(packet,
 		nhrp_peer_handle_resolution_reply, peer);
@@ -291,11 +270,9 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 	}
 
 	nhrp_info("Peer %s/%d learned at NBMA address %s",
-		nhrp_protocol_address_format(peer->protocol_type,
-			&peer->dst_protocol_address, sizeof(dst), dst),
+		nhrp_address_format(&peer->dst_protocol_address, sizeof(dst), dst),
 		peer->prefix_length,
-		nhrp_nbma_address_format(peer->afnum, &peer->nbma_address,
-			sizeof(nbma), nbma));
+		nhrp_address_format(&peer->nbma_address, sizeof(nbma), nbma));
 }
 
 void nhrp_peer_remove(struct nhrp_peer *peer)
@@ -303,8 +280,7 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 	CIRCLEQ_REMOVE(&peer_cache, peer, peer_list);
 }
 
-struct nhrp_peer *nhrp_peer_find(uint16_t protocol_type,
-				 struct nhrp_protocol_address *dest,
+struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 				 int min_prefix)
 {
 	struct nhrp_peer *p;
@@ -314,7 +290,7 @@ struct nhrp_peer *nhrp_peer_find(uint16_t protocol_type,
 		min_prefix = dest->addr_len * 8;
 
 	CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
-		if (protocol_type != p->protocol_type)
+		if (dest->type != p->dst_protocol_address.type)
 			continue;
 
 		if (min_prefix < p->prefix_length)
