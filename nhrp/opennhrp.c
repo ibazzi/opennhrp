@@ -117,6 +117,7 @@ static int load_config(const char *config_file)
 
 			peer = calloc(1, sizeof(struct nhrp_peer));
 			peer->type = NHRP_PEER_TYPE_STATIC;
+			peer->interface = iface;
 			nhrp_protocol_address_parse(addr, &peer->protocol_type,
 						    &peer->protocol_address,
 						    &peer->prefix_length);
@@ -167,10 +168,12 @@ int main(int argc, char **argv)
 {
 	if (!log_init())
 		return 1;
-	if (!load_config("../nhrp.conf"))
+	if (!nhrp_peer_init())
 		return 2;
-	if (!kernel_init())
+	if (!load_config("../nhrp.conf"))
 		return 3;
+	if (!kernel_init())
+		return 4;
 
 	nhrp_task_run();
 

@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
@@ -19,7 +20,8 @@
 
 static struct nhrp_peer_list peer_cache = CIRCLEQ_HEAD_INITIALIZER(peer_cache);
 
-static void nhrp_peer_register(struct nhrp_task *task);
+static void nhrp_peer_register_task(struct nhrp_task *task);
+static void nhrp_peer_register(struct nhrp_peer *peer);
 
 static void nhrp_peer_prune(struct nhrp_task *task)
 {
@@ -35,7 +37,7 @@ static char *env(const char *key, const char *value)
 	return buf;
 }
 
-static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action)
+static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)(struct nhrp_peer *))
 {
 	char *argv[] = { "./peer-updown", action, NULL };
 	char *envp[32];
@@ -46,8 +48,11 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action)
 	pid = fork();
 	if (pid == -1)
 		return FALSE;
-	if (pid > 0)
+	if (pid > 0) {
+		peer->script_pid = pid;
+		peer->script_callback = cb;
 		return TRUE;
+	}
 
 	envp[i++] = env(
 		"NHRP_PEER_PROTOCOL_ADDRESS",
@@ -88,7 +93,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 			  nhrp_protocol_address_format(peer->protocol_type,
 				  		       &peer->dst_protocol_address,
 						       sizeof(dst), dst));
-		nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register);
+		nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register_task);
 		return;
 	}
 
@@ -97,16 +102,18 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 					       &peer->dst_protocol_address,
 					       sizeof(dst), dst));
 
-	nhrp_peer_run_script(peer, "peer-up");
-
 	/* Re-register after holding time expires */
 	nhrp_task_schedule(&peer->task, (NHRP_HOLDING_TIME - 60) * 1000,
-			   nhrp_peer_register);
+			   nhrp_peer_register_task);
 }
 
-static void nhrp_peer_register(struct nhrp_task *task)
+static void nhrp_peer_register_task(struct nhrp_task *task)
 {
-	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
+	nhrp_peer_register(container_of(task, struct nhrp_peer, task));
+}
+
+static void nhrp_peer_register(struct nhrp_peer *peer)
+{
 	char dst[64];
 	struct nhrp_packet *packet;
 	struct nhrp_cie *cie;
@@ -159,6 +166,12 @@ error:
 	}
 }
 
+static void nhrp_peer_route_up(struct nhrp_peer *peer)
+{
+	if (nhrp_protocol_address_cmp(&peer->protocol_address, &peer->dst_protocol_address) != 0)
+		nhrp_peer_run_script(peer, "route-up", NULL);
+}
+
 static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *reply)
 {
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx;
@@ -203,10 +216,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 			  		   &peer->nbma_address,
 			  		   sizeof(nbma), nbma));
 
-	nhrp_peer_run_script(peer, "peer-up");
-	if (nhrp_protocol_address_cmp(&peer->protocol_address, &peer->dst_protocol_address) != 0)
-		nhrp_peer_run_script(peer, "route-up");
-
+	nhrp_peer_run_script(peer, "peer-up", nhrp_peer_route_up);
 	nhrp_task_schedule(&peer->task,
 			   (ntohs(cie->hdr.holding_time) - 60) * 1000,
 			   nhrp_peer_prune);
@@ -273,8 +283,7 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
-		/* Schedule registration */
-		nhrp_task_schedule(&peer->task, 1000, nhrp_peer_register);
+		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_register);
 		break;
 	case NHRP_PEER_TYPE_INCOMPLITE:
 		nhrp_peer_resolve(peer);
@@ -324,4 +333,41 @@ struct nhrp_peer *nhrp_peer_find(uint16_t protocol_type,
 	}
 
 	return NULL;
+}
+
+static int signal_pipe[2];
+
+static void signal_handler(int sig)
+{
+	send(signal_pipe[1], &sig, sizeof(sig), MSG_DONTWAIT);
+}
+
+static void reap_children(void *ctx, int fd, short events)
+{
+	struct nhrp_peer *p;
+	pid_t pid;
+	int status, sig;
+
+	read(fd, &sig, sizeof(sig));
+	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+		CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
+			if (p->script_pid != pid)
+				continue;
+
+			p->script_pid = -1;
+			if (p->script_callback) {
+				void (*cb)(struct nhrp_peer *);
+				cb = p->script_callback;
+				p->script_callback = NULL;
+				cb(p);
+			}
+		}
+	}
+}
+
+int nhrp_peer_init(void)
+{
+	socketpair(AF_UNIX, SOCK_STREAM, 0, signal_pipe);
+	signal(SIGCHLD, signal_handler);
+	return nhrp_task_poll_fd(signal_pipe[0], POLLIN, reap_children, NULL);
 }

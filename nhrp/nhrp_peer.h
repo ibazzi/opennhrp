@@ -26,6 +26,8 @@ CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
 struct nhrp_peer {
 	CIRCLEQ_ENTRY(nhrp_peer) peer_list;
 	struct nhrp_task task;
+	pid_t script_pid;
+	void (*script_callback)(struct nhrp_peer *peer);
 	uint8_t type;
 	uint8_t prefix_length;
 	uint16_t afnum;
@@ -38,6 +40,7 @@ struct nhrp_peer {
 	struct nhrp_interface *interface;
 };
 
+int nhrp_peer_init(void);
 void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
 struct nhrp_peer *nhrp_peer_find(uint16_t protocol_type,
