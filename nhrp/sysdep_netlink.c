@@ -301,12 +301,12 @@ static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
 	[RTM_DELADDR] = netlink_addr_update,
 };
 
-static void netlink_read(void *ctx, short events)
+static void netlink_read(void *ctx, int fd, short events)
 {
-	struct netlink_fd *fd = (struct netlink_fd *) ctx;
+	struct netlink_fd *nfd = (struct netlink_fd *) ctx;
 
 	if (events & POLLIN)
-		netlink_receive(fd, NULL);
+		netlink_receive(nfd, NULL);
 }
 
 static void netlink_close(struct netlink_fd *fd)
@@ -355,9 +355,8 @@ error:
 	return FALSE;
 }
 
-static void pfpacket_read(void *ctx, short events)
+static void pfpacket_read(void *ctx, int fd, short events)
 {
-	int fd = (uintptr_t) ctx;
 	struct sockaddr_ll lladdr;
 	struct nhrp_interface *iface;
 	struct iovec iov;
@@ -410,7 +409,7 @@ int kernel_init(void)
 		nhrp_error("Unable to create PF_PACKET socket");
 		return FALSE;
 	}
-	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfpacket_read, (void*)(uintptr_t) packet_fd))
+	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfpacket_read, NULL))
 		goto err_close_packetfd;
 
 	if (!netlink_open(&netlink_fd, NETLINK_ROUTE, groups))
@@ -423,10 +422,10 @@ int kernel_init(void)
 		goto err_close_netlink;
 
 	netlink_enumerate(&netlink_fd, AF_UNSPEC, RTM_GETLINK);
-	netlink_read(&netlink_fd, POLLIN);
+	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
 
 	netlink_enumerate(&netlink_fd, AF_UNSPEC, RTM_GETADDR);
-	netlink_read(&netlink_fd, POLLIN);
+	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
 
 	return TRUE;
 
