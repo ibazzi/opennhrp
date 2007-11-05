@@ -783,6 +783,24 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	if (packet->hdr.hop_count == 0)
 		packet->hdr.hop_count = 16;
 
+	/* RFC2332 5.3.1 */
+	payload = nhrp_packet_extension(
+		packet, NHRP_EXTENSION_RESPONDER_ADDRESS |
+		NHRP_EXTENSION_FLAG_COMPULSORY | NHRP_EXTENSION_FLAG_NOCREATE);
+	if (packet_types[packet->hdr.type].reply && payload != NULL) {
+		struct nhrp_cie *cie;
+
+		cie = nhrp_cie_alloc();
+		if (cie == NULL)
+			return FALSE;
+
+		cie->hdr.holding_time = htons(NHRP_HOLDING_TIME);
+		cie->nbma_address = packet->my_nbma_address;
+		cie->protocol_address = packet->my_protocol_address;
+		nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+		nhrp_payload_add_cie(payload, cie);
+	}
+
 	/* RFC2332 5.3.4 - Authentication is always done pairwise on an NHRP
 	 * hop-by-hop basis; i.e. regenerated at each hop. */
 	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_AUTHENTICATION | NHRP_EXTENSION_FLAG_COMPULSORY);
