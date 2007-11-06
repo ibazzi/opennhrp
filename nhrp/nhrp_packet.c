@@ -578,8 +578,8 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	/* RFC2332 5.3.4 - Authentication is always done pairwise on an NHRP
 	 * hop-by-hop basis; i.e. regenerated at each hop. */
 	if (packet->src_iface->auth_token &&
-	    packet->hdr.type != NHRP_PACKET_ERROR_INDICATION &&
-	    packet->hdr.u.error.code != NHRP_ERROR_AUTHENTICATION_FAILURE) {
+	    (packet->hdr.type != NHRP_PACKET_ERROR_INDICATION ||
+	     packet->hdr.u.error.code != NHRP_ERROR_AUTHENTICATION_FAILURE)) {
 		struct nhrp_payload *p;
 		p = nhrp_packet_extension(packet, NHRP_EXTENSION_AUTHENTICATION | NHRP_EXTENSION_FLAG_NOCREATE);
 		if (p == NULL ||
