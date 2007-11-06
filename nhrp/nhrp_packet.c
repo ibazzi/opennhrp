@@ -422,6 +422,8 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 	if (!unmarshall_protocol_address(&pos, &pduleft, &packet->dst_protocol_address))
 		return FALSE;
 
+	/* FIXME: After this point we should generate error indications */
+
 	extension_offset = ntohs(packet->hdr.extension_offset);
 	if (extension_offset == 0) {
 		/* No extensions; rest of data is payload */
@@ -509,6 +511,8 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 			return TRUE;
 		}
 
+		/* Reply to unsent request? */
+		nhrp_packet_send_error(packet, NHRP_ERROR_INVALID_RESOLUTION_REPLY);
 		return FALSE;
 	}
 
@@ -570,10 +574,13 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	if (packet->src_iface->auth_token) {
 		struct nhrp_payload *p;
 		p = nhrp_packet_extension(packet, NHRP_EXTENSION_AUTHENTICATION | NHRP_EXTENSION_FLAG_NOCREATE);
-		if (p == NULL)
-			return FALSE;
-		if (nhrp_buffer_cmp(packet->src_iface->auth_token, p->u.raw) != 0)
-			return FALSE;
+		if (p == NULL ||
+		    nhrp_buffer_cmp(packet->src_iface->auth_token, p->u.raw) != 0) {
+			nhrp_error("Dropping packet from %s with bad authentication",
+				nhrp_address_format(from, sizeof(tmp), tmp));
+			nhrp_packet_send_error(packet, NHRP_ERROR_AUTHENTICATION_FAILURE);
+			goto error;
+		}
 	}
 
 	if (peer == NULL || peer->type != NHRP_PEER_TYPE_LOCAL)
@@ -645,6 +652,17 @@ static int marshall_payload(uint8_t **pdu, size_t *pduleft, struct nhrp_payload 
 	}
 }
 
+static int marshall_packet_header(uint8_t **pdu, size_t *pduleft, struct nhrp_packet *packet)
+{
+	if (!marshall_binary(pdu, pduleft, sizeof(packet->hdr), &packet->hdr))
+		return FALSE;
+	if (!marshall_nbma_address(pdu, pduleft, &packet->src_nbma_address))
+		return FALSE;
+	if (!marshall_protocol_address(pdu, pduleft, &packet->src_protocol_address))
+		return FALSE;
+	return marshall_protocol_address(pdu, pduleft, &packet->dst_protocol_address);
+}
+
 static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *packet)
 {
 	uint8_t *pos = pdu;
@@ -652,13 +670,7 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	struct nhrp_extension_header neh;
 	int i, size;
 
-	if (!marshall_binary(&pos, &pduleft, sizeof(packet->hdr), &packet->hdr))
-		return -1;
-	if (!marshall_nbma_address(&pos, &pduleft, &packet->src_nbma_address))
-		return -1;
-	if (!marshall_protocol_address(&pos, &pduleft, &packet->src_protocol_address))
-		return -1;
-	if (!marshall_protocol_address(&pos, &pduleft, &packet->dst_protocol_address))
+	if (!marshall_packet_header(&pos, &pduleft, packet))
 		return -1;
 	if (!marshall_payload(&pos, &pduleft, nhrp_packet_payload(packet)))
 		return -1;
@@ -830,3 +842,41 @@ int nhrp_packet_send_request(struct nhrp_packet *packet,
 	nhrp_task_schedule(&packet->timeout, 5000, nhrp_packet_xmit_timeout);
 	return TRUE;
 }
+
+int nhrp_packet_send_error(struct nhrp_packet *error_packet, uint16_t indication_code)
+{
+	struct nhrp_packet *p;
+	struct nhrp_payload *pl;
+	uint8_t pkt[1024], *pdu = pkt;
+	size_t pduleft = sizeof(pkt);
+	int r;
+
+	/* RFC2332 5.2.7 Never generate errors about errors */
+	if (error_packet->hdr.type == NHRP_PACKET_ERROR_INDICATION)
+		return TRUE;
+
+	marshall_packet_header(&pdu, &pduleft, error_packet);
+
+	p = nhrp_packet_alloc();
+	p->hdr = error_packet->hdr;
+	p->hdr.hop_count = 0;
+	p->hdr.type = NHRP_PACKET_ERROR_INDICATION;
+	p->hdr.u.error.code = indication_code;
+	p->hdr.u.error.offset = 0;
+
+	if (packet_types[error_packet->hdr.type].reply)
+		p->dst_protocol_address = error_packet->dst_protocol_address;
+	else
+		p->dst_protocol_address = error_packet->src_protocol_address;
+
+	pl = nhrp_packet_payload(p);
+	nhrp_payload_set_type(pl, NHRP_PAYLOAD_TYPE_RAW);
+	pl->u.raw = nhrp_buffer_alloc(pdu - pkt);
+	memcpy(pl->u.raw->data, pkt, pdu - pkt);
+
+	r = nhrp_packet_send(p);
+	nhrp_packet_free(p);
+
+	return r;
+}
+

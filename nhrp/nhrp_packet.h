@@ -96,5 +96,7 @@ int nhrp_packet_send(struct nhrp_packet *packet);
 int nhrp_packet_send_request(struct nhrp_packet *packet,
 			     void (*handler)(void *ctx, struct nhrp_packet *packet),
 			     void *ctx);
+int nhrp_packet_send_error(struct nhrp_packet *error_packet,
+			   uint16_t indication_code);
 
 #endif
