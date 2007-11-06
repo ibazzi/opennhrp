@@ -25,6 +25,7 @@
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
 
 struct nhrp_peer {
+	int ref_count;
 	CIRCLEQ_ENTRY(nhrp_peer) peer_list;
 	struct nhrp_task task;
 	pid_t script_pid;
@@ -42,11 +43,18 @@ struct nhrp_peer {
 };
 
 int nhrp_peer_init(void);
+
+struct nhrp_peer *nhrp_peer_alloc(void);
+struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer);
+int nhrp_peer_free(struct nhrp_peer *peer);
+
 void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
 
 #define NHRP_PEER_FIND_COMPLETE		0x01
+#define NHRP_PEER_FIND_SUBNET_MATCH	0x02
 
-struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest, int min_prefix, int flags);
+struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
+				 int prefix_length, int flags);
 
 #endif

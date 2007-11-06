@@ -246,17 +246,18 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 				    sizeof(tmp), tmp),
 		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
 
-	peer = nhrp_peer_find(&dst, 0, 0);
+	peer = nhrp_peer_find(&dst, 0xff, 0);
 	if (peer != NULL)
 		return TRUE;
 
-	peer = calloc(1, sizeof(struct nhrp_peer));
+	peer = nhrp_peer_alloc();
 	peer->type = NHRP_PEER_TYPE_INCOMPLETE;
 	peer->afnum = packet->hdr.afnum;
 	peer->protocol_type = packet->hdr.protocol_type;
 	peer->dst_protocol_address = dst;
 	peer->prefix_length = packet->dst_protocol_address.addr_len * 8;
 	nhrp_peer_insert(peer);
+	nhrp_peer_free(peer);
 
 	return TRUE;
 }
@@ -559,7 +560,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	else
 		dest = &packet->dst_protocol_address;
 
-	peer = nhrp_peer_find(dest, 0, NHRP_PEER_FIND_COMPLETE);
+	peer = nhrp_peer_find(dest, 0xff, NHRP_PEER_FIND_COMPLETE);
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
 	packet->dst_peer = peer;
@@ -723,7 +724,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	}
 	packet->my_nbma_address = packet->dst_iface->nbma_address;
 
-	packet->dst_peer = nhrp_peer_find(&proto_nexthop, 0,
+	packet->dst_peer = nhrp_peer_find(&proto_nexthop, 0xff,
 					  NHRP_PEER_FIND_COMPLETE);
 	if (packet->dst_peer == NULL) {
 		nhrp_error("No peer entry for protocol address %s",

@@ -252,7 +252,7 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 	if (iface == NULL)
 		return;
 
-	peer = calloc(1, sizeof(struct nhrp_peer));
+	peer = nhrp_peer_alloc();
 	peer->type = NHRP_PEER_TYPE_LOCAL;
 	peer->afnum = AFNUM_RESERVED;
 	peer->interface = iface;
@@ -270,10 +270,9 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 		nhrp_peer_insert(peer);
 		break;
 	default:
-		free(peer);
-		peer = NULL;
 		break;
 	}
+	nhrp_peer_free(peer);
 }
 
 static const netlink_dispatch_f route_dispatch[RTM_MAX] = {

@@ -34,6 +34,29 @@ static const char * const peer_type[] = {
 static void nhrp_peer_register_task(struct nhrp_task *task);
 static void nhrp_peer_register(struct nhrp_peer *peer);
 
+struct nhrp_peer *nhrp_peer_alloc(void)
+{
+	struct nhrp_peer *p;
+	p = calloc(1, sizeof(struct nhrp_peer));
+	p->ref_count = 1;
+	return p;
+}
+
+struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer)
+{
+	peer->ref_count++;
+	return peer;
+}
+
+int nhrp_peer_free(struct nhrp_peer *peer)
+{
+	peer->ref_count--;
+	if (peer->ref_count > 0)
+		return FALSE;
+	free(peer);
+	return TRUE;
+}
+
 static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 {
 	char tmp[64];
@@ -56,9 +79,8 @@ static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 	return buf;
 }
 
-static void nhrp_peer_prune_task(struct nhrp_task *task)
+static void nhrp_peer_prune(struct nhrp_peer *peer)
 {
-	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
 	char tmp[64];
 
 	if (peer->script_pid) {
@@ -67,9 +89,29 @@ static void nhrp_peer_prune_task(struct nhrp_task *task)
 	}
 
 	nhrp_info("Pruning peer %s", nhrp_peer_format(peer, sizeof(tmp), tmp));
-
 	nhrp_peer_remove(peer);
-	free(peer);
+}
+
+static void nhrp_peer_prune_task(struct nhrp_task *task)
+{
+	return nhrp_peer_prune(container_of(task, struct nhrp_peer, task));
+}
+
+static void nhrp_peer_reinsert(struct nhrp_peer *peer, int type)
+{
+	struct nhrp_peer *p, *dup;
+
+	dup = nhrp_peer_dup(peer);
+	nhrp_peer_remove(peer);
+
+	while ((p = nhrp_peer_find(&dup->dst_protocol_address,
+				   dup->prefix_length,
+				   NHRP_PEER_FIND_SUBNET_MATCH)) != NULL)
+		nhrp_peer_prune(p);
+
+	dup->type = type;
+	nhrp_peer_insert(dup);
+	nhrp_peer_free(dup);
 }
 
 static char *env(const char *key, const char *value)
@@ -118,6 +160,9 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 {
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx;
 	char dst[64];
+
+	if (nhrp_peer_free(peer))
+		return;
 
 	if (reply == NULL ||
 	    reply->hdr.type != NHRP_PACKET_REGISTRATION_REPLY) {
@@ -184,7 +229,8 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 				      sizeof(dst), dst));
 
 	sent = nhrp_packet_send_request(packet,
-		nhrp_peer_handle_registration_reply, peer);
+					nhrp_peer_handle_registration_reply,
+					nhrp_peer_dup(peer));
 	peer->interface = packet->dst_iface;
 
 error:
@@ -208,16 +254,16 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	struct nhrp_cie *cie;
 	char dst[64], tmp[64], nbma[64];
 
+	if (nhrp_peer_free(peer))
+		return;
+
 	if (reply == NULL ||
 	    reply->hdr.type != NHRP_PACKET_RESOLUTION_REPLY) {
 		nhrp_info("Failed to resolve %s",
 			  nhrp_address_format(&peer->dst_protocol_address,
 				  	      sizeof(dst), dst));
 
-		peer->type = NHRP_PEER_TYPE_NEGATIVE;
-		nhrp_task_schedule(&peer->task, NHRP_NEGATIVE_CACHE_TIME,
-				   nhrp_peer_prune_task);
-
+		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 		return;
 	}
 
@@ -227,14 +273,11 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 
 	cie = TAILQ_FIRST(&payload->u.cie_list_head);
 
-	peer->type = NHRP_PEER_TYPE_CACHED;
 	peer->prefix_length = cie->hdr.prefix_length;
 	peer->nbma_address = cie->nbma_address;
 	peer->protocol_address = cie->protocol_address;
-
+	peer->expire_time = (ntohs(cie->hdr.holding_time) - 60) * 1000;
 	nhrp_address_mask(&peer->dst_protocol_address, peer->prefix_length);
-
-	/* FIXME: Prune peer entries matching with the new prefix_length */
 
 	nhrp_info("Received Resolution Reply %s/%d is at proto %s nbma %s",
 		  nhrp_address_format(&peer->dst_protocol_address,
@@ -245,10 +288,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		  nhrp_address_format(&peer->nbma_address,
 			  	      sizeof(nbma), nbma));
 
-	nhrp_peer_run_script(peer, "peer-up", nhrp_peer_route_up);
-	nhrp_task_schedule(&peer->task,
-			   (ntohs(cie->hdr.holding_time) - 60) * 1000,
-			   nhrp_peer_prune_task);
+	nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED);
 }
 
 static void nhrp_peer_resolve(struct nhrp_peer *peer)
@@ -294,7 +334,8 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 				      sizeof(dst), dst));
 
 	sent = nhrp_packet_send_request(packet,
-		nhrp_peer_handle_resolution_reply, peer);
+					nhrp_peer_handle_resolution_reply,
+					nhrp_peer_dup(peer));
 	peer->interface = packet->dst_iface;
 
 error:
@@ -303,10 +344,12 @@ error:
 	}
 }
 
-void nhrp_peer_insert(struct nhrp_peer *peer)
+void nhrp_peer_insert(struct nhrp_peer *ins)
 {
 	char tmp[128];
+	struct nhrp_peer *peer;
 
+	peer = nhrp_peer_dup(ins);
 	CIRCLEQ_INSERT_HEAD(&peer_cache, peer, peer_list);
 
 	switch (peer->type) {
@@ -315,6 +358,15 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 		break;
 	case NHRP_PEER_TYPE_INCOMPLETE:
 		nhrp_peer_resolve(peer);
+		break;
+	case NHRP_PEER_TYPE_CACHED:
+		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_route_up);
+		nhrp_task_schedule(&peer->task, peer->expire_time,
+				   nhrp_peer_prune_task);
+		break;
+	case NHRP_PEER_TYPE_NEGATIVE:
+		nhrp_task_schedule(&peer->task, NHRP_NEGATIVE_CACHE_TIME,
+				   nhrp_peer_prune_task);
 		break;
 	}
 
@@ -326,6 +378,7 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 void nhrp_peer_remove(struct nhrp_peer *peer)
 {
 	CIRCLEQ_REMOVE(&peer_cache, peer, peer_list);
+	nhrp_peer_free(peer);
 }
 
 struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
@@ -334,6 +387,7 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 	struct nhrp_peer *found_peer = NULL;
 	struct nhrp_peer *p;
 	char tmp[64], tmp2[64];
+	int prefix;
 
 	if (min_prefix == 0xff)
 		min_prefix = dest->addr_len * 8;
@@ -342,8 +396,15 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 		if (dest->type != p->dst_protocol_address.type)
 			continue;
 
-		if (min_prefix > p->prefix_length)
-			continue;
+		if (flags & NHRP_PEER_FIND_SUBNET_MATCH) {
+			if (min_prefix > p->prefix_length)
+				continue;
+			prefix = min_prefix;
+		} else {
+			if (min_prefix < p->prefix_length)
+				continue;
+			prefix = p->prefix_length;
+		}
 
 		if ((flags & NHRP_PEER_FIND_COMPLETE) &&
 		     (p->type == NHRP_PEER_TYPE_INCOMPLETE ||
@@ -351,7 +412,7 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 			continue;
 
 		if (memcmp(dest->addr, p->dst_protocol_address.addr,
-			   p->prefix_length / 8) != 0)
+			   prefix / 8) != 0)
 			continue;
 
 		/* FIXME: Check remaining bits of address */

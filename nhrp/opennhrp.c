@@ -115,7 +115,7 @@ static int load_config(const char *config_file)
 				break;
 			}
 
-			peer = calloc(1, sizeof(struct nhrp_peer));
+			peer = nhrp_peer_alloc();
 			peer->type = NHRP_PEER_TYPE_STATIC;
 			peer->interface = iface;
 			nhrp_address_parse(addr, &peer->protocol_address,
@@ -125,6 +125,7 @@ static int load_config(const char *config_file)
 			peer->afnum = nhrp_afnum_from_pf(peer->nbma_address.type);
 			peer->dst_protocol_address = peer->protocol_address;
 			nhrp_peer_insert(peer);
+			nhrp_peer_free(peer);
 		} else if (strcmp(word, "cisco-authentication") == 0) {
 			struct nhrp_buffer *buf;
 			struct nhrp_cisco_authentication_extension *auth;
