@@ -178,22 +178,21 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 
 static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 {
-	char tmp[64];
+	char tmp[64], tmp2[64];
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
 
-	nhrp_info("Resolution Request from proto src %s",
+	nhrp_info("Received Resolution Request from proto src %s to %s",
 		nhrp_address_format(&packet->src_protocol_address,
-				    sizeof(tmp), tmp));
+			sizeof(tmp), tmp),
+		nhrp_address_format(&packet->dst_protocol_address,
+			sizeof(tmp2), tmp2));
 
 	packet->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
 	packet->hdr.flags |=
 		NHRP_FLAG_RESOLUTION_DESTINATION_STABLE |
 		NHRP_FLAG_RESOLUTION_AUTHORATIVE;
 	packet->hdr.hop_count = 0;
-
-	if (!nhrp_packet_route(packet))
-		return FALSE;
 
 	cie = nhrp_cie_alloc();
 	if (cie == NULL)
@@ -209,6 +208,9 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	nhrp_payload_free(payload);
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
+
+	if (!nhrp_packet_route(packet))
+		return FALSE;
 
 	cie->nbma_address = packet->my_nbma_address;
 	cie->protocol_address = packet->my_protocol_address;
@@ -244,12 +246,12 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 				    sizeof(tmp), tmp),
 		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
 
-	peer = nhrp_peer_find(&dst, 0xff);
+	peer = nhrp_peer_find(&dst, 0, 0);
 	if (peer != NULL)
 		return TRUE;
 
 	peer = calloc(1, sizeof(struct nhrp_peer));
-	peer->type = NHRP_PEER_TYPE_INCOMPLITE;
+	peer->type = NHRP_PEER_TYPE_INCOMPLETE;
 	peer->afnum = packet->hdr.afnum;
 	peer->protocol_type = packet->hdr.protocol_type;
 	peer->dst_protocol_address = dst;
@@ -557,7 +559,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	else
 		dest = &packet->dst_protocol_address;
 
-	peer = nhrp_peer_find(dest, 0xff);
+	peer = nhrp_peer_find(dest, 0, NHRP_PEER_FIND_COMPLETE);
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
 	packet->dst_peer = peer;
@@ -721,7 +723,8 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	}
 	packet->my_nbma_address = packet->dst_iface->nbma_address;
 
-	packet->dst_peer = nhrp_peer_find(&proto_nexthop, 0xff);
+	packet->dst_peer = nhrp_peer_find(&proto_nexthop, 0,
+					  NHRP_PEER_FIND_COMPLETE);
 	if (packet->dst_peer == NULL) {
 		nhrp_error("No peer entry for protocol address %s",
 			nhrp_address_format(&proto_nexthop, sizeof(tmp), tmp));
@@ -747,6 +750,7 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 {
 	struct nhrp_payload *payload;
 	uint8_t pdu[MAX_PDU_SIZE];
+	char tmp[64];
 	int size;
 
 	if (packet->dst_peer == NULL ||
@@ -789,6 +793,10 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	if (packet->dst_iface->auth_token != NULL)
 		nhrp_payload_set_raw(payload,
 			nhrp_buffer_copy(packet->dst_iface->auth_token));
+
+	nhrp_info("Sending packet %d to nbma %s",
+		packet->hdr.type,
+		nhrp_address_format(&packet->dst_peer->nbma_address, sizeof(tmp), tmp));
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0)

@@ -18,13 +18,58 @@
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
 
+#define NHRP_NEGATIVE_CACHE_TIME	(3*60*1000)
+
 static struct nhrp_peer_list peer_cache = CIRCLEQ_HEAD_INITIALIZER(peer_cache);
+
+static const char * const peer_type[] = {
+	[NHRP_PEER_TYPE_LOCAL] = "local address",
+	[NHRP_PEER_TYPE_STATIC] = "statically mapped",
+	[NHRP_PEER_TYPE_DYNAMIC] = "dynamically registered",
+	[NHRP_PEER_TYPE_INCOMPLETE] = "incomplete",
+	[NHRP_PEER_TYPE_CACHED] = "cached",
+};
+
 
 static void nhrp_peer_register_task(struct nhrp_task *task);
 static void nhrp_peer_register(struct nhrp_peer *peer);
 
-static void nhrp_peer_prune(struct nhrp_task *task)
+static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 {
+	char tmp[64];
+	int i = 0;
+
+	if (peer == NULL) {
+		snprintf(buf, len, "(null)");
+		return buf;
+	}
+
+	i += snprintf(&buf[i], len - i, "%s/%d",
+		nhrp_address_format(&peer->dst_protocol_address, sizeof(tmp), tmp),
+		peer->prefix_length);
+
+	if (peer->nbma_address.type != PF_UNSPEC) {
+		i += snprintf(&buf[i], len - i, " (at NBMA %s)",
+			nhrp_address_format(&peer->nbma_address, sizeof(tmp), tmp));
+	}
+
+	return buf;
+}
+
+static void nhrp_peer_prune_task(struct nhrp_task *task)
+{
+	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
+	char tmp[64];
+
+	if (peer->script_pid) {
+		kill(SIGINT, peer->script_pid);
+		peer->script_pid = -1;
+	}
+
+	nhrp_info("Pruning peer %s", nhrp_peer_format(peer, sizeof(tmp), tmp));
+
+	nhrp_peer_remove(peer);
+	free(peer);
 }
 
 static char *env(const char *key, const char *value)
@@ -168,8 +213,11 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		nhrp_info("Failed to resolve %s",
 			  nhrp_address_format(&peer->dst_protocol_address,
 				  	      sizeof(dst), dst));
-		/* FIXME: Negative cache for some time and prune later */
-		nhrp_task_schedule(&peer->task, 3 * 60 * 1000, nhrp_peer_prune);
+
+		peer->type = NHRP_PEER_TYPE_NEGATIVE;
+		nhrp_task_schedule(&peer->task, NHRP_NEGATIVE_CACHE_TIME,
+				   nhrp_peer_prune_task);
+
 		return;
 	}
 
@@ -183,9 +231,10 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	peer->prefix_length = cie->hdr.prefix_length;
 	peer->nbma_address = cie->nbma_address;
 	peer->protocol_address = cie->protocol_address;
-	/* peer->expire_time; */
 
 	nhrp_address_mask(&peer->dst_protocol_address, peer->prefix_length);
+
+	/* FIXME: Prune peer entries matching with the new prefix_length */
 
 	nhrp_info("Received Resolution Reply %s/%d is at proto %s nbma %s",
 		  nhrp_address_format(&peer->dst_protocol_address,
@@ -199,7 +248,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	nhrp_peer_run_script(peer, "peer-up", nhrp_peer_route_up);
 	nhrp_task_schedule(&peer->task,
 			   (ntohs(cie->hdr.holding_time) - 60) * 1000,
-			   nhrp_peer_prune);
+			   nhrp_peer_prune_task);
 }
 
 static void nhrp_peer_resolve(struct nhrp_peer *peer)
@@ -256,7 +305,7 @@ error:
 
 void nhrp_peer_insert(struct nhrp_peer *peer)
 {
-	char dst[64], nbma[64];
+	char tmp[128];
 
 	CIRCLEQ_INSERT_HEAD(&peer_cache, peer, peer_list);
 
@@ -264,15 +313,14 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 	case NHRP_PEER_TYPE_STATIC:
 		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_register);
 		break;
-	case NHRP_PEER_TYPE_INCOMPLITE:
+	case NHRP_PEER_TYPE_INCOMPLETE:
 		nhrp_peer_resolve(peer);
 		break;
 	}
 
-	nhrp_info("Peer %s/%d learned at NBMA address %s",
-		nhrp_address_format(&peer->dst_protocol_address, sizeof(dst), dst),
-		peer->prefix_length,
-		nhrp_address_format(&peer->nbma_address, sizeof(nbma), nbma));
+	nhrp_info("Peer %s, %s",
+		  nhrp_peer_format(peer, sizeof(tmp), tmp),
+		  peer_type[peer->type]);
 }
 
 void nhrp_peer_remove(struct nhrp_peer *peer)
@@ -281,10 +329,11 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 }
 
 struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
-				 int min_prefix)
+				 int min_prefix, int flags)
 {
+	struct nhrp_peer *found_peer = NULL;
 	struct nhrp_peer *p;
-	int prefix;
+	char tmp[64], tmp2[64];
 
 	if (min_prefix == 0xff)
 		min_prefix = dest->addr_len * 8;
@@ -293,22 +342,33 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 		if (dest->type != p->dst_protocol_address.type)
 			continue;
 
-		if (min_prefix < p->prefix_length)
+		if (min_prefix > p->prefix_length)
 			continue;
 
-		prefix = min_prefix;
-		if (p->prefix_length < min_prefix)
-			prefix = p->prefix_length;
+		if ((flags & NHRP_PEER_FIND_COMPLETE) &&
+		     (p->type == NHRP_PEER_TYPE_INCOMPLETE ||
+		      p->type == NHRP_PEER_TYPE_NEGATIVE))
+			continue;
 
 		if (memcmp(dest->addr, p->dst_protocol_address.addr,
-			   prefix / 8) != 0)
+			   p->prefix_length / 8) != 0)
 			continue;
 
 		/* FIXME: Check remaining bits of address */
-		return p;
+
+		if (found_peer != NULL &&
+		    found_peer->prefix_length > p->prefix_length)
+			continue;
+
+		/* Best match so far */
+		found_peer = p;
 	}
 
-	return NULL;
+	nhrp_info("nhrp_peer_find(%s): returning %s",
+		nhrp_address_format(dest, sizeof(tmp), tmp),
+		nhrp_peer_format(found_peer, sizeof(tmp2), tmp2));
+
+	return found_peer;
 }
 
 static int signal_pipe[2];
