@@ -422,8 +422,6 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 	if (!unmarshall_protocol_address(&pos, &pduleft, &packet->dst_protocol_address))
 		return FALSE;
 
-	/* FIXME: After this point we should generate error indications */
-
 	extension_offset = ntohs(packet->hdr.extension_offset);
 	if (extension_offset == 0) {
 		/* No extensions; rest of data is payload */
@@ -431,14 +429,18 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 	} else {
 		/* Extensions present; exclude those from payload */
 		size = extension_offset - (pos - pdu);
-		if (size < 0 || size > pduleft)
+		if (size < 0 || size > pduleft) {
+			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ERROR, pos - pdu);
 			return FALSE;
+		}
 	}
 
 	if (!unmarshall_payload(&pos, &pduleft, packet,
 				packet_types[packet->hdr.type].payload_type,
-				size, nhrp_packet_payload(packet)))
+				size, nhrp_packet_payload(packet))) {
+		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ERROR, pos - pdu);
 		return FALSE;
+	}
 
 	if (extension_offset == 0)
 		return TRUE;
@@ -449,8 +451,10 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 		struct nhrp_extension_header eh;
 		int extension_type, payload_type;
 
-		if (!unmarshall_binary(&pos, &pduleft, sizeof(eh), &eh))
+		if (!unmarshall_binary(&pos, &pduleft, sizeof(eh), &eh)) {
+			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ERROR, pos - pdu);
 			return FALSE;
+		}
 
 		extension_type = ntohs(eh.type) & ~NHRP_EXTENSION_FLAG_COMPULSORY;
 		if (extension_type == NHRP_EXTENSION_END)
@@ -467,8 +471,10 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 
 		if (!unmarshall_payload(&pos, &pduleft, packet,
 					payload_type, ntohs(eh.length),
-					nhrp_packet_extension(packet, ntohs(eh.type))))
+					nhrp_packet_extension(packet, ntohs(eh.type)))) {
+			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ERROR, pos - pdu);
 			return FALSE;
+		}
 	} while (1);
 
 	return TRUE;
@@ -512,7 +518,7 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 		}
 
 		/* Reply to unsent request? */
-		nhrp_packet_send_error(packet, NHRP_ERROR_INVALID_RESOLUTION_REPLY);
+		nhrp_packet_send_error(packet, NHRP_ERROR_INVALID_RESOLUTION_REPLY, 0);
 		return FALSE;
 	}
 
@@ -578,7 +584,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 		    nhrp_buffer_cmp(packet->src_iface->auth_token, p->u.raw) != 0) {
 			nhrp_error("Dropping packet from %s with bad authentication",
 				nhrp_address_format(from, sizeof(tmp), tmp));
-			nhrp_packet_send_error(packet, NHRP_ERROR_AUTHENTICATION_FAILURE);
+			nhrp_packet_send_error(packet, NHRP_ERROR_AUTHENTICATION_FAILURE, 0);
 			goto error;
 		}
 	}
@@ -843,7 +849,8 @@ int nhrp_packet_send_request(struct nhrp_packet *packet,
 	return TRUE;
 }
 
-int nhrp_packet_send_error(struct nhrp_packet *error_packet, uint16_t indication_code)
+int nhrp_packet_send_error(struct nhrp_packet *error_packet,
+			   uint16_t indication_code, uint16_t offset)
 {
 	struct nhrp_packet *p;
 	struct nhrp_payload *pl;
@@ -862,7 +869,7 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet, uint16_t indication
 	p->hdr.hop_count = 0;
 	p->hdr.type = NHRP_PACKET_ERROR_INDICATION;
 	p->hdr.u.error.code = indication_code;
-	p->hdr.u.error.offset = 0;
+	p->hdr.u.error.offset = htons(offset);
 
 	if (packet_types[error_packet->hdr.type].reply)
 		p->dst_protocol_address = error_packet->dst_protocol_address;
