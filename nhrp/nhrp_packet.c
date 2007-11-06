@@ -218,6 +218,61 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	return nhrp_packet_send(packet);
 }
 
+static int nhrp_handle_registration_request(struct nhrp_packet *packet)
+{
+	char tmp[64], tmp2[64];
+	struct nhrp_payload *payload;
+	struct nhrp_cie *cie;
+	struct nhrp_peer *peer, *p;
+
+	nhrp_info("Received Registration Request from proto src %s to %s",
+		nhrp_address_format(&packet->src_protocol_address,
+			sizeof(tmp), tmp),
+		nhrp_address_format(&packet->dst_protocol_address,
+			sizeof(tmp2), tmp2));
+
+	packet->hdr.type = NHRP_PACKET_REGISTRATION_REPLY;
+	packet->hdr.hop_count = 0;
+
+	payload = nhrp_packet_payload(packet);
+	TAILQ_FOREACH(cie, &payload->u.cie_list_head, cie_list_entry) {
+		peer = nhrp_peer_alloc();
+		if (peer == NULL) {
+			cie->hdr.code = NHRP_CODE_INSUFFICIENT_RESOURCES;
+			continue;
+		}
+
+		peer->type = NHRP_PEER_TYPE_DYNAMIC;
+		peer->afnum = packet->hdr.afnum;
+		peer->protocol_type = packet->hdr.protocol_type;
+		if (cie->nbma_address.addr_len != 0)
+			peer->nbma_address = cie->nbma_address;
+		else
+			peer->nbma_address = packet->src_nbma_address;
+		if (cie->protocol_address.addr_len != 0)
+			peer->protocol_address = cie->protocol_address;
+		else
+			peer->protocol_address = packet->src_protocol_address;
+		peer->dst_protocol_address = peer->protocol_address;
+
+		peer->prefix_length = cie->hdr.prefix_length;
+		if (peer->prefix_length == 0xff)
+			peer->prefix_length = peer->protocol_address.addr_len * 8;
+
+		while ((p = nhrp_peer_find(&peer->dst_protocol_address,
+					   peer->prefix_length,
+					   NHRP_PEER_FIND_SUBNET_MATCH)) != NULL)
+			nhrp_peer_remove(p);
+
+		nhrp_peer_insert(peer);
+		nhrp_peer_free(peer);
+
+		cie->hdr.code = NHRP_CODE_SUCCESS;
+	}
+
+	return nhrp_packet_send(packet);
+}
+
 static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64];
@@ -277,6 +332,7 @@ struct {
 	},
 	[NHRP_PACKET_REGISTRATION_REQUEST] = {
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
+		.handler = nhrp_handle_registration_request,
 	},
 	[NHRP_PACKET_REGISTRATION_REPLY] = {
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
