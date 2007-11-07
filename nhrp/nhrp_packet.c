@@ -728,6 +728,9 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 		goto error;
 	}
 
+	packet->req_pdu = pdu;
+	packet->req_pdulen = pdulen;
+
 	/* FIXME: Ugly hack to workaround Cisco NAT which we don't
 	 * support yet. */
 	packet->hdr.flags &= ~NHRP_FLAG_RESOLUTION_NAT;
@@ -870,6 +873,15 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	neh.length = 0;
 	if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
 		return -1;
+
+	/* Cisco is seriously brain damaged. It needs some extra garbage
+         * at the end of error indication or it'll barf out spurious errors. */
+	if (packet->hdr.type == NHRP_PACKET_ERROR_INDICATION &&
+	    pduleft >= 0x10) {
+		memset(pos, 0, 0x10);
+		pos += 0x10;
+		pduleft -= 0x10;
+	}
 
 	size = (int)(pos - pdu);
 	phdr->packet_size = htons(size);
@@ -1024,15 +1036,11 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 {
 	struct nhrp_packet *p;
 	struct nhrp_payload *pl;
-	uint8_t pkt[1024], *pdu = pkt;
-	size_t pduleft = sizeof(pkt);
 	int r;
 
 	/* RFC2332 5.2.7 Never generate errors about errors */
 	if (error_packet->hdr.type == NHRP_PACKET_ERROR_INDICATION)
 		return TRUE;
-
-	marshall_packet_header(&pdu, &pduleft, error_packet);
 
 	p = nhrp_packet_alloc();
 	p->hdr = error_packet->hdr;
@@ -1048,8 +1056,8 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 
 	pl = nhrp_packet_payload(p);
 	nhrp_payload_set_type(pl, NHRP_PAYLOAD_TYPE_RAW);
-	pl->u.raw = nhrp_buffer_alloc(pdu - pkt);
-	memcpy(pl->u.raw->data, pkt, pdu - pkt);
+	pl->u.raw = nhrp_buffer_alloc(error_packet->req_pdulen);
+	memcpy(pl->u.raw->data, error_packet->req_pdu, error_packet->req_pdulen);
 
 	r = nhrp_packet_send(p);
 	nhrp_packet_free(p);

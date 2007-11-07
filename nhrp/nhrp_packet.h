@@ -62,6 +62,9 @@ struct nhrp_packet {
 	void				(*handler)(void *ctx, struct nhrp_packet *packet);
 	void *				handler_ctx;
 
+	uint8_t *			req_pdu;
+	size_t				req_pdulen;
+
 	struct nhrp_interface *		src_iface;
 	struct nhrp_address		src_linklayer_address;
 	struct nhrp_interface *		dst_iface;
