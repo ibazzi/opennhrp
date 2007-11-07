@@ -360,6 +360,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		nhrp_peer_resolve(peer);
 		break;
 	case NHRP_PEER_TYPE_CACHED:
+	case NHRP_PEER_TYPE_DYNAMIC:
 		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_route_up);
 		nhrp_task_schedule(&peer->task, peer->expire_time,
 				   nhrp_peer_prune_task);

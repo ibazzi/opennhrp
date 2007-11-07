@@ -245,6 +245,8 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		peer->type = NHRP_PEER_TYPE_DYNAMIC;
 		peer->afnum = packet->hdr.afnum;
 		peer->protocol_type = packet->hdr.protocol_type;
+		peer->interface = packet->src_iface;
+		peer->expire_time = (ntohs(cie->hdr.holding_time) - 60) * 1000;
 		if (cie->nbma_address.addr_len != 0)
 			peer->nbma_address = cie->nbma_address;
 		else
