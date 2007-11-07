@@ -567,8 +567,10 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 	}
 	packet->hdr.hop_count--;
 
-	if (!nhrp_packet_route(packet))
+	if (!nhrp_packet_route(packet)) {
+		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
+	}
 
 	switch (packet_types[packet->hdr.type].type) {
 	case NHRP_TYPE_REQUEST:
@@ -580,6 +582,15 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 	}
 	if (p != NULL) {
 		struct nhrp_cie *cie;
+
+		TAILQ_FOREACH(cie, &p->u.cie_list_head, cie_list_entry) {
+			if (nhrp_address_cmp(&cie->nbma_address, &packet->my_nbma_address) == 0 &&
+			    nhrp_address_cmp(&cie->protocol_address, &packet->my_protocol_address) == 0) {
+				nhrp_packet_send_error(packet, NHRP_ERROR_LOOP_DETECTED, 0);
+				return FALSE;
+			}
+		}
+
 		cie = nhrp_cie_alloc();
 		if (cie != NULL) {
 			cie->hdr = (struct nhrp_cie_header) {
