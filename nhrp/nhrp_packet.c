@@ -27,6 +27,8 @@ static uint32_t request_id = 0;
 static struct nhrp_packet_list_head pending_requests =
 	TAILQ_HEAD_INITIALIZER(pending_requests);
 
+static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize, struct nhrp_packet *packet);
+
 static uint16_t nhrp_calculate_checksum(uint8_t *pdu, uint16_t len)
 {
 	uint16_t *pdu16 = (uint16_t *) pdu;
@@ -275,6 +277,49 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	return nhrp_packet_send(packet);
 }
 
+static int nhrp_handle_error_indication(struct nhrp_packet *error_packet)
+{
+	struct nhrp_packet *packet, *req;
+	struct nhrp_payload *payload;
+	uint8_t *pdu;
+	size_t pduleft;
+
+	packet = nhrp_packet_alloc();
+	if (packet == NULL)
+		return FALSE;
+
+	payload = nhrp_packet_payload(error_packet);
+	pdu = payload->u.raw->data;
+	pduleft = payload->u.raw->length;
+
+	if (!unmarshall_packet_header(&pdu, &pduleft, packet)) {
+		nhrp_packet_free(packet);
+		return FALSE;
+	}
+
+	TAILQ_FOREACH(req, &pending_requests, request_list_entry) {
+		if (packet->hdr.u.request_id != req->hdr.u.request_id)
+			continue;
+
+		if (nhrp_address_cmp(&packet->src_nbma_address,
+				     &req->src_nbma_address))
+			continue;
+		if (nhrp_address_cmp(&packet->src_protocol_address,
+				     &req->src_protocol_address))
+			continue;
+
+		nhrp_task_cancel(&req->timeout);
+		req->handler(req->handler_ctx, packet);
+		nhrp_packet_free(req);
+
+		nhrp_packet_free(packet);
+		return TRUE;
+	}
+
+	nhrp_packet_free(packet);
+	return FALSE;
+}
+
 static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64];
@@ -323,7 +368,7 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 #define NHRP_TYPE_REPLY		1
 #define NHRP_TYPE_INDICATION	2
 
-struct {
+static struct {
 	int type;
 	uint16_t payload_type;
 	int (*handler)(struct nhrp_packet *packet);
@@ -357,14 +402,15 @@ struct {
 	[NHRP_PACKET_ERROR_INDICATION] = {
 		.type = NHRP_TYPE_INDICATION,
 		.payload_type = NHRP_PAYLOAD_TYPE_RAW,
+		.handler = nhrp_handle_error_indication,
 	},
 	[NHRP_PACKET_TRAFFIC_INDICATION] = {
 		.type = NHRP_TYPE_INDICATION,
-		.handler = nhrp_handle_traffic_indication,
 		.payload_type = NHRP_PAYLOAD_TYPE_RAW,
+		.handler = nhrp_handle_traffic_indication,
 	}
 };
-int extension_types[] = {
+static int extension_types[] = {
 	[NHRP_EXTENSION_RESPONDER_ADDRESS] = NHRP_PAYLOAD_TYPE_CIE_LIST,
 	[NHRP_EXTENSION_FORWARD_TRANSIT_NHS] = NHRP_PAYLOAD_TYPE_CIE_LIST,
 	[NHRP_EXTENSION_REVERSE_TRANSIT_NHS] = NHRP_PAYLOAD_TYPE_CIE_LIST,
@@ -461,14 +507,11 @@ static int unmarshall_payload(uint8_t **pdu, size_t *pduleft,
 	}
 }
 
-static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *packet)
+static int unmarshall_packet_header(uint8_t **pdu, size_t *pduleft, struct nhrp_packet *packet)
 {
-	size_t pduleft = pdusize;
-	uint8_t *pos = pdu;
-	int size, extension_offset;
-	struct nhrp_packet_header *phdr = (struct nhrp_packet_header *) pdu;
+	struct nhrp_packet_header *phdr = (struct nhrp_packet_header *) *pdu;
 
-	if (!unmarshall_binary(&pos, &pduleft, sizeof(packet->hdr), &packet->hdr))
+	if (!unmarshall_binary(pdu, pduleft, sizeof(packet->hdr), &packet->hdr))
 		return FALSE;
 
 	if (packet->hdr.type >= ARRAY_SIZE(packet_types))
@@ -482,11 +525,20 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 	packet->dst_protocol_address.type = nhrp_pf_from_protocol(packet->hdr.protocol_type);
 	packet->dst_protocol_address.addr_len = phdr->dst_protocol_address_len;
 
-	if (!unmarshall_nbma_address(&pos, &pduleft, &packet->src_nbma_address))
+	if (!unmarshall_nbma_address(pdu, pduleft, &packet->src_nbma_address))
 		return FALSE;
-	if (!unmarshall_protocol_address(&pos, &pduleft, &packet->src_protocol_address))
+	if (!unmarshall_protocol_address(pdu, pduleft, &packet->src_protocol_address))
 		return FALSE;
-	if (!unmarshall_protocol_address(&pos, &pduleft, &packet->dst_protocol_address))
+	return unmarshall_protocol_address(pdu, pduleft, &packet->dst_protocol_address);
+}
+
+static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *packet)
+{
+	size_t pduleft = pdusize;
+	uint8_t *pos = pdu;
+	int size, extension_offset;
+
+	if (!unmarshall_packet_header(&pos, &pduleft, packet))
 		return FALSE;
 
 	extension_offset = ntohs(packet->hdr.extension_offset);
