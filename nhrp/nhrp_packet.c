@@ -319,38 +319,47 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 	return TRUE;
 }
 
+#define NHRP_TYPE_REQUEST	0
+#define NHRP_TYPE_REPLY		1
+#define NHRP_TYPE_INDICATION	2
+
 struct {
+	int type;
 	uint16_t payload_type;
-	int reply;
 	int (*handler)(struct nhrp_packet *packet);
 } packet_types[] = {
 	[NHRP_PACKET_RESOLUTION_REQUEST] = {
+		.type = NHRP_TYPE_REQUEST,
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
 		.handler = nhrp_handle_resolution_request,
 	},
 	[NHRP_PACKET_RESOLUTION_REPLY] = {
+		.type = NHRP_TYPE_REPLY,
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
-		.reply = TRUE,
 	},
 	[NHRP_PACKET_REGISTRATION_REQUEST] = {
+		.type = NHRP_TYPE_REQUEST,
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
 		.handler = nhrp_handle_registration_request,
 	},
 	[NHRP_PACKET_REGISTRATION_REPLY] = {
+		.type = NHRP_TYPE_REPLY,
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
-		.reply = TRUE,
 	},
 	[NHRP_PACKET_PURGE_REQUEST] = {
+		.type = NHRP_TYPE_REQUEST,
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
 	},
 	[NHRP_PACKET_PURGE_REPLY] = {
+		.type = NHRP_TYPE_REPLY,
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
-		.reply = TRUE,
 	},
 	[NHRP_PACKET_ERROR_INDICATION] = {
+		.type = NHRP_TYPE_INDICATION,
 		.payload_type = NHRP_PAYLOAD_TYPE_RAW,
 	},
 	[NHRP_PACKET_TRAFFIC_INDICATION] = {
+		.type = NHRP_TYPE_INDICATION,
 		.handler = nhrp_handle_traffic_indication,
 		.payload_type = NHRP_PAYLOAD_TYPE_RAW,
 	}
@@ -541,23 +550,56 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 static int nhrp_packet_forward(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64], tmp3[64];
+	struct nhrp_payload *p = NULL;
 
-	nhrp_info("Packet nbma src %s, proto src %s, proto dst %s needs to be forwarded",
+	nhrp_info("Forwarding packet from nbma src %s, proto src %s to proto dst %s, hop count %d",
 		nhrp_address_format(&packet->src_nbma_address,
 				    sizeof(tmp), tmp),
 		nhrp_address_format(&packet->src_protocol_address,
 				    sizeof(tmp2), tmp2),
 		nhrp_address_format(&packet->dst_protocol_address,
-				    sizeof(tmp3), tmp3));
+				    sizeof(tmp3), tmp3),
+		packet->hdr.hop_count);
 
-	return FALSE;
+	if (packet->hdr.hop_count == 0) {
+		nhrp_packet_send_error(packet, NHRP_ERROR_HOP_COUNT_EXCEEDED, 0);
+		return TRUE;
+	}
+	packet->hdr.hop_count--;
+
+	if (!nhrp_packet_route(packet))
+		return FALSE;
+
+	switch (packet_types[packet->hdr.type].type) {
+	case NHRP_TYPE_REQUEST:
+		p = nhrp_packet_extension(packet, NHRP_EXTENSION_FORWARD_TRANSIT_NHS | NHRP_EXTENSION_FLAG_NOCREATE);
+		break;
+	case NHRP_TYPE_REPLY:
+		p = nhrp_packet_extension(packet, NHRP_EXTENSION_REVERSE_TRANSIT_NHS | NHRP_EXTENSION_FLAG_NOCREATE);
+		break;
+	}
+	if (p != NULL) {
+		struct nhrp_cie *cie;
+		cie = nhrp_cie_alloc();
+		if (cie != NULL) {
+			cie->hdr = (struct nhrp_cie_header) {
+				.code = NHRP_CODE_SUCCESS,
+				.holding_time = NHRP_HOLDING_TIME,
+			};
+			cie->nbma_address = packet->my_nbma_address;
+			cie->protocol_address = packet->my_protocol_address;
+			nhrp_payload_add_cie(p, cie);
+		}
+	}
+
+	return nhrp_packet_send(packet);
 }
 
 static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 {
 	struct nhrp_packet *req;
 
-	if (packet_types[packet->hdr.type].reply) {
+	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY) {
 		TAILQ_FOREACH(req, &pending_requests, request_list_entry) {
 			if (packet->hdr.u.request_id != req->hdr.u.request_id)
 				continue;
@@ -623,7 +665,11 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 		goto error;
 	}
 
-	if (packet_types[packet->hdr.type].reply)
+	/* FIXME: Ugly hack to workaround Cisco NAT which we don't
+	 * support yet. */
+	packet->hdr.flags &= ~NHRP_FLAG_RESOLUTION_NAT;
+
+	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY)
 		dest = &packet->src_protocol_address;
 	else
 		dest = &packet->dst_protocol_address;
@@ -780,7 +826,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	char tmp[64];
 	int r, ifindex = -1;
 
-	if (packet_types[packet->hdr.type].reply)
+	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY)
 		dest = &packet->src_protocol_address;
 	else
 		dest = &packet->dst_protocol_address;
@@ -851,7 +897,8 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	payload = nhrp_packet_extension(
 		packet, NHRP_EXTENSION_RESPONDER_ADDRESS |
 		NHRP_EXTENSION_FLAG_COMPULSORY | NHRP_EXTENSION_FLAG_NOCREATE);
-	if (packet_types[packet->hdr.type].reply && payload != NULL) {
+	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY &&
+	    (payload != NULL && TAILQ_EMPTY(&payload->u.cie_list_head))) {
 		struct nhrp_cie *cie;
 
 		cie = nhrp_cie_alloc();
@@ -931,7 +978,7 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 	p->hdr.u.error.code = indication_code;
 	p->hdr.u.error.offset = htons(offset);
 
-	if (packet_types[error_packet->hdr.type].reply)
+	if (packet_types[error_packet->hdr.type].type == NHRP_TYPE_REPLY)
 		p->dst_protocol_address = error_packet->dst_protocol_address;
 	else
 		p->dst_protocol_address = error_packet->src_protocol_address;
