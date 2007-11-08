@@ -28,6 +28,7 @@ static const char * const peer_type[] = {
 	[NHRP_PEER_TYPE_DYNAMIC] = "dynamically registered",
 	[NHRP_PEER_TYPE_INCOMPLETE] = "incomplete",
 	[NHRP_PEER_TYPE_CACHED] = "cached",
+	[NHRP_PEER_TYPE_NEGATIVE] = "negative",
 };
 
 
@@ -401,6 +402,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 				   nhrp_peer_prune_task);
 		break;
 	case NHRP_PEER_TYPE_NEGATIVE:
+		kernel_inject_neighbor(&peer->dst_protocol_address, peer);
 		nhrp_task_schedule(&peer->task, NHRP_NEGATIVE_CACHE_TIME,
 				   nhrp_peer_prune_task);
 		break;
@@ -443,8 +445,7 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 		}
 
 		if ((flags & NHRP_PEER_FIND_COMPLETE) &&
-		     (p->type == NHRP_PEER_TYPE_INCOMPLETE ||
-		      p->type == NHRP_PEER_TYPE_NEGATIVE))
+		     (p->type == NHRP_PEER_TYPE_INCOMPLETE))
 			continue;
 
 		if (memcmp(dest->addr, p->dst_protocol_address.addr,

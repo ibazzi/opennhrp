@@ -637,20 +637,29 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor, struct nhrp_peer *peer
 	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
 	req.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_REPLACE;
 	req.n.nlmsg_type = RTM_NEWNEIGH;
-	req.ndm.ndm_family = peer->protocol_address.type;
-	req.ndm.ndm_state = NUD_REACHABLE;
+	req.ndm.ndm_family = peer->dst_protocol_address.type;
 	req.ndm.ndm_ifindex = peer->interface->index;
 	req.ndm.ndm_type = RTN_UNICAST;
 
 	netlink_add_rtattr_l(&req.n, sizeof(req), NDA_DST,
 			     neighbor->addr, neighbor->addr_len);
-	netlink_add_rtattr_l(&req.n, sizeof(req), NDA_LLADDR,
-			     peer->nbma_address.addr,
-			     peer->nbma_address.addr_len);
 
-	nhrp_info("NL-ARP %s is-at %s",
-		nhrp_address_format(neighbor, sizeof(neigh), neigh),
-		nhrp_address_format(&peer->nbma_address, sizeof(nbma), nbma));
+	if (peer->type != NHRP_PEER_TYPE_NEGATIVE) {
+		req.ndm.ndm_state = NUD_REACHABLE;
+
+		netlink_add_rtattr_l(&req.n, sizeof(req), NDA_LLADDR,
+			peer->nbma_address.addr,
+			peer->nbma_address.addr_len);
+
+		nhrp_info("NL-ARP %s is-at %s",
+			nhrp_address_format(neighbor, sizeof(neigh), neigh),
+			nhrp_address_format(&peer->nbma_address, sizeof(nbma), nbma));
+	} else {
+		req.ndm.ndm_state = NUD_FAILED;
+
+		nhrp_info("NL-ARP %s not-reachable",
+			  nhrp_address_format(neighbor, sizeof(neigh), neigh));
+	}
 
 	return netlink_send(&netlink_fd, &req.n);
 }
