@@ -191,9 +191,11 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 			sizeof(tmp2), tmp2));
 
 	packet->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
-	packet->hdr.flags |=
-		NHRP_FLAG_RESOLUTION_DESTINATION_STABLE |
-		NHRP_FLAG_RESOLUTION_AUTHORATIVE;
+	packet->hdr.flags &= NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
+			     NHRP_FLAG_RESOLUTION_SOURCE_STABLE |
+			     NHRP_FLAG_RESOLUTION_UNIQUE;
+	packet->hdr.flags |= NHRP_FLAG_RESOLUTION_DESTINATION_STABLE |
+			     NHRP_FLAG_RESOLUTION_AUTHORATIVE;
 	packet->hdr.hop_count = 0;
 
 	cie = nhrp_cie_alloc();
@@ -234,6 +236,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 			sizeof(tmp2), tmp2));
 
 	packet->hdr.type = NHRP_PACKET_REGISTRATION_REPLY;
+	packet->hdr.flags &= NHRP_FLAG_REGISTRATION_UNIQUE;
 	packet->hdr.hop_count = 0;
 
 	payload = nhrp_packet_payload(packet);
@@ -735,10 +738,6 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 
 	packet->req_pdu = pdu;
 	packet->req_pdulen = pdulen;
-
-	/* FIXME: Ugly hack to workaround Cisco NAT which we don't
-	 * support yet. */
-	packet->hdr.flags &= ~NHRP_FLAG_RESOLUTION_NAT;
 
 	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY)
 		dest = &packet->src_protocol_address;
