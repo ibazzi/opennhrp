@@ -32,6 +32,7 @@ struct nhrp_interface {
 	unsigned int index;
 	uint16_t afnum;
 	struct nhrp_address nbma_address;
+	struct nhrp_cie nat_cie;
 };
 
 void nhrp_interface_hash(struct nhrp_interface *iface);

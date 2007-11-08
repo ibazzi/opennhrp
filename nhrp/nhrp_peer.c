@@ -159,7 +159,9 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *reply)
 {
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx;
-	char dst[64];
+	struct nhrp_payload *payload;
+	struct nhrp_cie *cie;
+	char tmp[64];
 
 	if (nhrp_peer_free(peer))
 		return;
@@ -168,14 +170,25 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	    reply->hdr.type != NHRP_PACKET_REGISTRATION_REPLY) {
 		nhrp_info("Failed to register to %s",
 			  nhrp_address_format(&peer->dst_protocol_address,
-					      sizeof(dst), dst));
+					      sizeof(tmp), tmp));
 		nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register_task);
 		return;
 	}
 
 	nhrp_info("Received Registration Reply from %s",
 		  nhrp_address_format(&peer->dst_protocol_address,
-				      sizeof(dst), dst));
+				      sizeof(tmp), tmp));
+
+	/* Check for NAT */
+	payload = nhrp_packet_extension(reply, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE);
+	if (payload != NULL) {
+		cie = nhrp_payload_get_cie(payload, 2);
+		if (cie != NULL) {
+			nhrp_info("NAT detected: our real NBMA address is %s",
+				  nhrp_address_format(&cie->nbma_address, sizeof(tmp), tmp));
+			peer->interface->nat_cie = *cie;
+		}
+	}
 
 	/* Re-register after holding time expires */
 	nhrp_task_schedule(&peer->task, (NHRP_HOLDING_TIME - 60) * 1000,
@@ -204,10 +217,12 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 		.hdr.protocol_type = peer->protocol_type,
 		.hdr.version = NHRP_VERSION_RFC2332,
 		.hdr.type = NHRP_PACKET_REGISTRATION_REQUEST,
-		.hdr.flags = NHRP_FLAG_REGISTRATION_UNIQUE,
+		.hdr.flags = NHRP_FLAG_REGISTRATION_UNIQUE |
+			     NHRP_FLAG_REGISTRATION_NAT,
 		.dst_protocol_address = peer->dst_protocol_address,
 	};
 
+	/* Payload CIE */
 	cie = nhrp_cie_alloc();
 	if (cie == NULL)
 		goto error;
@@ -221,6 +236,23 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 	};
 
 	payload = nhrp_packet_payload(packet);
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_payload_add_cie(payload, cie);
+
+	/* Cisco NAT extension CIE */
+	cie = nhrp_cie_alloc();
+	if (cie == NULL)
+		goto error;
+
+        *cie = (struct nhrp_cie) {
+		.hdr.code = NHRP_CODE_SUCCESS,
+		.hdr.prefix_length = peer->protocol_address.addr_len * 8,
+		.hdr.preference = 0,
+		.nbma_address = peer->nbma_address,
+		.protocol_address = peer->protocol_address,
+	};
+
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS);
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
@@ -310,12 +342,13 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 		.hdr.protocol_type = peer->protocol_type,
 		.hdr.version = NHRP_VERSION_RFC2332,
 		.hdr.type = NHRP_PACKET_RESOLUTION_REQUEST,
-		.hdr.flags =
-			NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
-			NHRP_FLAG_RESOLUTION_AUTHORATIVE,
+		.hdr.flags = NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
+			     NHRP_FLAG_RESOLUTION_AUTHORATIVE |
+			     NHRP_FLAG_RESOLUTION_NAT,
 		.dst_protocol_address = peer->dst_protocol_address,
 	};
 
+	/* Payload CIE */
 	cie = nhrp_cie_alloc();
 	if (cie == NULL)
 		goto error;

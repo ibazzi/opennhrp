@@ -139,6 +139,21 @@ void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie)
 	TAILQ_INSERT_TAIL(&payload->u.cie_list_head, cie, cie_list_entry);
 }
 
+struct nhrp_cie *nhrp_payload_get_cie(struct nhrp_payload *payload, int index)
+{
+	struct nhrp_cie *cie;
+
+	if (payload->payload_type != NHRP_PAYLOAD_TYPE_CIE_LIST)
+		return NULL;
+
+	for (cie = TAILQ_FIRST(&payload->u.cie_list_head);
+	     cie != NULL && index > 1; index--) {
+		cie = TAILQ_NEXT(cie, cie_list_entry);
+	}
+
+	return cie;
+}
+
 struct nhrp_packet *nhrp_packet_alloc(void)
 {
 	return calloc(1, sizeof(struct nhrp_packet));
@@ -193,7 +208,8 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	packet->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
 	packet->hdr.flags &= NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
 			     NHRP_FLAG_RESOLUTION_SOURCE_STABLE |
-			     NHRP_FLAG_RESOLUTION_UNIQUE;
+			     NHRP_FLAG_RESOLUTION_UNIQUE |
+			     NHRP_FLAG_RESOLUTION_NAT;
 	packet->hdr.flags |= NHRP_FLAG_RESOLUTION_DESTINATION_STABLE |
 			     NHRP_FLAG_RESOLUTION_AUTHORATIVE;
 	packet->hdr.hop_count = 0;
@@ -953,6 +969,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 int nhrp_packet_send(struct nhrp_packet *packet)
 {
 	struct nhrp_payload *payload;
+	struct nhrp_cie *cie;
 	uint8_t pdu[MAX_PDU_SIZE];
 	char tmp[64];
 	int size;
@@ -998,6 +1015,22 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	if (packet->dst_iface->auth_token != NULL)
 		nhrp_payload_set_raw(payload,
 			nhrp_buffer_copy(packet->dst_iface->auth_token));
+
+	/* Cisco NAT extension CIE */
+	if (packet_types[packet->hdr.type].type != NHRP_TYPE_INDICATION &&
+	    (packet->hdr.flags & NHRP_FLAG_REGISTRATION_NAT)) {
+		payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS);
+		nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+
+		if (packet->dst_iface->nat_cie.nbma_address.addr_len &&
+		    TAILQ_EMPTY(&payload->u.cie_list_head)) {
+			cie = nhrp_cie_alloc();
+			if (cie != NULL) {
+				*cie = packet->dst_iface->nat_cie;
+				nhrp_payload_add_cie(payload, cie);
+			}
+		}
+	}
 
 	nhrp_info("Sending packet %d to nbma %s",
 		packet->hdr.type,

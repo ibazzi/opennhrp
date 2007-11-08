@@ -86,6 +86,7 @@ void nhrp_cie_free(struct nhrp_cie *cie);
 void nhrp_payload_set_type(struct nhrp_payload *payload, int type);
 void nhrp_payload_set_raw(struct nhrp_payload *payload, struct nhrp_buffer *buf);
 void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie);
+struct nhrp_cie *nhrp_payload_get_cie(struct nhrp_payload *payload, int index);
 
 struct nhrp_packet *nhrp_packet_alloc(void);
 struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet);
