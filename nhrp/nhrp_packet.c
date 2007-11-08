@@ -353,6 +353,10 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 	    peer->prefix_length == peer->dst_protocol_address.addr_len * 8)
 		return TRUE;
 
+	if ((peer->interface != NULL) &&
+	    (peer->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT))
+		return TRUE;
+
 	peer = nhrp_peer_alloc();
 	peer->type = NHRP_PEER_TYPE_INCOMPLETE;
 	peer->afnum = packet->hdr.afnum;
