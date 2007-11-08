@@ -635,7 +635,7 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor, struct nhrp_peer *peer
 	memset(&req.ndm, 0, sizeof(req.ndm));
 
 	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
-	req.n.nlmsg_flags = NLM_F_REQUEST;
+	req.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_REPLACE;
 	req.n.nlmsg_type = RTM_NEWNEIGH;
 	req.ndm.ndm_family = peer->protocol_address.type;
 	req.ndm.ndm_state = NUD_REACHABLE;
