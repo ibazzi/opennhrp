@@ -373,7 +373,7 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 		return TRUE;
 
 	if ((peer->interface != NULL) &&
-	    (peer->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT))
+	    !(peer->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT))
 		return TRUE;
 
 	peer = nhrp_peer_alloc();
