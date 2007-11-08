@@ -3,11 +3,9 @@
 case $1 in
 peer-up)
 	echo "Neighbor $NHRP_PEER_PROTOCOL_ADDRESS is up"
-	ip neigh replace $NHRP_PEER_PROTOCOL_ADDRESS lladdr $NHRP_PEER_NBMA_ADDRESS nud permanent dev $NHRP_PEER_INTERFACE
 	;;
 peer-down)
 	echo "Neighbor $NHRP_PEER_PROTOCOL_ADDRESS is down"
-	ip neigh del $NHRP_PEER_PROTOCOL_ADDRESS dev $NHRP_PEER_INTERFACE
 	;;
 route-up)
 	echo "Route $NHRP_ROUTE_DEST/$NHRP_ROUTE_PREFIX is up"

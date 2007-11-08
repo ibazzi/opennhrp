@@ -243,6 +243,8 @@ error:
 
 static void nhrp_peer_route_up(struct nhrp_peer *peer)
 {
+	kernel_inject_neighbor(&peer->protocol_address, peer);
+
 	if (nhrp_address_cmp(&peer->protocol_address, &peer->dst_protocol_address) != 0)
 		nhrp_peer_run_script(peer, "route-up", NULL);
 }

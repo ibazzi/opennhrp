@@ -349,7 +349,8 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
 
 	peer = nhrp_peer_find(&dst, 0xff, 0);
-	if (peer != NULL)
+	if (peer != NULL &&
+	    peer->prefix_length == peer->dst_protocol_address.addr_len * 8)
 		return TRUE;
 
 	peer = nhrp_peer_alloc();

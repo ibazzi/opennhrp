@@ -30,6 +30,9 @@
 #define NLMSG_TAIL(nmsg) \
 	((struct rtattr *) (((void *) (nmsg)) + NLMSG_ALIGN((nmsg)->nlmsg_len)))
 
+#define NDA_RTA(r)  ((struct rtattr*)(((char*)(r)) + NLMSG_ALIGN(sizeof(struct ndmsg))))
+#define NDA_PAYLOAD(n) NLMSG_PAYLOAD(n,sizeof(struct ndmsg))
+
 typedef void (*netlink_dispatch_f)(struct nlmsghdr *msg);
 
 struct netlink_fd {
@@ -68,6 +71,23 @@ static int netlink_add_rtattr_l(struct nlmsghdr *n, int maxlen, int type,
 	rta->rta_len = len;
 	memcpy(RTA_DATA(rta), data, alen);
 	n->nlmsg_len = NLMSG_ALIGN(n->nlmsg_len) + RTA_ALIGN(len);
+	return TRUE;
+}
+
+static int netlink_add_nested_rtattr_u32(struct rtattr *rta, int maxlen,
+					 int type, uint32_t value)
+{
+	int len = RTA_LENGTH(4);
+	struct rtattr *subrta;
+
+	if (RTA_ALIGN(rta->rta_len) + len > maxlen)
+		return FALSE;
+
+	subrta = (struct rtattr*)(((char*)rta) + RTA_ALIGN(rta->rta_len));
+	subrta->rta_type = type;
+	subrta->rta_len = len;
+	memcpy(RTA_DATA(subrta), &value, 4);
+	rta->rta_len = NLMSG_ALIGN(rta->rta_len) + len;
 	return TRUE;
 }
 
@@ -130,10 +150,8 @@ static int netlink_receive(struct netlink_fd *fd, struct nlmsghdr *reply)
 	return TRUE;
 }
 
-int netlink_talk(struct netlink_fd *fd, struct nlmsghdr *req,
-		 size_t replysize, struct nlmsghdr *reply)
+static int netlink_send(struct netlink_fd *fd, struct nlmsghdr *req)
 {
-	int status;
 	struct sockaddr_nl nladdr;
 	struct iovec iov = {
 		.iov_base = (void*) req,
@@ -145,21 +163,29 @@ int netlink_talk(struct netlink_fd *fd, struct nlmsghdr *req,
 		.msg_iov = &iov,
 		.msg_iovlen = 1,
 	};
+	int status;
 
 	memset(&nladdr, 0, sizeof(nladdr));
 	nladdr.nl_family = AF_NETLINK;
-	nladdr.nl_pid = 0;
-	nladdr.nl_groups = 0;
 
 	req->nlmsg_seq = ++fd->seq;
-	if (reply == NULL)
-		req->nlmsg_flags |= NLM_F_ACK;
 
 	status = sendmsg(fd->fd, &msg, 0);
 	if (status < 0) {
 		nhrp_perror("Cannot talk to rtnetlink");
 		return FALSE;
 	}
+	return TRUE;
+}
+
+static int netlink_talk(struct netlink_fd *fd, struct nlmsghdr *req,
+		 size_t replysize, struct nlmsghdr *reply)
+{
+	if (reply == NULL)
+		req->nlmsg_flags |= NLM_F_ACK;
+
+	if (!netlink_send(fd, req))
+		return FALSE;
 
 	if (reply == NULL)
 		return TRUE;
@@ -168,7 +194,7 @@ int netlink_talk(struct netlink_fd *fd, struct nlmsghdr *req,
 	return netlink_receive(fd, reply);
 }
 
-int netlink_enumerate(struct netlink_fd *fd, int family, int type)
+static int netlink_enumerate(struct netlink_fd *fd, int family, int type)
 {
 	struct {
 		struct nlmsghdr nlh;
@@ -194,17 +220,102 @@ int netlink_enumerate(struct netlink_fd *fd, int family, int type)
 static int do_get_ioctl(const char *basedev, struct ip_tunnel_parm *p)
 {
 	struct ifreq ifr;
-	int fd;
-	int err;
 
 	strncpy(ifr.ifr_name, basedev, IFNAMSIZ);
 	ifr.ifr_ifru.ifru_data = (void *) p;
-	fd = socket(AF_INET, SOCK_DGRAM, 0);
-	err = ioctl(fd, SIOCGETTUNNEL, &ifr);
-	if (err)
-		nhrp_perror("ioctl");
-	close(fd);
-	return err;
+	if (ioctl(packet_fd, SIOCGETTUNNEL, &ifr)) {
+		nhrp_perror("ioctl(SIOCGETTUNNEL)");
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static int netlink_configure_arp(struct nhrp_interface *iface, int pf)
+{
+	struct {
+		struct nlmsghdr n;
+		struct ndtmsg ndtm;
+		char buf[256];
+	} req;
+	struct {
+		struct rtattr rta;
+		char buf[256];
+	} parms;
+
+	memset(&req.n, 0, sizeof(req.n));
+	memset(&req.ndtm, 0, sizeof(req.ndtm));
+
+	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndtmsg));
+	req.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_REPLACE;
+	req.n.nlmsg_type = RTM_SETNEIGHTBL;
+
+	req.ndtm.ndtm_family = pf;
+
+	netlink_add_rtattr_l(&req.n, sizeof(req), NDTA_NAME,
+			     "arp_cache", 10);
+
+	parms.rta.rta_type = NDTA_PARMS;
+	parms.rta.rta_len = RTA_LENGTH(0);
+	netlink_add_nested_rtattr_u32(&parms.rta, sizeof(parms),
+				      NDTPA_IFINDEX, iface->index);
+	netlink_add_nested_rtattr_u32(&parms.rta, sizeof(parms),
+				      NDTPA_APP_PROBES, 1);
+	netlink_add_nested_rtattr_u32(&parms.rta, sizeof(parms),
+				      NDTPA_MCAST_PROBES, 0);
+	netlink_add_nested_rtattr_u32(&parms.rta, sizeof(parms),
+				      NDTPA_UCAST_PROBES, 0);
+
+	netlink_add_rtattr_l(&req.n, sizeof(req), NDTA_PARMS,
+			     parms.buf, parms.rta.rta_len);
+
+	return netlink_send(&netlink_fd, &req.n);
+}
+
+static int netlink_link_arp_on(struct nhrp_interface *iface)
+{
+	struct ifreq ifr;
+
+	strncpy(ifr.ifr_name, iface->name, IFNAMSIZ);
+	if (ioctl(packet_fd, SIOCGIFFLAGS, &ifr)) {
+		nhrp_perror("ioctl(SIOCGIFFLAGS)");
+		return FALSE;
+	}
+	if (ifr.ifr_flags & IFF_NOARP) {
+		ifr.ifr_flags &= ~IFF_NOARP;
+		if (ioctl(packet_fd, SIOCSIFFLAGS, &ifr)) {
+			nhrp_perror("ioctl(SIOCSIFFLAGS)");
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+                                                          
+static void netlink_neigh_request(struct nlmsghdr *msg)
+{
+	struct ndmsg *ndm = NLMSG_DATA(msg);
+	struct rtattr *rta[NDA_MAX+1];
+	struct nhrp_peer *peer;
+	struct nhrp_address addr;
+	char tmp[64];
+
+	netlink_parse_rtattr(rta, NDA_MAX, NDA_RTA(ndm), NDA_PAYLOAD(msg));
+	if (rta[NDA_DST] == NULL)
+		return;
+
+	nhrp_address_set(&addr, ndm->ndm_family,
+			 RTA_PAYLOAD(rta[NDA_DST]),
+			 RTA_DATA(rta[NDA_DST]));
+
+	nhrp_info("NL-ARP who-has %s",
+		nhrp_address_format(&addr, sizeof(tmp), tmp));
+
+	peer = nhrp_peer_find(&addr, 0xff, NHRP_PEER_FIND_COMPLETE);
+	if (peer != NULL)
+		kernel_inject_neighbor(&addr, peer);
+}
+
+static void netlink_neigh_update(struct nlmsghdr *msg)
+{
 }
 
 static void netlink_link_update(struct nlmsghdr *msg)
@@ -237,6 +348,11 @@ static void netlink_link_update(struct nlmsghdr *msg)
 					 4, (uint8_t *) &cfg.iph.saddr);
 		}
 		break;
+	}
+
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)) {
+		netlink_configure_arp(iface, PF_INET);
+		netlink_link_arp_on(iface);
 	}
 }
 
@@ -276,6 +392,8 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 }
 
 static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
+	[RTM_GETNEIGH] = netlink_neigh_request,
+	[RTM_NEWNEIGH] = netlink_neigh_update,
 	[RTM_NEWLINK] = netlink_link_update,
 	[RTM_DELLINK] = netlink_link_update,
 	[RTM_NEWADDR] = netlink_addr_update,
@@ -381,7 +499,7 @@ static void pfpacket_read(void *ctx, int fd, short events)
 
 int kernel_init(void)
 {
-	const int groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR;
+	const int groups = RTMGRP_NEIGH | RTMGRP_LINK | RTMGRP_IPV4_IFADDR;
 
 	packet_fd = socket(PF_PACKET, SOCK_DGRAM, ETHPROTO_NHRP);
 	if (packet_fd < 0) {
@@ -503,3 +621,37 @@ int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 
 	return TRUE;
 }
+
+int kernel_inject_neighbor(struct nhrp_address *neighbor, struct nhrp_peer *peer)
+{
+	struct {
+		struct nlmsghdr 	n;
+		struct ndmsg 		ndm;
+		char   			buf[256];
+	} req;
+	char neigh[64], nbma[64];
+
+	memset(&req.n, 0, sizeof(req.n));
+	memset(&req.ndm, 0, sizeof(req.ndm));
+
+	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
+	req.n.nlmsg_flags = NLM_F_REQUEST;
+	req.n.nlmsg_type = RTM_NEWNEIGH;
+	req.ndm.ndm_family = peer->protocol_address.type;
+	req.ndm.ndm_state = NUD_REACHABLE;
+	req.ndm.ndm_ifindex = peer->interface->index;
+	req.ndm.ndm_type = RTN_UNICAST;
+
+	netlink_add_rtattr_l(&req.n, sizeof(req), NDA_DST,
+			     neighbor->addr, neighbor->addr_len);
+	netlink_add_rtattr_l(&req.n, sizeof(req), NDA_LLADDR,
+			     peer->nbma_address.addr,
+			     peer->nbma_address.addr_len);
+
+	nhrp_info("NL-ARP %s is-at %s",
+		nhrp_address_format(neighbor, sizeof(neigh), neigh),
+		nhrp_address_format(&peer->nbma_address, sizeof(nbma), nbma));
+
+	return netlink_send(&netlink_fd, &req.n);
+}
+

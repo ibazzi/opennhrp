@@ -20,6 +20,7 @@
 struct nhrp_packet;
 struct nhrp_interface;
 struct nhrp_address;
+struct nhrp_peer;
 
 /* Mainloop and timed tasks */
 struct nhrp_task {
@@ -49,6 +50,7 @@ int kernel_route(struct nhrp_address *dest,
 		 int *oif_index);
 int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 		struct nhrp_address *to);
+int kernel_inject_neighbor(struct nhrp_address *neighbor, struct nhrp_peer *peer);
 
 int log_init(void);
 
