@@ -12,6 +12,7 @@
 #define NHRP_PEER_H
 
 #include <stdint.h>
+#include <sys/types.h>
 #include <sys/queue.h>
 #include "nhrp_packet.h"
 
@@ -41,6 +42,8 @@ struct nhrp_peer {
 	struct nhrp_address dst_protocol_address;
 	struct nhrp_interface *interface;
 };
+
+void nhrp_peer_reap_pid(pid_t pid);
 
 struct nhrp_peer *nhrp_peer_alloc(void);
 struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer);

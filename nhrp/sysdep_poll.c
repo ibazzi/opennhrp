@@ -21,7 +21,7 @@ struct pollctx {
 	void *ctx;
 };
 
-static int numfds = 0;
+static int numfds = 0, running;
 static struct pollfd gfds[MAX_FDS];
 static struct pollctx gctx[MAX_FDS];
 static struct nhrp_task_list tasks;
@@ -91,6 +91,7 @@ void nhrp_task_run(void)
 	struct nhrp_task *task;
 	int i, timeout;
 
+	running = TRUE;
 	do {
 		if (numfds == 0 && LIST_EMPTY(&tasks))
 			break;
@@ -120,5 +121,10 @@ void nhrp_task_run(void)
 				gctx[i].callback(gctx[i].ctx, gfds[i].fd,
 						 gfds[i].revents);
 		}
-	} while (1);
+	} while (running);
+}
+
+void nhrp_task_stop(void)
+{
+	running = FALSE;
 }

@@ -33,6 +33,7 @@ int nhrp_task_poll_fd(int fd, short events, void (*callback)(void *ctx, int fd, 
 		      void *ctx);
 void nhrp_task_unpoll_fd(int fd);
 void nhrp_task_run(void);
+void nhrp_task_stop(void);
 void nhrp_task_schedule(struct nhrp_task *task, int timeout, void (*callback)(struct nhrp_task *task));
 void nhrp_task_cancel(struct nhrp_task *task);
 
