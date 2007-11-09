@@ -54,8 +54,16 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 	peer->ref_count--;
 	if (peer->ref_count > 0)
 		return FALSE;
+
+	if (peer->script_pid) {
+		kill(SIGINT, peer->script_pid);
+		peer->script_pid = -1;
+	}
+
 	nhrp_task_cancel(&peer->task);
+
 	free(peer);
+
 	return TRUE;
 }
 
@@ -86,22 +94,9 @@ static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 	return buf;
 }
 
-static void nhrp_peer_prune(struct nhrp_peer *peer)
-{
-	char tmp[64];
-
-	if (peer->script_pid) {
-		kill(SIGINT, peer->script_pid);
-		peer->script_pid = -1;
-	}
-
-	nhrp_info("Pruning peer %s", nhrp_peer_format(peer, sizeof(tmp), tmp));
-	nhrp_peer_remove(peer);
-}
-
 static void nhrp_peer_prune_task(struct nhrp_task *task)
 {
-	return nhrp_peer_prune(container_of(task, struct nhrp_peer, task));
+	return nhrp_peer_remove(container_of(task, struct nhrp_peer, task));
 }
 
 static void nhrp_peer_reinsert(struct nhrp_peer *peer, int type)
@@ -420,8 +415,9 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 	/* First, prune all duplicates */
 	while ((peer = nhrp_peer_find(&ins->protocol_address,
 				      ins->prefix_length,
-				      NHRP_PEER_FIND_SUBNET_MATCH)) != NULL)
-		nhrp_peer_prune(peer);
+				      NHRP_PEER_FIND_SUBNET_MATCH |
+				      NHRP_PEER_FIND_REMOVABLE)) != NULL)
+		nhrp_peer_remove(peer);
 
 	peer = nhrp_peer_dup(ins);
 	CIRCLEQ_INSERT_HEAD(&peer_cache, peer, peer_list);
@@ -486,6 +482,11 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 
 		if ((flags & NHRP_PEER_FIND_COMPLETE) &&
 		     (p->type == NHRP_PEER_TYPE_INCOMPLETE))
+			continue;
+
+		if ((flags & NHRP_PEER_FIND_REMOVABLE) &&
+		    (p->type == NHRP_PEER_TYPE_LOCAL ||
+		     p->type == NHRP_PEER_TYPE_STATIC))
 			continue;
 
 		if (memcmp(dest->addr, p->protocol_address.addr,

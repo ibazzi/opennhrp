@@ -59,6 +59,7 @@ void nhrp_peer_remove(struct nhrp_peer *peer);
 #define NHRP_PEER_FIND_COMPLETE		0x01
 #define NHRP_PEER_FIND_SUBNET_MATCH	0x02
 #define NHRP_PEER_FIND_NEXTHOP		0x04
+#define NHRP_PEER_FIND_REMOVABLE	0x08
 
 struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 				 int prefix_length, int flags);
