@@ -469,39 +469,20 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 	return found_peer;
 }
 
-static int signal_pipe[2];
-
-static void signal_handler(int sig)
-{
-	send(signal_pipe[1], &sig, sizeof(sig), MSG_DONTWAIT);
-}
-
-static void reap_children(void *ctx, int fd, short events)
+void nhrp_peer_reap_pid(pid_t pid)
 {
 	struct nhrp_peer *p;
-	pid_t pid;
-	int status, sig;
 
-	read(fd, &sig, sizeof(sig));
-	while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-		CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
-			if (p->script_pid != pid)
-				continue;
+	CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
+		if (p->script_pid != pid)
+			continue;
 
-			p->script_pid = -1;
-			if (p->script_callback) {
-				void (*cb)(struct nhrp_peer *);
-				cb = p->script_callback;
-				p->script_callback = NULL;
-				cb(p);
-			}
+		p->script_pid = -1;
+		if (p->script_callback) {
+			void (*cb)(struct nhrp_peer *);
+			cb = p->script_callback;
+			p->script_callback = NULL;
+			cb(p);
 		}
 	}
-}
-
-int nhrp_peer_init(void)
-{
-	socketpair(AF_UNIX, SOCK_STREAM, 0, signal_pipe);
-	signal(SIGCHLD, signal_handler);
-	return nhrp_task_poll_fd(signal_pipe[0], POLLIN, reap_children, NULL);
 }

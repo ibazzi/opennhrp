@@ -170,7 +170,7 @@ int main(int argc, char **argv)
 {
 	if (!log_init())
 		return 1;
-	if (!nhrp_peer_init())
+	if (!signal_init())
 		return 2;
 	if (!load_config("../nhrp.conf"))
 		return 3;

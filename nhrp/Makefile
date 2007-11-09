@@ -19,6 +19,7 @@ OPENNHRP_OBJ=\
 	nhrp_packet.o \
 	nhrp_peer.o \
 	nhrp_interface.o \
+	signal.o \
 	sysdep_netlink.o \
 	sysdep_poll.o \
 	sysdep_syslog.o

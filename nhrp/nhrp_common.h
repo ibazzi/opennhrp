@@ -53,5 +53,6 @@ int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 int kernel_inject_neighbor(struct nhrp_address *neighbor, struct nhrp_peer *peer);
 
 int log_init(void);
+int signal_init(void);
 
 #endif

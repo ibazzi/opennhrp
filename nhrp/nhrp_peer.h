@@ -42,8 +42,6 @@ struct nhrp_peer {
 	struct nhrp_interface *interface;
 };
 
-int nhrp_peer_init(void);
-
 struct nhrp_peer *nhrp_peer_alloc(void);
 struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer);
 int nhrp_peer_free(struct nhrp_peer *peer);
