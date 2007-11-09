@@ -269,20 +269,19 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		peer->interface = packet->src_iface;
 		peer->expire_time = (ntohs(cie->hdr.holding_time) - 60) * 1000;
 		if (cie->nbma_address.addr_len != 0)
-			peer->nbma_address = cie->nbma_address;
+			peer->next_hop_address = cie->nbma_address;
 		else
-			peer->nbma_address = packet->src_nbma_address;
+			peer->next_hop_address = packet->src_nbma_address;
 		if (cie->protocol_address.addr_len != 0)
 			peer->protocol_address = cie->protocol_address;
 		else
 			peer->protocol_address = packet->src_protocol_address;
-		peer->dst_protocol_address = peer->protocol_address;
 
 		peer->prefix_length = cie->hdr.prefix_length;
 		if (peer->prefix_length == 0xff)
 			peer->prefix_length = peer->protocol_address.addr_len * 8;
 
-		while ((p = nhrp_peer_find(&peer->dst_protocol_address,
+		while ((p = nhrp_peer_find(&peer->protocol_address,
 					   peer->prefix_length,
 					   NHRP_PEER_FIND_SUBNET_MATCH)) != NULL)
 			nhrp_peer_remove(p);
@@ -368,11 +367,10 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
 
 	peer = nhrp_peer_find(&dst, 0xff, 0);
-	if (peer != NULL &&
-	    peer->prefix_length == peer->dst_protocol_address.addr_len * 8)
+	if (peer != NULL && peer->type == NHRP_PEER_TYPE_CACHED_ROUTE)
 		return TRUE;
 
-	if ((peer->interface != NULL) &&
+	if ((peer != NULL) && (peer->interface != NULL) &&
 	    !(peer->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT))
 		return TRUE;
 
@@ -380,7 +378,7 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 	peer->type = NHRP_PEER_TYPE_INCOMPLETE;
 	peer->afnum = packet->hdr.afnum;
 	peer->protocol_type = packet->hdr.protocol_type;
-	peer->dst_protocol_address = dst;
+	peer->protocol_address = dst;
 	peer->prefix_length = packet->dst_protocol_address.addr_len * 8;
 	nhrp_peer_insert(peer);
 	nhrp_peer_free(peer);
@@ -944,7 +942,8 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	packet->my_nbma_address = packet->dst_iface->nbma_address;
 
 	packet->dst_peer = nhrp_peer_find(&proto_nexthop, 0xff,
-					  NHRP_PEER_FIND_COMPLETE);
+					  NHRP_PEER_FIND_COMPLETE |
+					  NHRP_PEER_FIND_NEXTHOP);
 	if (packet->dst_peer == NULL) {
 		nhrp_error("No peer entry for protocol address %s",
 			nhrp_address_format(&proto_nexthop, sizeof(tmp), tmp));
@@ -952,12 +951,12 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	}
 
 	if (packet->my_nbma_address.type == PF_UNSPEC) {
-		r = kernel_route(&packet->dst_peer->nbma_address,
+		r = kernel_route(&packet->dst_peer->next_hop_address,
 				 &packet->my_nbma_address, NULL, NULL);
 		if (!r) {
 			nhrp_error("No route to NBMA address %s",
 				nhrp_address_format(
-					&packet->dst_peer->nbma_address,
+					&packet->dst_peer->next_hop_address,
 					sizeof(tmp), tmp));
 			return FALSE;
 		}
@@ -1034,14 +1033,14 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 
 	nhrp_info("Sending packet %d to nbma %s",
 		packet->hdr.type,
-		nhrp_address_format(&packet->dst_peer->nbma_address, sizeof(tmp), tmp));
+		nhrp_address_format(&packet->dst_peer->next_hop_address, sizeof(tmp), tmp));
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0)
 		return FALSE;
 
 	return kernel_send(pdu, size, packet->dst_iface,
-			   &packet->dst_peer->nbma_address);
+			   &packet->dst_peer->next_hop_address);
 }
 
 static void nhrp_packet_xmit_timeout(struct nhrp_task *task)

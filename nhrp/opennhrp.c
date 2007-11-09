@@ -121,9 +121,8 @@ static int load_config(const char *config_file)
 			nhrp_address_parse(addr, &peer->protocol_address,
 					   &peer->prefix_length);
 			peer->protocol_type = nhrp_protocol_from_pf(peer->protocol_address.type);
-			nhrp_address_parse(nbma, &peer->nbma_address, NULL);
-			peer->afnum = nhrp_afnum_from_pf(peer->nbma_address.type);
-			peer->dst_protocol_address = peer->protocol_address;
+			nhrp_address_parse(nbma, &peer->next_hop_address, NULL);
+			peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
 			nhrp_peer_insert(peer);
 			nhrp_peer_free(peer);
 		} else if (strcmp(word, "cisco-authentication") == 0) {

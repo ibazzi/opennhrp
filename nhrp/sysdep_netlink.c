@@ -289,7 +289,7 @@ static int netlink_link_arp_on(struct nhrp_interface *iface)
 	}
 	return TRUE;
 }
-                                                          
+
 static void netlink_neigh_request(struct nlmsghdr *msg)
 {
 	struct ndmsg *ndm = NLMSG_DATA(msg);
@@ -310,8 +310,10 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 		nhrp_address_format(&addr, sizeof(tmp), tmp));
 
 	peer = nhrp_peer_find(&addr, 0xff, NHRP_PEER_FIND_COMPLETE);
-	if (peer != NULL)
-		kernel_inject_neighbor(&addr, peer);
+	if (peer == NULL)
+		return;
+
+	kernel_inject_neighbor(&addr, peer);
 }
 
 static void netlink_neigh_update(struct nlmsghdr *msg)
@@ -372,7 +374,7 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 	peer->type = NHRP_PEER_TYPE_LOCAL;
 	peer->afnum = AFNUM_RESERVED;
 	peer->interface = iface;
-	nhrp_address_set(&peer->dst_protocol_address,
+	nhrp_address_set(&peer->protocol_address,
 			 ifa->ifa_family,
 			 RTA_PAYLOAD(rta[IFA_LOCAL]),
 			 RTA_DATA(rta[IFA_LOCAL]));
@@ -382,7 +384,7 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 		if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)
 			peer->prefix_length = ifa->ifa_prefixlen;
 		else
-			peer->prefix_length = peer->dst_protocol_address.addr_len * 8;
+			peer->prefix_length = peer->protocol_address.addr_len * 8;
 		nhrp_peer_insert(peer);
 		break;
 	default:
@@ -635,9 +637,9 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor, struct nhrp_peer *peer
 	memset(&req.ndm, 0, sizeof(req.ndm));
 
 	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
-	req.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_REPLACE;
+	req.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_REPLACE | NLM_F_CREATE;
 	req.n.nlmsg_type = RTM_NEWNEIGH;
-	req.ndm.ndm_family = peer->dst_protocol_address.type;
+	req.ndm.ndm_family = peer->protocol_address.type;
 	req.ndm.ndm_ifindex = peer->interface->index;
 	req.ndm.ndm_type = RTN_UNICAST;
 
@@ -648,12 +650,12 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor, struct nhrp_peer *peer
 		req.ndm.ndm_state = NUD_REACHABLE;
 
 		netlink_add_rtattr_l(&req.n, sizeof(req), NDA_LLADDR,
-			peer->nbma_address.addr,
-			peer->nbma_address.addr_len);
+				     peer->next_hop_address.addr,
+				     peer->next_hop_address.addr_len);
 
 		nhrp_info("NL-ARP %s is-at %s",
 			nhrp_address_format(neighbor, sizeof(neigh), neigh),
-			nhrp_address_format(&peer->nbma_address, sizeof(nbma), nbma));
+			nhrp_address_format(&peer->next_hop_address, sizeof(nbma), nbma));
 	} else {
 		req.ndm.ndm_state = NUD_FAILED;
 

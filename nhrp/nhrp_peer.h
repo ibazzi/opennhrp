@@ -16,12 +16,13 @@
 #include <sys/queue.h>
 #include "nhrp_packet.h"
 
-#define NHRP_PEER_TYPE_LOCAL		0x00	/* Learned from interface config */
-#define NHRP_PEER_TYPE_STATIC		0x01	/* Static mapping from config file */
-#define NHRP_PEER_TYPE_DYNAMIC		0x02	/* NHC registration */
-#define NHRP_PEER_TYPE_INCOMPLETE	0x03	/* Resolution request sent */
-#define NHRP_PEER_TYPE_CACHED		0x04	/* Received/relayed resolution reply */
-#define NHRP_PEER_TYPE_NEGATIVE		0x05	/* Negative cached */
+#define NHRP_PEER_TYPE_INCOMPLETE	0x00	/* Resolution request sent */
+#define NHRP_PEER_TYPE_NEGATIVE		0x01	/* Negative cached */
+#define NHRP_PEER_TYPE_CACHED		0x02	/* Received/relayed resolution reply */
+#define NHRP_PEER_TYPE_CACHED_ROUTE	0x03	/* Received/relayed resolution for route */
+#define NHRP_PEER_TYPE_DYNAMIC		0x04	/* NHC registration */
+#define NHRP_PEER_TYPE_LOCAL		0x05	/* Learned from interface config */
+#define NHRP_PEER_TYPE_STATIC		0x06	/* Static mapping from config file */
 
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
 
@@ -29,18 +30,21 @@ struct nhrp_peer {
 	int ref_count;
 	CIRCLEQ_ENTRY(nhrp_peer) peer_list;
 	struct nhrp_task task;
+	struct nhrp_interface *interface;
 	pid_t script_pid;
 	void (*script_callback)(struct nhrp_peer *peer);
+
 	uint8_t type;
 	uint8_t prefix_length;
 	uint16_t afnum;
 	uint16_t protocol_type;
 	uint16_t mtu;
 	uint32_t expire_time;
-	struct nhrp_address nbma_address;
 	struct nhrp_address protocol_address;
-	struct nhrp_address dst_protocol_address;
-	struct nhrp_interface *interface;
+
+	/* Protocol address for NHRP_PEER_TYPE_ROUTE,
+	 * NBMA address for other type of entries */
+	struct nhrp_address next_hop_address;
 };
 
 void nhrp_peer_reap_pid(pid_t pid);
@@ -54,8 +58,10 @@ void nhrp_peer_remove(struct nhrp_peer *peer);
 
 #define NHRP_PEER_FIND_COMPLETE		0x01
 #define NHRP_PEER_FIND_SUBNET_MATCH	0x02
+#define NHRP_PEER_FIND_NEXTHOP		0x04
 
 struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 				 int prefix_length, int flags);
+void nhrp_peer_dump_cache(void);
 
 #endif

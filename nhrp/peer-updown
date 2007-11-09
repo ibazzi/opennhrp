@@ -2,20 +2,20 @@
 
 case $1 in
 peer-up)
-	echo "Neighbor $NHRP_PEER_PROTOCOL_ADDRESS is up"
+	echo "Neighbor $NHRP_DESTADDR at $NHRP_DESTNBMA discovered"
 	;;
 peer-down)
-	echo "Neighbor $NHRP_PEER_PROTOCOL_ADDRESS is down"
+	echo "Neighbor $NHRP_DESTADDR at $NHRP_DESTNBMA is gone"
 	;;
 route-up)
-	echo "Route $NHRP_ROUTE_DEST/$NHRP_ROUTE_PREFIX is up"
-	ip route del $NHRP_ROUTE_DEST/$NHRP_ROUTE_PREFIX
-	ip route add $NHRP_ROUTE_DEST/$NHRP_ROUTE_PREFIX proto 42 via $NHRP_PEER_PROTOCOL_ADDRESS
+	echo "Route $NHRP_DESTADDR/$NHRP_DESTPREFIX is up"
+	ip route del $NHRP_DESTADDR/$NHRP_DESTPREFIX
+	ip route add $NHRP_DESTADDR/$NHRP_DESTPREFIX proto 42 via $NHRP_NEXTHOP
 	ip route flush cache
 	;;
 route-down)
-	echo "Route $NHRP_ROUTE_DEST/$NHRP_ROUTE_PREFIX is down"
-	ip route del $NHRP_ROUTE_DEST/$NHRP_ROUTE_PREFIX proto 42
+	echo "Route $NHRP_DESTADDR/$NHRP_DESTPREFIX is down"
+	ip route del $NHRP_DESTADDR/$NHRP_DESTPREFIX proto 42
 	ip route flush cache
 	;;
 esac
