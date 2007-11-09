@@ -82,7 +82,10 @@ void nhrp_task_schedule(struct nhrp_task *task, int timeout, void (*callback)(st
 
 void nhrp_task_cancel(struct nhrp_task *task)
 {
-	LIST_REMOVE(task, task_list);
+	if (task->callback != NULL) {
+		LIST_REMOVE(task, task_list);
+		task->callback = NULL;
+	}
 }
 
 void nhrp_task_run(void)
@@ -98,10 +101,13 @@ void nhrp_task_run(void)
 
 		gettimeofday(&now, NULL);
 		while (!LIST_EMPTY(&tasks) && timercmp(&LIST_FIRST(&tasks)->execute_time, &now, <=)) {
-			task = LIST_FIRST(&tasks);
+			void (*callback)(struct nhrp_task *task);
 
-			LIST_REMOVE(task, task_list);
-			task->callback(task);
+			task = LIST_FIRST(&tasks);
+			callback = task->callback;
+
+			nhrp_task_cancel(task);
+			callback(task);
 		}
 
 		if (!LIST_EMPTY(&tasks)) {
