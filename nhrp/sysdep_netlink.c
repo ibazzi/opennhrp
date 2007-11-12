@@ -313,7 +313,7 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 	if (peer == NULL)
 		return;
 
-	kernel_inject_neighbor(&addr, peer);
+	kernel_inject_neighbor(&addr, &peer->next_hop_address, peer->interface);
 }
 
 static void netlink_neigh_update(struct nlmsghdr *msg)
@@ -326,17 +326,17 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 	if (rta[NDA_DST] == NULL)
 		return;
 
-	if (!(ndm->ndm_state & (NUD_STALE | NUD_REACHABLE)))
+	if (!(ndm->ndm_state & (NUD_STALE | NUD_FAILED | NUD_REACHABLE)))
 		return;
 
 	nhrp_address_set(&addr, ndm->ndm_family,
 			 RTA_PAYLOAD(rta[NDA_DST]),
 			 RTA_DATA(rta[NDA_DST]));
 
-	if (ndm->ndm_state & NUD_STALE)
-		nhrp_peer_set_used(&addr, FALSE);
-	else
+	if (ndm->ndm_state & NUD_REACHABLE)
 		nhrp_peer_set_used(&addr, TRUE);
+	else
+		nhrp_peer_set_used(&addr, FALSE);
 }
 
 static void netlink_link_update(struct nlmsghdr *msg)
@@ -643,7 +643,9 @@ int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 	return TRUE;
 }
 
-int kernel_inject_neighbor(struct nhrp_address *neighbor, struct nhrp_peer *peer)
+int kernel_inject_neighbor(struct nhrp_address *neighbor,
+			   struct nhrp_address *hwaddr,
+			   struct nhrp_interface *dev)
 {
 	struct {
 		struct nlmsghdr 	n;
@@ -658,23 +660,22 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor, struct nhrp_peer *peer
 	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
 	req.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_REPLACE | NLM_F_CREATE;
 	req.n.nlmsg_type = RTM_NEWNEIGH;
-	req.ndm.ndm_family = peer->protocol_address.type;
-	req.ndm.ndm_ifindex = peer->interface->index;
+	req.ndm.ndm_family = neighbor->type;
+	req.ndm.ndm_ifindex = dev->index;
 	req.ndm.ndm_type = RTN_UNICAST;
 
 	netlink_add_rtattr_l(&req.n, sizeof(req), NDA_DST,
 			     neighbor->addr, neighbor->addr_len);
 
-	if (peer->type != NHRP_PEER_TYPE_NEGATIVE) {
+	if (hwaddr != NULL) {
 		req.ndm.ndm_state = NUD_REACHABLE;
 
 		netlink_add_rtattr_l(&req.n, sizeof(req), NDA_LLADDR,
-				     peer->next_hop_address.addr,
-				     peer->next_hop_address.addr_len);
+				     hwaddr->addr, hwaddr->addr_len);
 
 		nhrp_info("NL-ARP %s is-at %s",
 			nhrp_address_format(neighbor, sizeof(neigh), neigh),
-			nhrp_address_format(&peer->next_hop_address, sizeof(nbma), nbma));
+			nhrp_address_format(hwaddr, sizeof(nbma), nbma));
 	} else {
 		req.ndm.ndm_state = NUD_FAILED;
 

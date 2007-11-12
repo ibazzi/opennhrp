@@ -18,7 +18,10 @@
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
 
-#define NHRP_NEGATIVE_CACHE_TIME	(3*60*1000)
+#define NHRP_PEER_FORMAT_LEN		80
+#define NHRP_NEGATIVE_CACHE_TIME	(3*60)
+
+#define NHRP_PEER_FLAG_PRUNE_PENDING	0x00010000
 
 static struct nhrp_peer_list peer_cache = CIRCLEQ_HEAD_INITIALIZER(peer_cache);
 
@@ -37,41 +40,9 @@ static void nhrp_peer_register_task(struct nhrp_task *task);
 static void nhrp_peer_register(struct nhrp_peer *peer);
 static void nhrp_peer_up(struct nhrp_peer *peer);
 
-struct nhrp_peer *nhrp_peer_alloc(void)
-{
-	struct nhrp_peer *p;
-	p = calloc(1, sizeof(struct nhrp_peer));
-	p->ref_count = 1;
-	return p;
-}
-
-struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer)
-{
-	peer->ref_count++;
-	return peer;
-}
-
-int nhrp_peer_free(struct nhrp_peer *peer)
-{
-	peer->ref_count--;
-	if (peer->ref_count > 0)
-		return FALSE;
-
-	if (peer->script_pid) {
-		kill(SIGINT, peer->script_pid);
-		peer->script_pid = -1;
-	}
-
-	nhrp_task_cancel(&peer->task);
-
-	free(peer);
-
-	return TRUE;
-}
-
 static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 {
-	char tmp[64];
+	char tmp[NHRP_PEER_FORMAT_LEN];
 	int i = 0;
 
 	if (peer == NULL) {
@@ -98,6 +69,15 @@ static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 		i += snprintf(&buf[i], len - i, " unique");
 	if (peer->flags & NHRP_PEER_FLAG_UP)
 		i += snprintf(&buf[i], len - i, " up");
+	if (peer->expire_time) {
+		int rel = peer->expire_time - time(NULL);
+		if (rel >= 0) {
+			i += snprintf(&buf[i], len - i, " expires_in %d:%02d",
+				      rel / 60, rel % 60);
+		} else {
+			i += snprintf(&buf[i], len - i, " expired");
+		}
+	}
 
 	return buf;
 }
@@ -184,7 +164,9 @@ static void nhrp_peer_dynamic_up(struct nhrp_peer *peer, int status)
 {
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
 		nhrp_peer_up(peer);
-		kernel_inject_neighbor(&peer->protocol_address, peer);
+		kernel_inject_neighbor(&peer->protocol_address,
+				       &peer->next_hop_address,
+				       peer->interface);
 	} else {
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 	}
@@ -233,7 +215,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx;
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
-	char tmp[64];
+	char tmp[NHRP_PEER_FORMAT_LEN];
 
 	if (nhrp_peer_free(peer))
 		return;
@@ -263,7 +245,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	}
 
 	/* Re-register after holding time expires */
-	nhrp_task_schedule(&peer->task, (NHRP_HOLDING_TIME - 60) * 1000,
+	nhrp_task_schedule(&peer->task, (NHRP_HOLDING_TIME - 120) * 1000,
 			   nhrp_peer_register_task);
 
 	/* We are done */
@@ -389,7 +371,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		/* Destination is within NBMA network; update cache */
 		peer->prefix_length = cie->hdr.prefix_length;
 		peer->next_hop_address = cie->nbma_address;
-		peer->expire_time = (ntohs(cie->hdr.holding_time) - 60) * 1000;
+		peer->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 		nhrp_address_mask(&peer->protocol_address, peer->prefix_length);
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED);
 		return;
@@ -397,21 +379,33 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 
 	/* Update the received NBMA address to nexthop */
 	iface = peer->interface;
-	np = nhrp_peer_alloc();
-	np->type = NHRP_PEER_TYPE_CACHED;
-	np->afnum = reply->hdr.afnum;
-	np->protocol_type = reply->hdr.protocol_type;
-	np->protocol_address = cie->protocol_address;
-	np->next_hop_address = cie->nbma_address;
-	np->prefix_length = cie->protocol_address.addr_len * 8;
-	np->interface = iface;
-	nhrp_peer_insert(np);
-	nhrp_peer_free(np);
+	np = nhrp_peer_find(&cie->protocol_address,
+			    cie->protocol_address.addr_len * 8,
+			    NHRP_PEER_FIND_SUBNET_MATCH);
+	if (np == NULL) {
+		np = nhrp_peer_alloc();
+		np->type = NHRP_PEER_TYPE_CACHED;
+		np->afnum = reply->hdr.afnum;
+		np->protocol_type = reply->hdr.protocol_type;
+		np->protocol_address = cie->protocol_address;
+		np->next_hop_address = cie->nbma_address;
+		np->prefix_length = cie->protocol_address.addr_len * 8;
+		np->interface = iface;
+		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time) - 10;
+		nhrp_peer_insert(np);
+		nhrp_peer_free(np);
+	} else {
+		np->next_hop_address = cie->nbma_address;
+		np->prefix_length = cie->protocol_address.addr_len * 8;
+		np->interface = iface;
+		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time) - 10;
+		nhrp_peer_reinsert(np, NHRP_PEER_TYPE_CACHED);
+	}
 
 	/* Off NBMA destination; a shortcut route */
 	peer->prefix_length = cie->hdr.prefix_length;
 	peer->next_hop_address = cie->protocol_address;
-	peer->expire_time = (ntohs(cie->hdr.holding_time) - 60) * 1000;
+	peer->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 	nhrp_address_mask(&peer->protocol_address, peer->prefix_length);
 	nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED_ROUTE);
 }
@@ -470,9 +464,86 @@ error:
 	}
 }
 
+static void nhrp_peer_check_renew_task(struct nhrp_task *task)
+{
+	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
+
+	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ||
+	    peer->flags & NHRP_PEER_FLAG_USED) {
+		nhrp_peer_resolve(peer);
+	} else {
+		peer->flags |= NHRP_PEER_FLAG_PRUNE_PENDING;
+		nhrp_task_schedule(&peer->task,
+				   (peer->expire_time - time(NULL)) * 1000,
+				   nhrp_peer_prune_task);
+	}
+}
+
+struct nhrp_peer *nhrp_peer_alloc(void)
+{
+	struct nhrp_peer *p;
+	p = calloc(1, sizeof(struct nhrp_peer));
+	p->ref_count = 1;
+	return p;
+}
+
+struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer)
+{
+	peer->ref_count++;
+	return peer;
+}
+
+int nhrp_peer_free(struct nhrp_peer *peer)
+{
+	struct nhrp_peer *p;
+
+	peer->ref_count--;
+	if (peer->ref_count > 0)
+		return FALSE;
+
+	switch (peer->type) {
+	case NHRP_PEER_TYPE_CACHED_ROUTE:
+		if (peer->flags & NHRP_PEER_FLAG_UP)
+			nhrp_peer_run_script(peer, "route-down", NULL);
+		break;
+	case NHRP_PEER_TYPE_CACHED:
+		CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
+			if (p->type != NHRP_PEER_TYPE_CACHED_ROUTE)
+				continue;
+
+			if (!(p->flags & NHRP_PEER_FLAG_UP))
+				continue;
+
+			if (nhrp_address_cmp(&p->next_hop_address,
+					     &peer->protocol_address) != 0)
+				continue;
+
+			nhrp_peer_remove(p);
+		}
+	default:
+		if (peer->flags & NHRP_PEER_FLAG_UP)
+			nhrp_peer_run_script(peer, "peer-down", NULL);
+		kernel_inject_neighbor(&peer->protocol_address,
+				       NULL, peer->interface);
+		break;
+	}
+
+
+	if (peer->script_pid) {
+		kill(SIGINT, peer->script_pid);
+		peer->script_pid = -1;
+	}
+
+	nhrp_task_cancel(&peer->task);
+
+	free(peer);
+
+	return TRUE;
+}
+
 void nhrp_peer_insert(struct nhrp_peer *ins)
 {
-	char tmp[128];
+	char tmp[NHRP_PEER_FORMAT_LEN];
 	struct nhrp_peer *peer, *nexthop;
 
 	/* First, prune all duplicates */
@@ -493,19 +564,31 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		nhrp_peer_resolve(peer);
 		break;
 	case NHRP_PEER_TYPE_CACHED:
+		nhrp_task_schedule(&peer->task,
+				   (peer->expire_time - time(NULL) - 120) * 1000,
+				   nhrp_peer_check_renew_task);
+		/* Fallthrough to bring peer up */
 	case NHRP_PEER_TYPE_DYNAMIC:
-		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_dynamic_up);
+		if (!(peer->flags & NHRP_PEER_FLAG_UP))
+			nhrp_peer_run_script(peer, "peer-up", nhrp_peer_dynamic_up);
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
 		nexthop = nhrp_peer_find(&peer->next_hop_address, 0xff, 0);
-		if (nexthop->flags & NHRP_PEER_FLAG_UP)
-			nhrp_peer_run_script(peer, "route-up", nhrp_peer_route_up);
-		nhrp_task_schedule(&peer->task, peer->expire_time,
-				   nhrp_peer_prune_task);
+		if ((nexthop->flags & NHRP_PEER_FLAG_UP) &&
+		    !(peer->flags & NHRP_PEER_FLAG_UP))
+			nhrp_peer_run_script(peer, "route-up",
+					     nhrp_peer_route_up);
+		nhrp_task_schedule(&peer->task,
+				   (peer->expire_time - time(NULL)) * 1000,
+				   nhrp_peer_check_renew_task);
 		break;
 	case NHRP_PEER_TYPE_NEGATIVE:
-		kernel_inject_neighbor(&peer->protocol_address, peer);
-		nhrp_task_schedule(&peer->task, NHRP_NEGATIVE_CACHE_TIME,
+		peer->expire_time = time(NULL) + NHRP_NEGATIVE_CACHE_TIME;
+		kernel_inject_neighbor(&peer->protocol_address,
+				       &peer->next_hop_address,
+				       peer->interface);
+		nhrp_task_schedule(&peer->task,
+				   NHRP_NEGATIVE_CACHE_TIME * 1000,
 				   nhrp_peer_prune_task);
 		break;
 	}
@@ -535,9 +618,14 @@ void nhrp_peer_set_used(struct nhrp_address *peer_address, int used)
 		if (nhrp_address_cmp(peer_address, &p->protocol_address) != 0)
 			continue;
 
-		if (used)
+		if (used) {
 			p->flags |= NHRP_PEER_FLAG_USED;
-		else
+			if (p->flags & NHRP_PEER_FLAG_PRUNE_PENDING) {
+				p->flags &= ~NHRP_PEER_FLAG_PRUNE_PENDING;
+				nhrp_task_cancel(&p->task);
+				nhrp_peer_resolve(p);
+			}
+		} else
 			p->flags &= ~NHRP_PEER_FLAG_USED;
 	}
 }
@@ -614,7 +702,7 @@ void nhrp_peer_dump_cache(void)
 {
 	struct nhrp_peer *peer;
 	int num_total = 0;
-	char tmp[64];
+	char tmp[NHRP_PEER_FORMAT_LEN];
 
 	nhrp_info("Peer cache dump:");
 	CIRCLEQ_FOREACH(peer, &peer_cache, peer_list) {

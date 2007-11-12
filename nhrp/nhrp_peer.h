@@ -11,6 +11,7 @@
 #ifndef NHRP_PEER_H
 #define NHRP_PEER_H
 
+#include <time.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <sys/queue.h>
@@ -44,7 +45,7 @@ struct nhrp_peer {
 	uint16_t afnum;
 	uint16_t protocol_type;
 	uint16_t mtu;
-	uint32_t expire_time;
+	time_t expire_time;
 	struct nhrp_address protocol_address;
 
 	/* Protocol address for NHRP_PEER_TYPE_ROUTE,
