@@ -321,7 +321,6 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 	struct ndmsg *ndm = NLMSG_DATA(msg);
 	struct rtattr *rta[NDA_MAX+1];
 	struct nhrp_address addr;
-	char tmp[64];
 
 	netlink_parse_rtattr(rta, NDA_MAX, NDA_RTA(ndm), NDA_PAYLOAD(msg));
 	if (rta[NDA_DST] == NULL)
@@ -334,17 +333,10 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 			 RTA_PAYLOAD(rta[NDA_DST]),
 			 RTA_DATA(rta[NDA_DST]));
 
-	if (ndm->ndm_state & NUD_STALE) {
-		nhrp_info("NL-ARP %s stale",
-			nhrp_address_format(&addr, sizeof(tmp), tmp));
-
+	if (ndm->ndm_state & NUD_STALE)
 		nhrp_peer_set_used(&addr, FALSE);
-	} else {
-		nhrp_info("NL-ARP %s reachable",
-			nhrp_address_format(&addr, sizeof(tmp), tmp));
-
+	else
 		nhrp_peer_set_used(&addr, TRUE);
-	}
 }
 
 static void netlink_link_update(struct nlmsghdr *msg)
