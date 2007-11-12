@@ -90,6 +90,10 @@ static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 		i += snprintf(&buf[i], len - i, " dev %s",
 			      peer->interface->name);
 	}
+	if (peer->flags & NHRP_PEER_FLAG_USED)
+		i += snprintf(&buf[i], len - i, " used");
+	if (peer->flags & NHRP_PEER_FLAG_UNIQUE)
+		i += snprintf(&buf[i], len - i, " unique");
 
 	return buf;
 }
@@ -454,6 +458,27 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 {
 	CIRCLEQ_REMOVE(&peer_cache, peer, peer_list);
 	nhrp_peer_free(peer);
+}
+
+void nhrp_peer_set_used(struct nhrp_address *peer_address, int used)
+{
+	struct nhrp_peer *p;
+
+	CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
+		if (peer_address->type != p->protocol_address.type)
+			continue;
+
+		if (p->prefix_length != peer_address->addr_len * 8)
+			continue;
+
+		if (nhrp_address_cmp(peer_address, &p->protocol_address) != 0)
+			continue;
+
+		if (used)
+			p->flags |= NHRP_PEER_FLAG_USED;
+		else
+			p->flags &= ~NHRP_PEER_FLAG_USED;
+	}
 }
 
 struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,

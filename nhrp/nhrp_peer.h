@@ -24,6 +24,9 @@
 #define NHRP_PEER_TYPE_LOCAL		0x05	/* Learned from interface config */
 #define NHRP_PEER_TYPE_STATIC		0x06	/* Static mapping from config file */
 
+#define NHRP_PEER_FLAG_USED		0x01	/* Peer is in kernel ARP table */
+#define NHRP_PEER_FLAG_UNIQUE		0x02	/* Peer is unique; see RFC2332 */
+
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
 
 struct nhrp_peer {
@@ -34,6 +37,7 @@ struct nhrp_peer {
 	pid_t script_pid;
 	void (*script_callback)(struct nhrp_peer *peer);
 
+	int flags;
 	uint8_t type;
 	uint8_t prefix_length;
 	uint16_t afnum;
@@ -55,6 +59,8 @@ int nhrp_peer_free(struct nhrp_peer *peer);
 
 void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
+
+void nhrp_peer_set_used(struct nhrp_address *peer_address, int used);
 
 #define NHRP_PEER_FIND_COMPLETE		0x01
 #define NHRP_PEER_FIND_SUBNET_MATCH	0x02
