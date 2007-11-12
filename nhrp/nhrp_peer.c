@@ -53,7 +53,7 @@ static int bitcmp(uint8_t *a, uint8_t *b, int len)
 			return r;
 	}
 	if (bits != 0) {
-		mask = 0xff >> (8 - r);
+		mask = (0xff << (8 - r)) & 0xff;
 		return ((int) (a[bytes] & mask)) - ((int) (b[bytes] & mask));
 	}
 	return 0;
