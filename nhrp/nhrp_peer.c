@@ -40,6 +40,25 @@ static void nhrp_peer_register_task(struct nhrp_task *task);
 static void nhrp_peer_register(struct nhrp_peer *peer);
 static void nhrp_peer_up(struct nhrp_peer *peer);
 
+static int bitcmp(uint8_t *a, uint8_t *b, int len)
+{
+	int bytes, bits, mask, r;
+
+	bytes = len / 8;
+	bits  = len % 8;
+
+	if (bytes != 0) {
+		r = memcmp(a, b, bytes);
+		if (r != 0)
+			return r;
+	}
+	if (bits != 0) {
+		mask = 0xff >> (8 - r);
+		return ((int) (a[bytes] & mask)) - ((int) (b[bytes] & mask));
+	}
+	return 0;
+}
+
 static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 {
 	char tmp[NHRP_PEER_FORMAT_LEN];
@@ -669,11 +688,8 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 		     p->type == NHRP_PEER_TYPE_STATIC))
 			continue;
 
-		if (memcmp(dest->addr, p->protocol_address.addr,
-			   prefix / 8) != 0)
+		if (bitcmp(dest->addr, p->protocol_address.addr, prefix) != 0)
 			continue;
-
-		/* FIXME: Check remaining bits of address */
 
 		if (found_peer != NULL &&
 		    found_peer->prefix_length > p->prefix_length)
