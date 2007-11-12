@@ -570,7 +570,7 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 			nhrp_peer_run_script(peer, "route-down", NULL);
 		break;
 	case NHRP_PEER_TYPE_CACHED:
-		for (p = CIRCLEQ_FIRST(&peer_cache); p != NULL; p = next) {
+		for (p = CIRCLEQ_FIRST(&peer_cache); p != (void*) &peer_cache; p = next) {
 			next = CIRCLEQ_NEXT(p, peer_list);
 
 			if (p->type != NHRP_PEER_TYPE_CACHED_ROUTE)
