@@ -381,7 +381,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	iface = peer->interface;
 	np = nhrp_peer_find(&cie->protocol_address,
 			    cie->protocol_address.addr_len * 8,
-			    NHRP_PEER_FIND_SUBNET_MATCH);
+			    NHRP_PEER_FIND_SUBNET);
 	if (np == NULL) {
 		np = nhrp_peer_alloc();
 		np->type = NHRP_PEER_TYPE_CACHED;
@@ -391,14 +391,14 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		np->next_hop_address = cie->nbma_address;
 		np->prefix_length = cie->protocol_address.addr_len * 8;
 		np->interface = iface;
-		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time) - 10;
+		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 		nhrp_peer_insert(np);
 		nhrp_peer_free(np);
 	} else {
 		np->next_hop_address = cie->nbma_address;
 		np->prefix_length = cie->protocol_address.addr_len * 8;
 		np->interface = iface;
-		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time) - 10;
+		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 		nhrp_peer_reinsert(np, NHRP_PEER_TYPE_CACHED);
 	}
 
@@ -549,7 +549,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 	/* First, prune all duplicates */
 	while ((peer = nhrp_peer_find(&ins->protocol_address,
 				      ins->prefix_length,
-				      NHRP_PEER_FIND_SUBNET_MATCH |
+				      NHRP_PEER_FIND_SUBNET |
 				      NHRP_PEER_FIND_REMOVABLE)) != NULL)
 		nhrp_peer_remove(peer);
 
@@ -573,7 +573,8 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 			nhrp_peer_run_script(peer, "peer-up", nhrp_peer_dynamic_up);
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
-		nexthop = nhrp_peer_find(&peer->next_hop_address, 0xff, 0);
+		nexthop = nhrp_peer_find(&peer->next_hop_address, 0xff,
+					 NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_NEXTHOP);
 		if ((nexthop->flags & NHRP_PEER_FLAG_UP) &&
 		    !(peer->flags & NHRP_PEER_FLAG_UP))
 			nhrp_peer_run_script(peer, "route-up",
@@ -644,15 +645,20 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 		if (dest->type != p->protocol_address.type)
 			continue;
 
-		if (flags & NHRP_PEER_FIND_SUBNET_MATCH) {
+		if (flags & NHRP_PEER_FIND_SUBNET) {
 			if (min_prefix > p->prefix_length)
 				continue;
 			prefix = min_prefix;
-		} else {
+		} else if (flags & NHRP_PEER_FIND_ROUTE) {
 			if (min_prefix < p->prefix_length)
 				continue;
 			prefix = p->prefix_length;
-		}
+		} else if (flags & NHRP_PEER_FIND_EXACT) {
+			if (min_prefix != p->prefix_length)
+				continue;
+			prefix = min_prefix;
+		} else
+			return NULL;
 
 		if ((flags & NHRP_PEER_FIND_COMPLETE) &&
 		     (p->type == NHRP_PEER_TYPE_INCOMPLETE))

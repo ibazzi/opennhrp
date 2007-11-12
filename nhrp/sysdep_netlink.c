@@ -309,7 +309,9 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 	nhrp_info("NL-ARP who-has %s",
 		nhrp_address_format(&addr, sizeof(tmp), tmp));
 
-	peer = nhrp_peer_find(&addr, 0xff, NHRP_PEER_FIND_COMPLETE);
+	peer = nhrp_peer_find(&addr, 0xff,
+			      NHRP_PEER_FIND_ROUTE |
+			      NHRP_PEER_FIND_COMPLETE);
 	if (peer == NULL)
 		return;
 

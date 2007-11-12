@@ -64,10 +64,12 @@ void nhrp_peer_remove(struct nhrp_peer *peer);
 
 void nhrp_peer_set_used(struct nhrp_address *peer_address, int used);
 
-#define NHRP_PEER_FIND_COMPLETE		0x01
-#define NHRP_PEER_FIND_SUBNET_MATCH	0x02
-#define NHRP_PEER_FIND_NEXTHOP		0x04
-#define NHRP_PEER_FIND_REMOVABLE	0x08
+#define NHRP_PEER_FIND_ROUTE		0x01
+#define NHRP_PEER_FIND_EXACT		0x02
+#define NHRP_PEER_FIND_SUBNET		0x04
+#define NHRP_PEER_FIND_COMPLETE		0x08
+#define NHRP_PEER_FIND_NEXTHOP		0x10
+#define NHRP_PEER_FIND_REMOVABLE	0x20
 
 struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 				 int prefix_length, int flags);
