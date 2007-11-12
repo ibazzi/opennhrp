@@ -26,6 +26,7 @@
 
 #define NHRP_PEER_FLAG_USED		0x01	/* Peer is in kernel ARP table */
 #define NHRP_PEER_FLAG_UNIQUE		0x02	/* Peer is unique; see RFC2332 */
+#define NHRP_PEER_FLAG_UP		0x04	/* Peer up script has been run */
 
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
 
@@ -35,7 +36,7 @@ struct nhrp_peer {
 	struct nhrp_task task;
 	struct nhrp_interface *interface;
 	pid_t script_pid;
-	void (*script_callback)(struct nhrp_peer *peer);
+	void (*script_callback)(struct nhrp_peer *peer, int status);
 
 	int flags;
 	uint8_t type;
@@ -51,7 +52,7 @@ struct nhrp_peer {
 	struct nhrp_address next_hop_address;
 };
 
-void nhrp_peer_reap_pid(pid_t pid);
+void nhrp_peer_reap_pid(pid_t pid, int status);
 
 struct nhrp_peer *nhrp_peer_alloc(void);
 struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer);
