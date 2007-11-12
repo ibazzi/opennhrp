@@ -62,6 +62,8 @@ void nhrp_task_schedule(struct nhrp_task *task, int timeout, void (*callback)(st
 {
 	struct nhrp_task *after = NULL, *next;
 
+	nhrp_task_cancel(task);
+
 	gettimeofday(&task->execute_time, NULL);
 	task->callback = callback;
 	task->execute_time.tv_usec += (timeout % 1000) * 1000;
