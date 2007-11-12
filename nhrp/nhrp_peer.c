@@ -20,6 +20,7 @@
 
 #define NHRP_PEER_FORMAT_LEN		80
 #define NHRP_NEGATIVE_CACHE_TIME	(3*60)
+#define NHRP_RENEW_TIME			(2*60)
 
 #define NHRP_PEER_FLAG_PRUNE_PENDING	0x00010000
 
@@ -264,7 +265,8 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	}
 
 	/* Re-register after holding time expires */
-	nhrp_task_schedule(&peer->task, (NHRP_HOLDING_TIME - 120) * 1000,
+	nhrp_task_schedule(&peer->task,
+			   (NHRP_HOLDING_TIME - NHRP_RENEW_TIME) * 1000,
 			   nhrp_peer_register_task);
 
 	/* We are done */
@@ -483,19 +485,61 @@ error:
 	}
 }
 
+static void nhrp_peer_renew(struct nhrp_peer *peer)
+{
+	struct nhrp_peer *p;
+	int num_routes = 0;
+
+	/* Renew the cached information: all related routes
+	 * or the peer itself */
+	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE) {
+		CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
+			if (p->type != NHRP_PEER_TYPE_CACHED_ROUTE)
+				continue;
+
+			if (!(p->flags & NHRP_PEER_FLAG_UP))
+				continue;
+
+			if (nhrp_address_cmp(&p->next_hop_address,
+					     &peer->protocol_address) != 0)
+				continue;
+
+			if (p->flags & NHRP_PEER_FLAG_PRUNE_PENDING) {
+				p->flags &= ~NHRP_PEER_FLAG_PRUNE_PENDING;
+				nhrp_task_cancel(&p->task);
+				nhrp_peer_resolve(p);
+				num_routes++;
+			}
+		}
+	}
+
+	if (peer->flags & NHRP_PEER_FLAG_PRUNE_PENDING) {
+		peer->flags &= ~NHRP_PEER_FLAG_PRUNE_PENDING;
+		nhrp_task_cancel(&peer->task);
+
+		if (num_routes == 0)
+			nhrp_peer_resolve(peer);
+	}
+}
+
 static void nhrp_peer_check_renew_task(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
+	struct nhrp_peer *nexthop;
 
-	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ||
-	    peer->flags & NHRP_PEER_FLAG_USED) {
-		nhrp_peer_resolve(peer);
-	} else {
-		peer->flags |= NHRP_PEER_FLAG_PRUNE_PENDING;
-		nhrp_task_schedule(&peer->task,
-				   (peer->expire_time - time(NULL)) * 1000,
-				   nhrp_peer_prune_task);
-	}
+	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE)
+		nexthop = nhrp_peer_find(&peer->next_hop_address, 0xff,
+					 NHRP_PEER_FIND_ROUTE);
+	else
+		nexthop = peer;
+
+	peer->flags |= NHRP_PEER_FLAG_PRUNE_PENDING;
+	nhrp_task_schedule(&peer->task,
+			   (peer->expire_time - time(NULL)) * 1000,
+			   nhrp_peer_prune_task);
+
+	if (nexthop->flags & NHRP_PEER_FLAG_USED)
+		nhrp_peer_renew(peer);
 }
 
 struct nhrp_peer *nhrp_peer_alloc(void)
@@ -514,7 +558,7 @@ struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer)
 
 int nhrp_peer_free(struct nhrp_peer *peer)
 {
-	struct nhrp_peer *p;
+	struct nhrp_peer *p, *next;
 
 	peer->ref_count--;
 	if (peer->ref_count > 0)
@@ -526,7 +570,9 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 			nhrp_peer_run_script(peer, "route-down", NULL);
 		break;
 	case NHRP_PEER_TYPE_CACHED:
-		CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
+		for (p = CIRCLEQ_FIRST(&peer_cache); p != NULL; p = next) {
+			next = CIRCLEQ_NEXT(p, peer_list);
+
 			if (p->type != NHRP_PEER_TYPE_CACHED_ROUTE)
 				continue;
 
@@ -584,7 +630,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		break;
 	case NHRP_PEER_TYPE_CACHED:
 		nhrp_task_schedule(&peer->task,
-				   (peer->expire_time - time(NULL) - 120) * 1000,
+				   (peer->expire_time - time(NULL) - NHRP_RENEW_TIME) * 1000,
 				   nhrp_peer_check_renew_task);
 		/* Fallthrough to bring peer up */
 	case NHRP_PEER_TYPE_DYNAMIC:
@@ -599,7 +645,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 			nhrp_peer_run_script(peer, "route-up",
 					     nhrp_peer_route_up);
 		nhrp_task_schedule(&peer->task,
-				   (peer->expire_time - time(NULL)) * 1000,
+				   (peer->expire_time - time(NULL) - NHRP_RENEW_TIME - 1) * 1000,
 				   nhrp_peer_check_renew_task);
 		break;
 	case NHRP_PEER_TYPE_NEGATIVE:
@@ -640,11 +686,7 @@ void nhrp_peer_set_used(struct nhrp_address *peer_address, int used)
 
 		if (used) {
 			p->flags |= NHRP_PEER_FLAG_USED;
-			if (p->flags & NHRP_PEER_FLAG_PRUNE_PENDING) {
-				p->flags &= ~NHRP_PEER_FLAG_PRUNE_PENDING;
-				nhrp_task_cancel(&p->task);
-				nhrp_peer_resolve(p);
-			}
+			nhrp_peer_renew(p);
 		} else
 			p->flags &= ~NHRP_PEER_FLAG_USED;
 	}
