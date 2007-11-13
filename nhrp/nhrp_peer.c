@@ -355,7 +355,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 {
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx, *np;
 	struct nhrp_payload *payload;
-	struct nhrp_cie *cie;
+	struct nhrp_cie *cie, *natcie;
 	struct nhrp_interface *iface;
 	char dst[64], tmp[64], nbma[64];
 
@@ -387,11 +387,25 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		  nhrp_address_format(&cie->nbma_address,
 				      sizeof(nbma), nbma));
 
+	payload = nhrp_packet_extension(reply, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE);
+	if ((reply->hdr.flags & NHRP_FLAG_RESOLUTION_NAT) &&
+	    (payload != NULL)) {
+		natcie = TAILQ_FIRST(&payload->u.cie_list_head);
+		if (natcie != NULL) {
+			nhrp_info("NAT detected: really at proto %s nbma %s",
+				nhrp_address_format(&natcie->protocol_address,
+					sizeof(tmp), tmp),
+				nhrp_address_format(&natcie->nbma_address,
+					sizeof(nbma), nbma));
+		}
+	}
+	if (natcie == NULL)
+		natcie = cie;
 
 	if (nhrp_address_cmp(&peer->protocol_address, &cie->protocol_address) == 0) {
 		/* Destination is within NBMA network; update cache */
 		peer->prefix_length = cie->hdr.prefix_length;
-		peer->next_hop_address = cie->nbma_address;
+		peer->next_hop_address = natcie->nbma_address;
 		peer->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 		nhrp_address_mask(&peer->protocol_address, peer->prefix_length);
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED);
@@ -409,14 +423,14 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		np->afnum = reply->hdr.afnum;
 		np->protocol_type = reply->hdr.protocol_type;
 		np->protocol_address = cie->protocol_address;
-		np->next_hop_address = cie->nbma_address;
+		np->next_hop_address = natcie->nbma_address;
 		np->prefix_length = cie->protocol_address.addr_len * 8;
 		np->interface = iface;
 		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 		nhrp_peer_insert(np);
 		nhrp_peer_free(np);
 	} else {
-		np->next_hop_address = cie->nbma_address;
+		np->next_hop_address = natcie->nbma_address;
 		np->prefix_length = cie->protocol_address.addr_len * 8;
 		np->interface = iface;
 		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
