@@ -669,7 +669,7 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor,
 	netlink_add_rtattr_l(&req.n, sizeof(req), NDA_DST,
 			     neighbor->addr, neighbor->addr_len);
 
-	if (hwaddr != NULL) {
+	if (hwaddr != NULL && hwaddr->type != AF_UNSPEC) {
 		req.ndm.ndm_state = NUD_REACHABLE;
 
 		netlink_add_rtattr_l(&req.n, sizeof(req), NDA_LLADDR,
