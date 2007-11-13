@@ -21,6 +21,7 @@
 #define NHRP_PEER_FORMAT_LEN		80
 #define NHRP_NEGATIVE_CACHE_TIME	(3*60)
 #define NHRP_RENEW_TIME			(2*60)
+#define NHRP_RETRY_REGISTER_TIME	(60)
 
 #define NHRP_PEER_FLAG_PRUNE_PENDING	0x00010000
 
@@ -245,7 +246,8 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 		nhrp_info("Failed to register to %s",
 			  nhrp_address_format(&peer->protocol_address,
 					      sizeof(tmp), tmp));
-		nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register_task);
+		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME,
+				   nhrp_peer_register_task);
 		return;
 	}
 
@@ -347,7 +349,8 @@ error:
 	if (!sent) {
 		nhrp_packet_free(packet);
 		/* Try again later */
-		nhrp_task_schedule(&peer->task, 10000, nhrp_peer_register_task);
+		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME,
+				   nhrp_peer_register_task);
 	}
 }
 

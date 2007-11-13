@@ -61,6 +61,7 @@ struct nhrp_packet {
 	struct nhrp_task		timeout;
 	void				(*handler)(void *ctx, struct nhrp_packet *packet);
 	void *				handler_ctx;
+	int				retry;
 
 	uint8_t *			req_pdu;
 	size_t				req_pdulen;

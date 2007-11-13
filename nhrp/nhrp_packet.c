@@ -1045,13 +1045,28 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	return TRUE;
 }
 
+static int nhrp_packet_do_send(struct nhrp_packet *packet)
+{
+	uint8_t pdu[MAX_PDU_SIZE];
+	char tmp[64];
+	int size;
+
+	nhrp_info("Sending packet %d to nbma %s",
+		packet->hdr.type,
+		nhrp_address_format(&packet->dst_peer->next_hop_address, sizeof(tmp), tmp));
+
+	size = marshall_packet(pdu, sizeof(pdu), packet);
+	if (size < 0)
+		return FALSE;
+
+	return kernel_send(pdu, size, packet->dst_iface,
+			   &packet->dst_peer->next_hop_address);
+}
+
 int nhrp_packet_send(struct nhrp_packet *packet)
 {
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
-	uint8_t pdu[MAX_PDU_SIZE];
-	char tmp[64];
-	int size;
 
 	if (packet->dst_peer == NULL ||
 	    packet->dst_iface == NULL ||
@@ -1113,30 +1128,29 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 		}
 	}
 
-	nhrp_info("Sending packet %d to nbma %s",
-		packet->hdr.type,
-		nhrp_address_format(&packet->dst_peer->next_hop_address, sizeof(tmp), tmp));
-
-	size = marshall_packet(pdu, sizeof(pdu), packet);
-	if (size < 0)
-		return FALSE;
-
-	return kernel_send(pdu, size, packet->dst_iface,
-			   &packet->dst_peer->next_hop_address);
+	return nhrp_packet_do_send(packet);
 }
 
 static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
 {
         struct nhrp_packet *packet = container_of(task, struct nhrp_packet, timeout);
 
-	packet->handler(packet->handler_ctx, NULL);
-	nhrp_packet_free(packet);
+	if (++packet->retry < 3) {
+		nhrp_packet_do_send(packet);
+
+		TAILQ_INSERT_TAIL(&pending_requests, packet, request_list_entry);
+		nhrp_task_schedule(&packet->timeout, 5000, nhrp_packet_xmit_timeout);
+	} else {
+		packet->handler(packet->handler_ctx, NULL);
+		nhrp_packet_free(packet);
+	}
 }
 
 int nhrp_packet_send_request(struct nhrp_packet *packet,
 			     void (*handler)(void *ctx, struct nhrp_packet *packet),
 			     void *ctx)
 {
+	packet->retry = 0;
 	packet->hdr.u.request_id = htonl(request_id++);
 
 	if (!nhrp_packet_send(packet))
