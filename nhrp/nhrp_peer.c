@@ -496,6 +496,13 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 		  nhrp_address_format(&peer->protocol_address,
 				      sizeof(dst), dst));
 
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_FORWARD_TRANSIT_NHS | NHRP_EXTENSION_FLAG_COMPULSORY);
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_REVERSE_TRANSIT_NHS | NHRP_EXTENSION_FLAG_COMPULSORY);
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_RESPONDER_ADDRESS | NHRP_EXTENSION_FLAG_COMPULSORY);
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+
 	sent = nhrp_packet_send_request(packet,
 					nhrp_peer_handle_resolution_reply,
 					nhrp_peer_dup(peer));
@@ -722,6 +729,8 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 	int prefix;
 
 	if (min_prefix == 0xff)
+		min_prefix = dest->addr_len * 8;
+	if (min_prefix == 0 && (flags & NHRP_PEER_FIND_EXACT))
 		min_prefix = dest->addr_len * 8;
 
 	CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
