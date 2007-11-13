@@ -725,7 +725,8 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 		min_prefix = dest->addr_len * 8;
 
 	CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
-		if (dest->type != p->protocol_address.type)
+		if (dest != NULL &&
+		    dest->type != p->protocol_address.type)
 			continue;
 
 		if (flags & NHRP_PEER_FIND_SUBNET) {
@@ -752,7 +753,8 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 		     p->type == NHRP_PEER_TYPE_STATIC))
 			continue;
 
-		if (bitcmp(dest->addr, p->protocol_address.addr, prefix) != 0)
+		if (dest != NULL &&
+		    bitcmp(dest->addr, p->protocol_address.addr, prefix) != 0)
 			continue;
 
 		if (found_peer != NULL &&

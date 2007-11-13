@@ -23,6 +23,7 @@ static void signal_handler(int sig)
 
 static void reap_children(void *ctx, int fd, short events)
 {
+	struct nhrp_peer *peer;
 	pid_t pid;
 	int status, sig;
 
@@ -42,6 +43,10 @@ static void reap_children(void *ctx, int fd, short events)
 	case SIGTERM:
 		nhrp_task_stop();
 		break;
+	case SIGHUP:
+		while ((peer = nhrp_peer_find(NULL, 0, NHRP_PEER_FIND_SUBNET | NHRP_PEER_FIND_REMOVABLE)) != NULL)
+			nhrp_peer_remove(peer);
+		break;
 	}
 }
 
@@ -51,6 +56,7 @@ int signal_init(void)
 
 	signal(SIGCHLD, signal_handler);
 	signal(SIGUSR1, signal_handler);
+	signal(SIGHUP, signal_handler);
 	signal(SIGINT, signal_handler);
 	signal(SIGTERM, signal_handler);
 
