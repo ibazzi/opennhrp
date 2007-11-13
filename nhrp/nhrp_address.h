@@ -15,6 +15,8 @@
 
 #define NHRP_MAX_ADDRESS_LEN            6
 
+struct nhrp_cie_list_head;
+
 struct nhrp_address {
 	uint16_t type;
 	uint8_t addr_len;
@@ -35,5 +37,9 @@ int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b);
 void nhrp_address_mask(struct nhrp_address *addr, int prefix);
 const char *nhrp_address_format(struct nhrp_address *addr,
 				size_t buflen, char *buffer);
+
+int nhrp_address_match_cie_list(struct nhrp_address *nbma_address,
+				struct nhrp_address *protocol_address,
+				struct nhrp_cie_list_head *cie_list);
 
 #endif

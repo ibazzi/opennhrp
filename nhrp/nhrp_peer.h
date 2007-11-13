@@ -71,8 +71,16 @@ void nhrp_peer_set_used(struct nhrp_address *peer_address, int used);
 #define NHRP_PEER_FIND_NEXTHOP		0x10
 #define NHRP_PEER_FIND_REMOVABLE	0x20
 
-struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
-				 int prefix_length, int flags);
+struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
+				      int prefix_length, int flags,
+				      struct nhrp_cie_list_head *cielist);
+
+static inline struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
+					      int prefix_length, int flags)
+{
+	return nhrp_peer_find_full(dest, prefix_length, flags, NULL);
+}
+
 void nhrp_peer_dump_cache(void);
 
 #endif

@@ -14,6 +14,7 @@
 
 #include "afnum.h"
 #include "nhrp_address.h"
+#include "nhrp_packet.h"
 
 uint16_t nhrp_protocol_from_pf(uint16_t pf)
 {
@@ -138,5 +139,20 @@ const char *nhrp_address_format(struct nhrp_address *addr,
 	}
 
 	return buffer;
+}
+
+int nhrp_address_match_cie_list(struct nhrp_address *nbma_address,
+				struct nhrp_address *protocol_address,
+				struct nhrp_cie_list_head *cie_list)
+{
+	struct nhrp_cie *cie;
+
+	TAILQ_FOREACH(cie, cie_list, cie_list_entry) {
+		if (nhrp_address_cmp(&cie->nbma_address, nbma_address) == 0 &&
+		    nhrp_address_cmp(&cie->protocol_address, protocol_address) == 0)
+			return TRUE;
+	}
+
+	return FALSE;
 }
 

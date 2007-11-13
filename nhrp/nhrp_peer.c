@@ -721,8 +721,9 @@ void nhrp_peer_set_used(struct nhrp_address *peer_address, int used)
 	}
 }
 
-struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
-				 int min_prefix, int flags)
+struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
+				      int min_prefix, int flags,
+				      struct nhrp_cie_list_head *cielist)
 {
 	struct nhrp_peer *found_peer = NULL;
 	struct nhrp_peer *p;
@@ -760,6 +761,13 @@ struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 		if ((flags & NHRP_PEER_FIND_REMOVABLE) &&
 		    (p->type == NHRP_PEER_TYPE_LOCAL ||
 		     p->type == NHRP_PEER_TYPE_STATIC))
+			continue;
+
+		if (p->type != NHRP_PEER_TYPE_CACHED_ROUTE &&
+		    cielist != NULL &&
+		    nhrp_address_match_cie_list(&p->next_hop_address,
+						&p->protocol_address,
+						cielist))
 			continue;
 
 		if (dest != NULL &&
