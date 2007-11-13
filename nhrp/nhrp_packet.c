@@ -295,6 +295,46 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	return nhrp_packet_send(packet);
 }
 
+static int nhrp_handle_purge_request(struct nhrp_packet *packet)
+{
+	char tmp[64], tmp2[64];
+	struct nhrp_payload *payload;
+	struct nhrp_cie *cie;
+	struct nhrp_peer *p;
+	int ret;
+
+	nhrp_info("Received Purge Request from proto src %s to %s",
+		nhrp_address_format(&packet->src_protocol_address,
+			sizeof(tmp), tmp),
+		nhrp_address_format(&packet->dst_protocol_address,
+			sizeof(tmp2), tmp2));
+
+	if (packet->hdr.flags & NHRP_FLAG_PURGE_NO_REPLY)
+		return TRUE;
+
+	packet->hdr.type = NHRP_PACKET_PURGE_REPLY;
+	packet->hdr.flags = 0;
+	packet->hdr.hop_count = 0;
+	ret = nhrp_packet_send(packet);
+
+	payload = nhrp_packet_payload(packet);
+	TAILQ_FOREACH(cie, &payload->u.cie_list_head, cie_list_entry) {
+		nhrp_info("Purge proto %s/%d nbma %s",
+			nhrp_address_format(&cie->protocol_address,
+					    sizeof(tmp), tmp),
+			cie->hdr.prefix_length,
+			nhrp_address_format(&cie->nbma_address,
+					    sizeof(tmp), tmp));
+
+		while ((p = nhrp_peer_find(&cie->protocol_address,
+					   cie->hdr.prefix_length,
+					   NHRP_PEER_FIND_EXACT | NHRP_PEER_FIND_REMOVABLE)) != NULL)
+			nhrp_peer_remove(p);
+	}
+
+	return ret;
+}
+
 static int nhrp_handle_error_indication(struct nhrp_packet *error_packet)
 {
 	struct nhrp_packet *packet, *req;
@@ -416,6 +456,7 @@ static struct {
 	[NHRP_PACKET_PURGE_REQUEST] = {
 		.type = NHRP_TYPE_REQUEST,
 		.payload_type = NHRP_PAYLOAD_TYPE_CIE_LIST,
+		.handler = nhrp_handle_purge_request,
 	},
 	[NHRP_PACKET_PURGE_REPLY] = {
 		.type = NHRP_TYPE_REPLY,
@@ -1056,7 +1097,7 @@ int nhrp_packet_send_request(struct nhrp_packet *packet,
 			     void (*handler)(void *ctx, struct nhrp_packet *packet),
 			     void *ctx)
 {
-	packet->hdr.u.request_id = request_id++;
+	packet->hdr.u.request_id = htonl(request_id++);
 
 	if (!nhrp_packet_send(packet))
 		return FALSE;
