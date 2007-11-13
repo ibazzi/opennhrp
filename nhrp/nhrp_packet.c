@@ -252,7 +252,8 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 			sizeof(tmp2), tmp2));
 
 	packet->hdr.type = NHRP_PACKET_REGISTRATION_REPLY;
-	packet->hdr.flags &= NHRP_FLAG_REGISTRATION_UNIQUE;
+	packet->hdr.flags &= NHRP_FLAG_REGISTRATION_UNIQUE |
+			     NHRP_FLAG_REGISTRATION_NAT;
 	packet->hdr.hop_count = 0;
 
 	payload = nhrp_packet_payload(packet);
@@ -290,6 +291,26 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		nhrp_peer_free(peer);
 
 		cie->hdr.code = NHRP_CODE_SUCCESS;
+	}
+
+	/* Cisco NAT extension, CIE added IF all of the following is true:
+	 * 1. We are the first hop registration server
+	 *    (=no entries in forward transit CIE list)
+	 * 2. NAT is detected (link layer address != announced address)
+	 * 3. NAT extension is requested */
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_FORWARD_TRANSIT_NHS | NHRP_EXTENSION_FLAG_NOCREATE);
+	if (payload != NULL && TAILQ_EMPTY(&payload->u.cie_list_head) &&
+	    nhrp_address_cmp(&packet->src_nbma_address, &packet->src_linklayer_address) != 0) {
+		payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE);
+		if (payload != NULL) {
+			nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+			cie = nhrp_cie_alloc();
+			if (cie != NULL) {
+				cie->nbma_address = packet->src_linklayer_address;
+				cie->protocol_address = packet->src_protocol_address;
+				nhrp_payload_add_cie(payload, cie);
+			}
+		}
 	}
 
 	return nhrp_packet_send(packet);
