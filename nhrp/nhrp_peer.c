@@ -362,9 +362,17 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	if (nhrp_peer_free(peer))
 		return;
 
-	if (reply == NULL ||
-	    reply->hdr.type != NHRP_PACKET_RESOLUTION_REPLY) {
-		nhrp_info("Failed to resolve %s",
+	if (reply == NULL) {
+		nhrp_info("Timeout resolving %s",
+			  nhrp_address_format(&peer->protocol_address,
+				  	      sizeof(dst), dst));
+
+		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
+		return;
+	}
+	if (reply->hdr.type != NHRP_PACKET_RESOLUTION_REPLY) {
+		nhrp_info("Error indication (code %d) for Resolution Request %s",
+			  reply->hdr.u.error.code,
 			  nhrp_address_format(&peer->protocol_address,
 				  	      sizeof(dst), dst));
 
