@@ -301,7 +301,7 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
 	struct nhrp_peer *p;
-	int ret;
+	int ret = TRUE;
 
 	nhrp_info("Received Purge Request from proto src %s to %s",
 		nhrp_address_format(&packet->src_protocol_address,
@@ -309,13 +309,12 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 		nhrp_address_format(&packet->dst_protocol_address,
 			sizeof(tmp2), tmp2));
 
-	if (packet->hdr.flags & NHRP_FLAG_PURGE_NO_REPLY)
-		return TRUE;
-
 	packet->hdr.type = NHRP_PACKET_PURGE_REPLY;
 	packet->hdr.flags = 0;
 	packet->hdr.hop_count = 0;
-	ret = nhrp_packet_send(packet);
+
+	if (!(packet->hdr.flags & NHRP_FLAG_PURGE_NO_REPLY))
+		ret = nhrp_packet_send(packet);
 
 	payload = nhrp_packet_payload(packet);
 	TAILQ_FOREACH(cie, &payload->u.cie_list_head, cie_list_entry) {
