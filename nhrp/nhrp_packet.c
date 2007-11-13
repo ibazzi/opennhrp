@@ -284,13 +284,21 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 
 		while ((p = nhrp_peer_find(&peer->protocol_address,
 					   peer->prefix_length,
-					   NHRP_PEER_FIND_SUBNET)) != NULL)
+					   NHRP_PEER_FIND_SUBNET |
+					   NHRP_PEER_FIND_REMOVABLE)) != NULL)
 			nhrp_peer_remove(p);
 
-		nhrp_peer_insert(peer);
+		p = nhrp_peer_find(&peer->protocol_address,
+				   peer->prefix_length,
+				   NHRP_PEER_FIND_SUBNET);
+		if (p == NULL) {
+			cie->hdr.code = NHRP_CODE_SUCCESS;
+			nhrp_peer_insert(peer);
+		} else {
+			/* Static binding already exists */
+			cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
+		}
 		nhrp_peer_free(peer);
-
-		cie->hdr.code = NHRP_CODE_SUCCESS;
 	}
 
 	/* Cisco NAT extension, CIE added IF all of the following is true:
@@ -348,7 +356,8 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 
 		while ((p = nhrp_peer_find(&cie->protocol_address,
 					   cie->hdr.prefix_length,
-					   NHRP_PEER_FIND_EXACT | NHRP_PEER_FIND_REMOVABLE)) != NULL)
+					   NHRP_PEER_FIND_EXACT |
+					   NHRP_PEER_FIND_REMOVABLE)) != NULL)
 			nhrp_peer_remove(p);
 	}
 

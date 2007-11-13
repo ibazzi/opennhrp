@@ -44,7 +44,9 @@ static void reap_children(void *ctx, int fd, short events)
 		nhrp_task_stop();
 		break;
 	case SIGHUP:
-		while ((peer = nhrp_peer_find(NULL, 0, NHRP_PEER_FIND_SUBNET | NHRP_PEER_FIND_REMOVABLE)) != NULL)
+		while ((peer = nhrp_peer_find(NULL, 0,
+					      NHRP_PEER_FIND_SUBNET |
+					      NHRP_PEER_FIND_REMOVABLE)) != NULL)
 			nhrp_peer_remove(peer);
 		break;
 	}
