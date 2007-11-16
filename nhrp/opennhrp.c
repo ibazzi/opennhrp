@@ -171,7 +171,7 @@ int main(int argc, char **argv)
 		return 1;
 	if (!signal_init())
 		return 2;
-	if (!load_config("../nhrp.conf"))
+	if (!load_config("/etc/opennhrp/opennhrp.conf"))
 		return 3;
 	if (!kernel_init())
 		return 4;

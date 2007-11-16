@@ -132,7 +132,7 @@ static char *env(const char *key, const char *value)
 
 static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)(struct nhrp_peer *, int))
 {
-	char *argv[] = { "./peer-updown", action, NULL };
+	char *argv[] = { "opennhrp-script", action, NULL };
 	char *envp[32];
 	char tmp[64];
 	pid_t pid;
@@ -168,7 +168,7 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 
 	envp[i++] = NULL;
 
-	execve("peer-updown", argv, envp);
+	execve("/etc/opennhrp/opennhrp-script", argv, envp);
 	exit(1);
 }
 
