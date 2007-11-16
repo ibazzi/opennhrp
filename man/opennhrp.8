@@ -30,14 +30,14 @@ address extension and shortcut switching enhancements support.
 Use
 .I config\-file
 instead of
-.I /etc/opennhrp.conf
+.I /etc/opennhrp/opennhrp.conf
 for configuration.
 
 .IP "\fB\-s \fIscript\-file"
 Execute
 .I script\-file
 instead of
-.I /etc/opennhrp\-script
+.I /etc/opennhrp/opennhrp\-script
 on important events.
 
 .SH SIGNALS
@@ -47,14 +47,14 @@ Forget all cached information about other system addresses.
 Dump NHRP peer database to system log.
 
 .SH FILES
-.I /etc/opennhrp.conf
+.I /etc/opennhrp/opennhrp.conf
 .RS
 The system wide configuration file. See
 .BR opennhrp.conf (5)
 for further details.
 .RE
 
-.I /etc/opennhrp\-script
+.I /etc/opennhrp/opennhrp\-script
 .RS
 Script executed by
 .B opennhrp
