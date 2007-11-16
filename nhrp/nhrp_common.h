@@ -22,6 +22,8 @@ struct nhrp_interface;
 struct nhrp_address;
 struct nhrp_peer;
 
+extern const char *nhrp_config_file, *nhrp_script_file;
+
 /* Mainloop and timed tasks */
 struct nhrp_task {
 	LIST_ENTRY(nhrp_task) task_list;

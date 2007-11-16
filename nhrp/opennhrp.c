@@ -18,6 +18,9 @@
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
 
+const char *nhrp_config_file = "/etc/opennhrp/opennhrp.conf";
+const char *nhrp_script_file = "/etc/opennhrp/opennhrp-script";
+
 void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes)
 {
 	int i, j;
@@ -165,13 +168,39 @@ static int load_config(const char *config_file)
 	return TRUE;
 }
 
+int usage(const char *prog)
+{
+	fprintf(stderr, "usage: %s [-c config-file] [-s script-file]\n", prog);
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
+	int i;
+
+	for (i = 1; i < argc; i++) {
+		if (strlen(argv[i]) != 2 || argv[i][0] != '-')
+			return usage(argv[0]);
+
+		switch (argv[i][1]) {
+		case 'c':
+			if (++i >= argc)
+				return usage(argv[0]);
+			nhrp_config_file = argv[i];
+			break;
+		case 's':
+			if (++i >= argc)
+				return usage(argv[0]);
+			nhrp_script_file = argv[i];
+			break;
+		}
+	}
+
 	if (!log_init())
 		return 1;
 	if (!signal_init())
 		return 2;
-	if (!load_config("/etc/opennhrp/opennhrp.conf"))
+	if (!load_config(nhrp_config_file))
 		return 3;
 	if (!kernel_init())
 		return 4;
