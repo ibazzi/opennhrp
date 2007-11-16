@@ -193,6 +193,8 @@ int main(int argc, char **argv)
 				return usage(argv[0]);
 			nhrp_script_file = argv[i];
 			break;
+		default:
+			return usage(argv[0]);
 		}
 	}
 
