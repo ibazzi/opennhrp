@@ -1,0 +1,86 @@
+.TH OPENNHRP 8 "16 November 2007" "" "OpenNHRP Documentation"
+
+.SH NAME
+opennhrp \- daemon to resolve next hop address in NBMA network
+
+.SH SYNOPSIS
+.B opennhrp
+.BI "[ \-c " config\-file " ]"
+.BI "[ \-s " script\-file " ]"
+
+.SH DESCRIPTION
+.B opennhrp
+implements the Next Hop Resolution Protocol (NHRP) which is used to
+improve the efficiency of routing computer network traffic over
+Non-Broadcast, Multiple Access (NBMA) Networks.
+.PP
+NHRP provides an ARP-like solution that allows a system to dynamically
+learn the NBMA address of the other systems that are part of that network,
+allowing these systems to directly communicate without requiring traffic
+to use an intermediate hop.
+.PP
+.B opennhrp
+implementation is based on RFC2332, but contains some modifications and
+extensions to be compatible with Cisco NHRP/DMVPN implementation.
+Modifications have been made for authentication extension, Cisco NAT
+address extension and shortcut switching enhancements support.
+
+.SH OPTIONS
+.IP "\fB\-c \fIconfig\-file"
+Use
+.I config\-file
+instead of
+.I /etc/opennhrp.conf
+for configuration.
+
+.IP "\fB\-s \fIscript\-file"
+Execute
+.I script\-file
+instead of
+.I /etc/opennhrp\-script
+on important events.
+
+.SH SIGNALS
+.IP \fBSIGHUP
+Forget all cached information about other system addresses.
+.IP \fBSIGUSR1
+Dump NHRP peer database to system log.
+
+.SH FILES
+.I /etc/opennhrp.conf
+.RS
+The system wide configuration file. See
+.BR opennhrp.conf (5)
+for further details.
+.RE
+
+.I /etc/opennhrp\-script
+
+.RS
+Script executed by
+.B opennhrp
+on important events. See
+.BR opennhrp\-script (8)
+for more information how the script is executed.
+.RE
+
+.SH BUGS
+Currently only IPv4 over IPv4 networks using NBMA GRE tunnels is
+supported (you need Linux kernel 2.6.24-rc2 or later).
+
+Please send bug reports to OpenNHRP issue tracker in SourceForge.
+
+.SH "SEE ALSO"
+.BR opennhrp.conf (5),
+.BR opennhrp\-script (8)
+.br
+http://sourceforge.net/projects/opennhrp
+.PP
+For more information about the protocol see:
+.br
+RFC2332 NBMA Next Hop Resolution Protocol (NHRP)
+.br
+RFC2333 NHRP Protocol Applicability Statement
+
+.SH AUTHORS
+Timo Teras <timo.teras@iki.fi>
