@@ -388,15 +388,14 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 
 	netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(msg));
 	iface = nhrp_interface_get_by_index(ifa->ifa_index, FALSE);
-	if (iface == NULL)
+	if (iface == NULL || rta[IFA_LOCAL] == NULL)
 		return;
 
 	peer = nhrp_peer_alloc();
 	peer->type = NHRP_PEER_TYPE_LOCAL;
 	peer->afnum = AFNUM_RESERVED;
 	peer->interface = iface;
-	nhrp_address_set(&peer->protocol_address,
-			 ifa->ifa_family,
+	nhrp_address_set(&peer->protocol_address, ifa->ifa_family,
 			 RTA_PAYLOAD(rta[IFA_LOCAL]),
 			 RTA_DATA(rta[IFA_LOCAL]));
 	switch (ifa->ifa_family) {
