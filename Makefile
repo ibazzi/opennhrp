@@ -12,7 +12,8 @@ CC=colorgcc
 else
 CC=gcc
 endif
-INSTALL=install -D
+INSTALL=install
+INSTALLDIR=$(INSTALL) -d
 
 CFLAGS=-Wall -Wstrict-prototypes -std=gnu99 -O
 LDFLAGS=
@@ -21,6 +22,7 @@ DESTDIR=
 SBINDIR=/usr/sbin
 CONFDIR=/etc/opennhrp
 MANDIR=/usr/share/man
+DOCDIR=/usr/share/doc/opennhrp
 
 SUBDIRS=nhrp etc man
 
@@ -30,5 +32,9 @@ all: compile
 
 compile install clean::
 	@for i in $(SUBDIRS); do $(MAKE) $(MFLAGS) -C $$i $(MAKECMDGOALS); done
+
+install::
+	$(INSTALLDIR) $(DESTDIR)$(DOCDIR)
+	$(INSTALL) README $(DESTDIR)$(DOCDIR)
 
 .EXPORT_ALL_VARIABLES:

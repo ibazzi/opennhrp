@@ -1,0 +1,43 @@
+OpenNHRP Release Notes
+======================
+
+OpenNHRP is an NHRP implementation for Linux. It has most of the RFC2332
+and Cisco IOS extensions.
+
+Project homepage: http://sourceforge.net/projects/opennhrp
+
+	KERNEL REQUIREMENTS
+
+You need a kernel with ip_gre patched to support setting and getting
+of NBMA address. This is available in vanilla kernel since 2.6.24-rc2.
+Also it is present in Gentoo patches: gentoo-sources-2.6.23-r1 and
+gentoo-sources-2.6.22-r10 have it.
+
+Also remember to turn on CONFIG_ARPD and CONFIG_NET_IPGRE in your kernel
+configuration.
+
+	COMPILING
+
+Just type 'make' and 'make install'.
+
+	CONFIGURATION
+
+OpenNHRP currently supports only IPv4 over IPv4 using NBMA GRE tunnels.
+To create NBMA GRE tunnel you might use following:
+
+	ip tunnel add gre1 mode gre key 1234 ttl 64
+	ip addr add 10.255.255.2/24 dev gre1
+	ip link set gre1 up
+	
+This should work with the configuration example in opennhrp.conf(5).
+
+	DOCUMENTATION
+
+Most of the OpenNHRP documentation is in the manpages. Read them.
+
+Also some general NHRP documents can be found from Cisco pages
+(www.cisco.com).
+
+	BUGS
+
+Use the SourceForge bug tracker.

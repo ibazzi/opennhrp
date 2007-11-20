@@ -12,6 +12,7 @@ TARGETS = opennhrp.conf opennhrp-script
 compile::
 
 install::
+	$(INSTALLDIR) $(DESTDIR)$(CONFDIR)
 	$(INSTALL) $(TARGETS) $(DESTDIR)$(CONFDIR)
 
 clean::

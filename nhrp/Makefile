@@ -28,5 +28,6 @@ clean::
 	@rm -f $(TARGETS) $(ALL_OBJS)
 
 install::
+	$(INSTALLDIR) $(DESTDIR)$(SBINDIR)
 	$(INSTALL) $(TARGETS) $(DESTDIR)$(SBINDIR)
 
