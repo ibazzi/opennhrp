@@ -246,7 +246,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 		nhrp_info("Failed to register to %s",
 			  nhrp_address_format(&peer->protocol_address,
 					      sizeof(tmp), tmp));
-		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME,
+		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME * 1000,
 				   nhrp_peer_register_task);
 		return;
 	}
@@ -349,7 +349,7 @@ error:
 	if (!sent) {
 		nhrp_packet_free(packet);
 		/* Try again later */
-		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME,
+		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME * 1000,
 				   nhrp_peer_register_task);
 	}
 }
