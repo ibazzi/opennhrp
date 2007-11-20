@@ -55,7 +55,7 @@ static int bitcmp(uint8_t *a, uint8_t *b, int len)
 			return r;
 	}
 	if (bits != 0) {
-		mask = (0xff << (8 - r)) & 0xff;
+		mask = (0xff << (8 - bits)) & 0xff;
 		return ((int) (a[bytes] & mask)) - ((int) (b[bytes] & mask));
 	}
 	return 0;
@@ -358,7 +358,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 {
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx, *np;
 	struct nhrp_payload *payload;
-	struct nhrp_cie *cie, *natcie;
+	struct nhrp_cie *cie, *natcie = NULL;
 	struct nhrp_interface *iface;
 	char dst[64], tmp[64], nbma[64];
 
