@@ -1151,7 +1151,8 @@ int nhrp_packet_send_request(struct nhrp_packet *packet,
 			     void *ctx)
 {
 	packet->retry = 0;
-	packet->hdr.u.request_id = htonl(request_id++);
+	request_id++;
+	packet->hdr.u.request_id = htonl(request_id);
 
 	if (!nhrp_packet_send(packet))
 		return FALSE;
