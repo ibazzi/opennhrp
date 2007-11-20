@@ -366,12 +366,39 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 	return ret;
 }
 
+static int nhrp_do_handle_error_indication(struct nhrp_packet *error_pkt,
+					   struct nhrp_packet *orig_pkt)
+{
+	struct nhrp_packet *req;
+
+	TAILQ_FOREACH(req, &pending_requests, request_list_entry) {
+		if (orig_pkt->hdr.u.request_id != req->hdr.u.request_id)
+			continue;
+
+		if (nhrp_address_cmp(&orig_pkt->src_nbma_address,
+				     &req->src_nbma_address))
+			continue;
+		if (nhrp_address_cmp(&orig_pkt->src_protocol_address,
+				     &req->src_protocol_address))
+			continue;
+
+		nhrp_task_cancel(&req->timeout);
+		req->handler(req->handler_ctx, error_pkt);
+		nhrp_packet_free(req);
+
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
 static int nhrp_handle_error_indication(struct nhrp_packet *error_packet)
 {
-	struct nhrp_packet *packet, *req;
+	struct nhrp_packet *packet;
 	struct nhrp_payload *payload;
 	uint8_t *pdu;
 	size_t pduleft;
+	int r;
 
 	packet = nhrp_packet_alloc();
 	if (packet == NULL)
@@ -386,27 +413,10 @@ static int nhrp_handle_error_indication(struct nhrp_packet *error_packet)
 		return FALSE;
 	}
 
-	TAILQ_FOREACH(req, &pending_requests, request_list_entry) {
-		if (packet->hdr.u.request_id != req->hdr.u.request_id)
-			continue;
-
-		if (nhrp_address_cmp(&packet->src_nbma_address,
-				     &req->src_nbma_address))
-			continue;
-		if (nhrp_address_cmp(&packet->src_protocol_address,
-				     &req->src_protocol_address))
-			continue;
-
-		nhrp_task_cancel(&req->timeout);
-		req->handler(req->handler_ctx, packet);
-		nhrp_packet_free(req);
-
-		nhrp_packet_free(packet);
-		return TRUE;
-	}
-
+	r = nhrp_do_handle_error_indication(error_packet, packet);
 	nhrp_packet_free(packet);
-	return FALSE;
+
+	return r;
 }
 
 static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
@@ -1074,7 +1084,7 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	    packet->my_protocol_address.addr_len == 0) {
 		if (!nhrp_packet_route(packet)) {
 			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
-			return FALSE;
+			return TRUE;
 		}
 	}
 
@@ -1128,6 +1138,9 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 		}
 	}
 
+	if (packet->dst_peer->type == NHRP_PEER_TYPE_LOCAL)
+		return nhrp_packet_receive_local(packet);
+
 	return nhrp_packet_do_send(packet);
 }
 
@@ -1154,13 +1167,18 @@ int nhrp_packet_send_request(struct nhrp_packet *packet,
 	request_id++;
 	packet->hdr.u.request_id = htonl(request_id);
 
-	if (!nhrp_packet_send(packet))
-		return FALSE;
-
 	packet->handler = handler;
 	packet->handler_ctx = ctx;
 	TAILQ_INSERT_TAIL(&pending_requests, packet, request_list_entry);
 	nhrp_task_schedule(&packet->timeout, 5000, nhrp_packet_xmit_timeout);
+
+	if (!nhrp_packet_send(packet)) {
+		nhrp_task_cancel(&packet->timeout);
+		TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
+
+		return FALSE;
+	}
+
 	return TRUE;
 }
 
@@ -1192,7 +1210,11 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 	pl->u.raw = nhrp_buffer_alloc(error_packet->req_pdulen);
 	memcpy(pl->u.raw->data, error_packet->req_pdu, error_packet->req_pdulen);
 
-	r = nhrp_packet_send(p);
+	if (p->dst_protocol_address.type == PF_UNSPEC)
+		r = nhrp_do_handle_error_indication(p, error_packet);
+	else
+		r = nhrp_packet_send(p);
+
 	nhrp_packet_free(p);
 
 	return r;
