@@ -1,0 +1,34 @@
+# Makefile - one file to rule them all, one file to bind them
+#
+# Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
+# All rights reserved.
+#
+# This program is free software; you can redistribute it and/or modify it 
+# under the terms of the GNU General Public License version 3 as published
+# by the Free Software Foundation. See http://www.gnu.org/ for details.
+
+ifneq ($(shell which colorgcc),)
+CC=colorgcc
+else
+CC=gcc
+endif
+INSTALL=install -D
+
+CFLAGS=-Wall -Wstrict-prototypes -std=gnu99 -O
+LDFLAGS=
+
+DESTDIR=
+SBINDIR=/usr/sbin
+CONFDIR=/etc/opennhrp
+MANDIR=/usr/share/man
+
+SUBDIRS=nhrp etc man
+
+.PHONY: compile install clean all
+
+all: compile
+
+compile install clean::
+	@for i in $(SUBDIRS); do $(MAKE) $(MFLAGS) -C $$i $(MAKECMDGOALS); done
+
+.EXPORT_ALL_VARIABLES:

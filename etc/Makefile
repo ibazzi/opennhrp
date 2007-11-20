@@ -7,26 +7,11 @@
 # under the terms of the GNU General Public License version 3 as published
 # by the Free Software Foundation. See http://www.gnu.org/ for details.
 
-TARGETS = opennhrp
+TARGETS = opennhrp.conf opennhrp-script
 
-opennhrp_OBJS = \
-	opennhrp.o \
-	nhrp_address.o \
-	nhrp_packet.o \
-	nhrp_peer.o \
-	nhrp_interface.o \
-	signal.o \
-	sysdep_netlink.o \
-	sysdep_poll.o \
-	sysdep_syslog.o
-
-ALL_OBJS = $(opennhrp_OBJS)
-
-opennhrp: $(opennhrp_OBJS)
-
-clean::
-	@rm -f $(TARGETS) $(ALL_OBJS)
+compile::
 
 install::
-	$(INSTALL) $(TARGETS) $(DESTDIR)$(SBINDIR)
+	$(INSTALL) $(TARGETS) $(DESTDIR)$(CONFDIR)
 
+clean::

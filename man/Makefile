@@ -7,26 +7,13 @@
 # under the terms of the GNU General Public License version 3 as published
 # by the Free Software Foundation. See http://www.gnu.org/ for details.
 
-TARGETS = opennhrp
+MAN5PAGES = opennhrp.conf.5
+MAN8PAGES = opennhrp.8 opennhrp-script.8
 
-opennhrp_OBJS = \
-	opennhrp.o \
-	nhrp_address.o \
-	nhrp_packet.o \
-	nhrp_peer.o \
-	nhrp_interface.o \
-	signal.o \
-	sysdep_netlink.o \
-	sysdep_poll.o \
-	sysdep_syslog.o
-
-ALL_OBJS = $(opennhrp_OBJS)
-
-opennhrp: $(opennhrp_OBJS)
-
-clean::
-	@rm -f $(TARGETS) $(ALL_OBJS)
+compile::
 
 install::
-	$(INSTALL) $(TARGETS) $(DESTDIR)$(SBINDIR)
+	$(INSTALL) $(MAN5PAGES) $(DESTDIR)$(MANDIR)/man5
+	$(INSTALL) $(MAN8PAGES) $(DESTDIR)$(MANDIR)/man8
 
+clean::
