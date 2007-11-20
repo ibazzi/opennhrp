@@ -22,6 +22,8 @@ opennhrp_OBJS = \
 
 ALL_OBJS = $(opennhrp_OBJS)
 
+CFLAGS += -I../include
+
 opennhrp: $(opennhrp_OBJS)
 
 clean::
