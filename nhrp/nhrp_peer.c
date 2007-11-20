@@ -61,6 +61,33 @@ static int bitcmp(uint8_t *a, uint8_t *b, int len)
 	return 0;
 }
 
+static const char *nhrp_error_indication_text(int ei)
+{
+	switch (ei) {
+	case -1:
+		return "timeout";
+	case NHRP_ERROR_UNRECOGNIZED_EXTENSION:
+		return "unrecognized extension";
+	case NHRP_ERROR_LOOP_DETECTED:
+		return "loop detected";
+	case NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE:
+		return "protocol address unreachable";
+	case NHRP_ERROR_PROTOCOL_ERROR:
+		return "protocol error";
+	case NHRP_ERROR_SDU_SIZE_EXCEEDED:
+		return "SDU size exceeded";
+	case NHRP_ERROR_INVALID_EXTENSION:
+		return "invalid extension";
+	case NHRP_ERROR_INVALID_RESOLUTION_REPLY:
+		return "unexpected resolution reply";
+	case NHRP_ERROR_AUTHENTICATION_FAILURE:
+		return "authentication failure";
+	case NHRP_ERROR_HOP_COUNT_EXCEEDED:
+		return "hop count exceeded";
+	}
+	return "unknown";
+}
+
 static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 {
 	char tmp[NHRP_PEER_FORMAT_LEN];
@@ -237,15 +264,18 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
 	char tmp[NHRP_PEER_FORMAT_LEN];
+	int ec;
 
 	if (nhrp_peer_free(peer))
 		return;
 
 	if (reply == NULL ||
 	    reply->hdr.type != NHRP_PACKET_REGISTRATION_REPLY) {
-		nhrp_info("Failed to register to %s",
+		ec = reply ? reply->hdr.u.error.code : -1;
+		nhrp_info("Failed to register to %s: %s (%d)",
 			  nhrp_address_format(&peer->protocol_address,
-					      sizeof(tmp), tmp));
+					      sizeof(tmp), tmp),
+			  nhrp_error_indication_text(ec), ntohs(ec));
 		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME * 1000,
 				   nhrp_peer_register_task);
 		return;
@@ -361,23 +391,19 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	struct nhrp_cie *cie, *natcie = NULL;
 	struct nhrp_interface *iface;
 	char dst[64], tmp[64], nbma[64];
+	int ec;
 
 	if (nhrp_peer_free(peer))
 		return;
 
-	if (reply == NULL) {
-		nhrp_info("Timeout resolving %s",
-			  nhrp_address_format(&peer->protocol_address,
-				  	      sizeof(dst), dst));
+	if (reply == NULL ||
+	    reply->hdr.type != NHRP_PACKET_RESOLUTION_REPLY) {
+		ec = reply ? reply->hdr.u.error.code : -1;
 
-		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
-		return;
-	}
-	if (reply->hdr.type != NHRP_PACKET_RESOLUTION_REPLY) {
-		nhrp_info("Error indication (code %d) for Resolution Request %s",
-			  reply->hdr.u.error.code,
+		nhrp_info("Failed to register to %s: %s (%d)",
 			  nhrp_address_format(&peer->protocol_address,
-				  	      sizeof(dst), dst));
+					      sizeof(tmp), tmp),
+			  nhrp_error_indication_text(ec), ntohs(ec));
 
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 		return;
