@@ -203,7 +203,10 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 static void nhrp_peer_static_up(struct nhrp_peer *peer, int status)
 {
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-		nhrp_peer_register(peer);
+		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
+			nhrp_peer_register(peer);
+		else
+			nhrp_peer_up(peer);
 	} else {
 		nhrp_task_schedule(&peer->task, 10000, nhrp_run_up_script_task);
 	}

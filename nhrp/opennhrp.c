@@ -78,14 +78,17 @@ static int read_word(FILE *in, int *lineno, size_t len, char *word)
 
 static int load_config(const char *config_file)
 {
-#define NEED_INTERFACE() if (iface == NULL) { rc = 2; break; }
+#define NEED_INTERFACE() if (iface == NULL) { rc = 2; break; } peer = NULL;
+#define NEED_PEER() if (peer == NULL) { rc = 3; break; }
 
 	static const char *errors[] = {
 		"syntax error",
 		"missing keyword",
 		"interface context not defined",
+		"register is used with map",
 	};
 	struct nhrp_interface *iface = NULL;
+	struct nhrp_peer *peer = NULL;
 	char word[32], nbma[32], addr[32];
 	FILE *in;
 	int lineno = 1, rc = -1;
@@ -103,20 +106,12 @@ static int load_config(const char *config_file)
 				break;
 			}
 			iface = nhrp_interface_get_by_name(word, TRUE);
+			peer = NULL;
 		} else if (strcmp(word, "map") == 0) {
-			struct nhrp_peer *peer;
-
 			NEED_INTERFACE();
 			read_word(in, &lineno, sizeof(addr), addr);
 			read_word(in, &lineno, sizeof(nbma), nbma);
 			read_word(in, &lineno, sizeof(word), word);
-
-			if (strcmp(word, "register") == 0) {
-
-			} else {
-				rc = 0;
-				break;
-			}
 
 			peer = nhrp_peer_alloc();
 			peer->type = NHRP_PEER_TYPE_STATIC;
@@ -128,6 +123,9 @@ static int load_config(const char *config_file)
 			peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
 			nhrp_peer_insert(peer);
 			nhrp_peer_free(peer);
+		} else if (strcmp(word, "register") == 0) {
+			NEED_PEER();
+			peer->flags |= NHRP_PEER_FLAG_REGISTER;
 		} else if (strcmp(word, "cisco-authentication") == 0) {
 			struct nhrp_buffer *buf;
 			struct nhrp_cisco_authentication_extension *auth;
