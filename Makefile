@@ -7,6 +7,8 @@
 # under the terms of the GNU General Public License version 3 as published
 # by the Free Software Foundation. See http://www.gnu.org/ for details.
 
+VERSION=0.1
+
 ifneq ($(shell which colorgcc),)
 CC=colorgcc
 else
@@ -36,5 +38,11 @@ compile install clean::
 install::
 	$(INSTALLDIR) $(DESTDIR)$(DOCDIR)
 	$(INSTALL) README $(DESTDIR)$(DOCDIR)
+
+dist:
+	svn-clean
+	(TOP=`pwd` && cd .. && ln -s $$TOP opennhrp-$(VERSION) && \
+	 tar --exclude '*/.svn*' -cjvf opennhrp-$(VERSION).tar.bz2 opennhrp-$(VERSION)/* && \
+	 rm opennhrp-$(VERSION))
 
 .EXPORT_ALL_VARIABLES:
