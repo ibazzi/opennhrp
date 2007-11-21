@@ -7,7 +7,7 @@
 # under the terms of the GNU General Public License version 3 as published
 # by the Free Software Foundation. See http://www.gnu.org/ for details.
 
-VERSION=0.1
+VERSION=0.2
 
 ifneq ($(shell which colorgcc),)
 CC=colorgcc
