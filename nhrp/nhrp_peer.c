@@ -182,6 +182,7 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 	case NHRP_PEER_TYPE_CACHED:
 	case NHRP_PEER_TYPE_LOCAL:
 	case NHRP_PEER_TYPE_STATIC:
+	case NHRP_PEER_TYPE_DYNAMIC:
 		envp[i++] = env("NHRP_DESTNBMA",
 			nhrp_address_format(&peer->next_hop_address, sizeof(tmp), tmp));
 		break;
