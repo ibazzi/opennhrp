@@ -270,7 +270,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		peer->afnum = packet->hdr.afnum;
 		peer->protocol_type = packet->hdr.protocol_type;
 		peer->interface = packet->src_iface;
-		peer->expire_time = time(NULL) + ntohs(cie->hdr.holding_time) * 1000;
+		peer->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 		if (cie->nbma_address.addr_len != 0)
 			peer->next_hop_address = cie->nbma_address;
 		else
@@ -287,8 +287,16 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		while ((p = nhrp_peer_find(&peer->protocol_address,
 					   peer->prefix_length,
 					   NHRP_PEER_FIND_SUBNET |
-					   NHRP_PEER_FIND_REMOVABLE)) != NULL)
+					   NHRP_PEER_FIND_REMOVABLE)) != NULL) {
+			/* If re-registration, mark the new connection up */
+			if ((p->flags & NHRP_PEER_FLAG_UP) &&
+			    nhrp_address_cmp(&peer->protocol_address, &p->protocol_address) == 0 &&
+			    nhrp_address_cmp(&peer->next_hop_address, &p->next_hop_address) == 0 &&
+			    peer->prefix_length == p->prefix_length)
+				peer->flags |= NHRP_PEER_FLAG_UP;
+			p->flags |= NHRP_PEER_FLAG_REPLACED;
 			nhrp_peer_remove(p);
+		}
 
 		p = nhrp_peer_find(&peer->protocol_address,
 				   peer->prefix_length,
@@ -425,7 +433,6 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 	struct nhrp_address dst;
 	struct iphdr *iph;
 	struct nhrp_payload *pl;
-	struct nhrp_peer *peer;
 	int pf;
 
 	pf = nhrp_pf_from_protocol(packet->hdr.protocol_type);
@@ -447,23 +454,7 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 				    sizeof(tmp), tmp),
 		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
 
-	peer = nhrp_peer_find(&dst, 0xff, NHRP_PEER_FIND_ROUTE);
-	if (peer != NULL && peer->type == NHRP_PEER_TYPE_CACHED_ROUTE)
-		return TRUE;
-
-	if ((peer != NULL) && (peer->interface != NULL) &&
-	    !(peer->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT))
-		return TRUE;
-
-	peer = nhrp_peer_alloc();
-	peer->type = NHRP_PEER_TYPE_INCOMPLETE;
-	peer->afnum = packet->hdr.afnum;
-	peer->protocol_type = packet->hdr.protocol_type;
-	peer->protocol_address = dst;
-	peer->prefix_length = packet->dst_protocol_address.addr_len * 8;
-	nhrp_peer_insert(peer);
-	nhrp_peer_free(peer);
-
+	nhrp_peer_traffic_indication(packet->hdr.afnum, &dst);
 	return TRUE;
 }
 
@@ -1017,7 +1008,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 			 &proto_nexthop, &ifindex);
 	if (!r) {
 		nhrp_error("No route to protocol address %s",
-			nhrp_address_format( dest, sizeof(tmp), tmp));
+			nhrp_address_format(dest, sizeof(tmp), tmp));
 		return FALSE;
 	}
 
@@ -1034,7 +1025,8 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 		&proto_nexthop, 0xff,
 		NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_COMPLETE |
 		NHRP_PEER_FIND_NEXTHOP, cielist);
-	if (packet->dst_peer == NULL) {
+	if (packet->dst_peer == NULL ||
+	    packet->dst_peer->type == NHRP_PEER_TYPE_NEGATIVE) {
 		nhrp_error("No peer entry for protocol address %s",
 			nhrp_address_format(&proto_nexthop, sizeof(tmp), tmp));
 		return FALSE;

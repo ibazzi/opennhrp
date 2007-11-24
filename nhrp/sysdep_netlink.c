@@ -316,6 +316,9 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 		return;
 
 	kernel_inject_neighbor(&addr, &peer->next_hop_address, peer->interface);
+
+	if (nhrp_address_cmp(&addr, &peer->protocol_address) != 0)
+		nhrp_peer_traffic_indication(peer->afnum, &addr);
 }
 
 static void netlink_neigh_update(struct nlmsghdr *msg)

@@ -29,6 +29,7 @@
 #define NHRP_PEER_FLAG_UNIQUE		0x02	/* Peer is unique; see RFC2332 */
 #define NHRP_PEER_FLAG_UP		0x04	/* Peer up script has been run */
 #define NHRP_PEER_FLAG_REGISTER		0x08	/* For TYPE_STATIC: send registration */
+#define NHRP_PEER_FLAG_REPLACED		0x10	/* Peer has been replaced */
 
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
 
@@ -82,6 +83,7 @@ static inline struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 	return nhrp_peer_find_full(dest, prefix_length, flags, NULL);
 }
 
+void nhrp_peer_traffic_indication(uint16_t afnum, struct nhrp_address *dst);
 void nhrp_peer_dump_cache(void);
 
 #endif

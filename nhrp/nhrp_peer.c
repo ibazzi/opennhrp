@@ -404,7 +404,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	    reply->hdr.type != NHRP_PACKET_RESOLUTION_REPLY) {
 		ec = reply ? reply->hdr.u.error.code : -1;
 
-		nhrp_info("Failed to register to %s: %s (%d)",
+		nhrp_info("Failed to resolve %s: %s (%d)",
 			  nhrp_address_format(&peer->protocol_address,
 					      sizeof(tmp), tmp),
 			  nhrp_error_indication_text(ec), ntohs(ec));
@@ -628,7 +628,8 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
-		if (peer->flags & NHRP_PEER_FLAG_UP)
+		if ((peer->flags & NHRP_PEER_FLAG_UP) &&
+		    !(peer->flags & NHRP_PEER_FLAG_REPLACED))
 			nhrp_peer_run_script(peer, "route-down", NULL);
 		break;
 	case NHRP_PEER_TYPE_CACHED:
@@ -648,7 +649,8 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 			nhrp_peer_remove(p);
 		}
 	default:
-		if (peer->flags & NHRP_PEER_FLAG_UP)
+		if ((peer->flags & NHRP_PEER_FLAG_UP) &&
+		    !(peer->flags & NHRP_PEER_FLAG_REPLACED))
 			nhrp_peer_run_script(peer, "peer-down", NULL);
 		if (peer->protocol_address.type != PF_UNSPEC)
 			kernel_inject_neighbor(&peer->protocol_address,
@@ -688,6 +690,9 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 	case NHRP_PEER_TYPE_STATIC:
 		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_static_up);
 		break;
+	case NHRP_PEER_TYPE_LOCAL:
+		peer->flags |= NHRP_PEER_FLAG_UP;
+		break;
 	case NHRP_PEER_TYPE_INCOMPLETE:
 		nhrp_peer_resolve(peer);
 		break;
@@ -712,6 +717,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 				   nhrp_peer_check_renew_task);
 		break;
 	case NHRP_PEER_TYPE_NEGATIVE:
+		peer->flags |= NHRP_PEER_FLAG_UP;
 		peer->expire_time = time(NULL) + NHRP_NEGATIVE_CACHE_TIME;
 		kernel_inject_neighbor(&peer->protocol_address,
 				       &peer->next_hop_address,
@@ -789,7 +795,8 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 			return NULL;
 
 		if ((flags & NHRP_PEER_FIND_COMPLETE) &&
-		     (p->type == NHRP_PEER_TYPE_INCOMPLETE))
+		    (p->type == NHRP_PEER_TYPE_INCOMPLETE ||
+		     !(p->flags & NHRP_PEER_FLAG_UP)))
 			continue;
 
 		if ((flags & NHRP_PEER_FIND_REMOVABLE) &&
@@ -817,6 +824,31 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 	}
 
 	return found_peer;
+}
+
+void nhrp_peer_traffic_indication(uint16_t afnum, struct nhrp_address *dst)
+{
+	struct nhrp_peer *peer;
+
+	peer = nhrp_peer_find(dst, 0xff, NHRP_PEER_FIND_ROUTE);
+	if (peer != NULL) {
+		if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ||
+		    peer->type == NHRP_PEER_TYPE_NEGATIVE)
+			return;
+
+		if ((peer->interface != NULL) &&
+		    !(peer->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT))
+			return;
+	}
+
+	peer = nhrp_peer_alloc();
+	peer->type = NHRP_PEER_TYPE_INCOMPLETE;
+	peer->afnum = afnum;
+	peer->protocol_type = nhrp_protocol_from_pf(dst->type);
+	peer->protocol_address = *dst;
+	peer->prefix_length = dst->addr_len * 8;
+	nhrp_peer_insert(peer);
+	nhrp_peer_free(peer);
 }
 
 void nhrp_peer_reap_pid(pid_t pid, int status)
