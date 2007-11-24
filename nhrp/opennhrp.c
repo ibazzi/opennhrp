@@ -111,7 +111,6 @@ static int load_config(const char *config_file)
 			NEED_INTERFACE();
 			read_word(in, &lineno, sizeof(addr), addr);
 			read_word(in, &lineno, sizeof(nbma), nbma);
-			read_word(in, &lineno, sizeof(word), word);
 
 			peer = nhrp_peer_alloc();
 			peer->type = NHRP_PEER_TYPE_STATIC;
