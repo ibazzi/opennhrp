@@ -53,6 +53,8 @@ struct nhrp_peer {
 	/* Protocol address for NHRP_PEER_TYPE_ROUTE,
 	 * NBMA address for other type of entries */
 	struct nhrp_address next_hop_address;
+
+	struct nhrp_packet *queued_packet;
 };
 
 void nhrp_peer_reap_pid(pid_t pid, int status);
@@ -72,6 +74,7 @@ void nhrp_peer_set_used(struct nhrp_address *peer_address, int used);
 #define NHRP_PEER_FIND_COMPLETE		0x08
 #define NHRP_PEER_FIND_NEXTHOP		0x10
 #define NHRP_PEER_FIND_REMOVABLE	0x20
+#define NHRP_PEER_FIND_UP		0x40
 
 struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 				      int prefix_length, int flags,

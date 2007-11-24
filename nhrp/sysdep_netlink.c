@@ -310,8 +310,7 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 		nhrp_address_format(&addr, sizeof(tmp), tmp));
 
 	peer = nhrp_peer_find(&addr, 0xff,
-			      NHRP_PEER_FIND_ROUTE |
-			      NHRP_PEER_FIND_COMPLETE);
+			      NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_UP);
 	if (peer == NULL)
 		return;
 

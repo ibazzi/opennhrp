@@ -260,6 +260,12 @@ static void nhrp_peer_up(struct nhrp_peer *peer)
 
 		nhrp_peer_run_script(p, "route-up", nhrp_peer_route_up);
 	}
+
+	if (peer->queued_packet != NULL) {
+		nhrp_packet_do_send(peer->queued_packet);
+		nhrp_packet_free(peer->queued_packet);
+		peer->queued_packet = NULL;
+	}
 }
 
 static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *reply)
@@ -795,8 +801,10 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 			return NULL;
 
 		if ((flags & NHRP_PEER_FIND_COMPLETE) &&
-		    (p->type == NHRP_PEER_TYPE_INCOMPLETE ||
-		     !(p->flags & NHRP_PEER_FLAG_UP)))
+		    p->type == NHRP_PEER_TYPE_INCOMPLETE)
+			continue;
+		if ((flags & NHRP_PEER_FIND_UP) &&
+		     !(p->flags & NHRP_PEER_FLAG_UP))
 			continue;
 
 		if ((flags & NHRP_PEER_FIND_REMOVABLE) &&

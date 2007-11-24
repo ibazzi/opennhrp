@@ -156,7 +156,16 @@ struct nhrp_cie *nhrp_payload_get_cie(struct nhrp_payload *payload, int index)
 
 struct nhrp_packet *nhrp_packet_alloc(void)
 {
-	return calloc(1, sizeof(struct nhrp_packet));
+	struct nhrp_packet *packet;
+	packet = calloc(1, sizeof(struct nhrp_packet));
+	packet->ref = 1;
+	return packet;
+}
+
+struct nhrp_packet *nhrp_packet_dup(struct nhrp_packet *packet)
+{
+	packet->ref++;
+	return packet;
 }
 
 struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet)
@@ -185,6 +194,10 @@ struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
 void nhrp_packet_free(struct nhrp_packet *packet)
 {
 	int i;
+
+	packet->ref--;
+	if (packet->ref > 0)
+		return;
 
 	for (i = 0; i < packet->num_extensions; i++)
 		nhrp_payload_free(&packet->extension_by_order[i]);
@@ -1047,7 +1060,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	return TRUE;
 }
 
-static int nhrp_packet_do_send(struct nhrp_packet *packet)
+int nhrp_packet_do_send(struct nhrp_packet *packet)
 {
 	uint8_t pdu[MAX_PDU_SIZE];
 	char tmp[64];
@@ -1133,7 +1146,17 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	if (packet->dst_peer->type == NHRP_PEER_TYPE_LOCAL)
 		return nhrp_packet_receive_local(packet);
 
-	return nhrp_packet_do_send(packet);
+	if (packet->dst_peer->flags & NHRP_PEER_FLAG_UP)
+		return nhrp_packet_do_send(packet);
+
+	if (packet->dst_peer->queued_packet) {
+		nhrp_packet_send_error(packet->dst_peer->queued_packet,
+				       NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
+		nhrp_packet_free(packet->dst_peer->queued_packet);
+	}
+	packet->dst_peer->queued_packet = nhrp_packet_dup(packet);
+
+	return TRUE;
 }
 
 static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
