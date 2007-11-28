@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <linux/ip.h>
 
 #include "afnum.h"
 #include "nhrp_address.h"
@@ -74,6 +75,31 @@ int nhrp_address_parse(const char *string,
 	}
 
 	return FALSE;
+}
+
+int nhrp_address_parse_packet(uint16_t protocol, size_t len, uint8_t *packet,
+			      struct nhrp_address *src, struct nhrp_address *dst)
+{
+	int pf;
+	struct iphdr *iph;
+
+	pf = nhrp_pf_from_protocol(protocol);
+	switch (protocol) {
+	case ETHPROTO_IP:
+		if (len < sizeof(struct iphdr))
+			return FALSE;
+
+		iph = (struct iphdr *) packet;
+		if (src != NULL)
+			nhrp_address_set(src, pf, 4, (uint8_t *) &iph->saddr);
+		if (dst != NULL)
+			nhrp_address_set(dst, pf, 4, (uint8_t *) &iph->daddr);
+		break;
+	default:
+		return FALSE;
+	}
+
+	return TRUE;
 }
 
 int nhrp_address_set(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes)

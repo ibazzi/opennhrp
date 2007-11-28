@@ -17,6 +17,7 @@ opennhrp_OBJS = \
 	nhrp_interface.o \
 	signal.o \
 	sysdep_netlink.o \
+	sysdep_pfpacket.o \
 	sysdep_poll.o \
 	sysdep_syslog.o
 

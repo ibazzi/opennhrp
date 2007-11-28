@@ -17,8 +17,8 @@ endif
 INSTALL=install
 INSTALLDIR=$(INSTALL) -d
 
-CFLAGS=-Wall -Wstrict-prototypes -std=gnu99 -O
-LDFLAGS=
+CFLAGS=-Wall -Wstrict-prototypes -std=gnu99 -O -g
+LDFLAGS=-g
 
 DESTDIR=
 SBINDIR=/usr/sbin

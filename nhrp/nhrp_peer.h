@@ -57,6 +57,8 @@ struct nhrp_peer {
 	struct nhrp_packet *queued_packet;
 };
 
+typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);
+
 void nhrp_peer_reap_pid(pid_t pid, int status);
 
 struct nhrp_peer *nhrp_peer_alloc(void);
@@ -67,6 +69,7 @@ void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
 
 void nhrp_peer_set_used(struct nhrp_address *peer_address, int used);
+int nhrp_peer_enumerate(nhrp_peer_enumerator e, void *ctx);
 
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02

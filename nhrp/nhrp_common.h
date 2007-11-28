@@ -46,6 +46,7 @@ void nhrp_perror(const char *message);
 void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes);
 
 /* Initializers for system dependant stuff */
+int forward_init(void);
 int kernel_init(void);
 int kernel_route(struct nhrp_address *dest,
 		 struct nhrp_address *default_source,

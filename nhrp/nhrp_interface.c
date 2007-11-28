@@ -31,6 +31,19 @@ void nhrp_interface_hash(struct nhrp_interface *iface)
 	LIST_INSERT_HEAD(&index_hash[iidx], iface, index_list);
 }
 
+int nhrp_interface_foreach(nhrp_interface_enumerator enumerator, void *ctx)
+{
+	struct nhrp_interface *iface;
+	int rc;
+
+	LIST_FOREACH(iface, &name_list, name_list) {
+		rc = enumerator(ctx, iface);
+		if (rc != 0)
+			return rc;
+	}
+	return 0;
+}
+
 struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create)
 {
 	struct nhrp_interface *iface;

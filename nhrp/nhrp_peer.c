@@ -767,6 +767,20 @@ void nhrp_peer_set_used(struct nhrp_address *peer_address, int used)
 	}
 }
 
+int nhrp_peer_enumerate(nhrp_peer_enumerator e, void *ctx)
+{
+	struct nhrp_peer *p;
+	int rc;
+
+	CIRCLEQ_FOREACH(p, &peer_cache, peer_list) {
+		rc = e(ctx, p);
+		if (rc != 0)
+			return rc;
+	}
+
+	return 0;
+}
+
 struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 				      int min_prefix, int flags,
 				      struct nhrp_cie_list_head *cielist)

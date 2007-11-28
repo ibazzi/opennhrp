@@ -35,7 +35,10 @@ struct nhrp_interface {
 	struct nhrp_cie nat_cie;
 };
 
+typedef int (*nhrp_interface_enumerator)(void *ctx, struct nhrp_interface *iface);
+
 void nhrp_interface_hash(struct nhrp_interface *iface);
+int nhrp_interface_foreach(nhrp_interface_enumerator enumerator, void *ctx);
 struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create);
 struct nhrp_interface *nhrp_interface_get_by_index(unsigned int index, int create);
 

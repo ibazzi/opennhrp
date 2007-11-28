@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <netinet/in.h>
-#include <linux/ip.h>
 #include "nhrp_packet.h"
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
@@ -444,23 +443,16 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64];
 	struct nhrp_address dst;
-	struct iphdr *iph;
 	struct nhrp_payload *pl;
-	int pf;
 
-	pf = nhrp_pf_from_protocol(packet->hdr.protocol_type);
 	pl = nhrp_packet_payload(packet);
-	switch (packet->hdr.protocol_type) {
-	case ETHPROTO_IP:
-		if (pl == NULL || pl->u.raw->length < sizeof(struct iphdr))
-			return FALSE;
-
-		iph = (struct iphdr *) pl->u.raw->data;
-		nhrp_address_set(&dst, pf, 4, (uint8_t *) &iph->daddr);
-		break;
-	default:
+	if (pl == NULL)
 		return FALSE;
-	}
+
+	if (!nhrp_address_parse_packet(packet->hdr.protocol_type,
+				       pl->u.raw->length, pl->u.raw->data,
+				       NULL, &dst))
+		return FALSE;
 
 	nhrp_info("Traffic Indication from proto src %s; about packet to %s",
 		nhrp_address_format(&packet->src_protocol_address,
