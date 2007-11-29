@@ -18,15 +18,52 @@
 #include "nhrp_interface.h"
 #include "nhrp_common.h"
 
-#define MAX_PDU_SIZE 1500
+#define RATE_LIMIT_HASH_SIZE		256
+#define RATE_LIMIT_MAX_TOKENS		4
+#define RATE_LIMIT_SEND_INTERVAL	1
+#define RATE_LIMIT_SILENCE		60
+#define MAX_PDU_SIZE			1500
 
+struct nhrp_rate_limit {
+	LIST_ENTRY(nhrp_rate_limit) hash_entry;
+	struct nhrp_address src;
+	struct nhrp_address dst;
+	struct timeval rate_last;
+	int rate_tokens;
+};
+
+LIST_HEAD(nhrp_rate_limit_list_head, nhrp_rate_limit);
 TAILQ_HEAD(nhrp_packet_list_head, nhrp_packet);
 
 static uint32_t request_id = 0;
 static struct nhrp_packet_list_head pending_requests =
 	TAILQ_HEAD_INITIALIZER(pending_requests);
 
+static struct nhrp_rate_limit_list_head rate_limit_hash[RATE_LIMIT_HASH_SIZE];
+
 static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize, struct nhrp_packet *packet);
+
+static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src, struct nhrp_address *dst)
+{
+	unsigned int key;
+	struct nhrp_rate_limit *e;
+
+	key = nhrp_address_hash(src) ^ nhrp_address_hash(dst);
+	key %= RATE_LIMIT_HASH_SIZE;
+
+	LIST_FOREACH(e, &rate_limit_hash[key], hash_entry) {
+		if (nhrp_address_cmp(&e->src, src) == 0 &&
+		    nhrp_address_cmp(&e->dst, dst) == 0)
+			return e;
+	}
+
+	e = calloc(1, sizeof(struct nhrp_rate_limit));
+	e->src = *src;
+	e->dst = *dst;
+	LIST_INSERT_HEAD(&rate_limit_hash[key], e, hash_entry);
+
+	return e;
+}
 
 static uint16_t nhrp_calculate_checksum(uint8_t *pdu, uint16_t len)
 {
@@ -1233,14 +1270,43 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 
 int nhrp_packet_send_traffic(int protocol_type, uint8_t *pdu, size_t pdulen)
 {
+	struct nhrp_rate_limit *rl;
 	struct nhrp_packet *p;
 	struct nhrp_payload *pl;
 	struct nhrp_address src, dst;
 	char tmp1[64], tmp2[64];
 	int r;
+	struct timeval now, tv;
 
 	if (!nhrp_address_parse_packet(protocol_type, pdulen, pdu, &src, &dst))
 		return FALSE;
+
+	rl = get_rate_limit(&src, &dst);
+	if (rl == NULL)
+		return FALSE;
+
+	gettimeofday(&now, NULL);
+	tv = rl->rate_last;
+	tv.tv_sec += RATE_LIMIT_SILENCE;
+
+	/* If silence period has elapsed, reset algorithm */
+	if (timercmp(&now, &tv, >))
+		rl->rate_tokens = 0;
+
+	/* Too many ignored redirects; just update time of last packet */
+	if (rl->rate_tokens >= RATE_LIMIT_MAX_TOKENS) {
+		rl->rate_last = now;
+		return FALSE;
+	}
+
+	/* Check for load limit; set rate_last to last sent redirect */
+	tv = rl->rate_last;
+	tv.tv_sec += RATE_LIMIT_SEND_INTERVAL;
+	if (rl->rate_tokens != 0 && timercmp(&now, &tv, <))
+		return FALSE;
+
+	rl->rate_tokens++;
+	rl->rate_last = now;
 
 	p = nhrp_packet_alloc();
 	p->hdr = (struct nhrp_packet_header) {

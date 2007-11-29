@@ -141,6 +141,17 @@ int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b)
 	return memcmp(a->addr, b->addr, a->addr_len + a->subaddr_len);
 }
 
+unsigned int nhrp_address_hash(struct nhrp_address *addr)
+{
+	unsigned int hash = 0;
+	int i;
+
+	for (i = 0; i < addr->addr_len; i++)
+		hash = (hash << 8) ^ (hash >> 24) ^ addr->addr[i];
+
+	return hash;
+}
+
 void nhrp_address_mask(struct nhrp_address *addr, int prefix)
 {
 	int i, bits = 8 * addr->addr_len;

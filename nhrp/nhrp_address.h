@@ -35,6 +35,7 @@ void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type);
 int nhrp_address_set(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes);
 int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes, uint8_t sublen, uint8_t *subbytes);
 int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b);
+unsigned int nhrp_address_hash(struct nhrp_address *addr);
 void nhrp_address_mask(struct nhrp_address *addr, int prefix);
 const char *nhrp_address_format(struct nhrp_address *addr,
 				size_t buflen, char *buffer);
