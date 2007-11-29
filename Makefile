@@ -7,18 +7,14 @@
 # under the terms of the GNU General Public License version 3 as published
 # by the Free Software Foundation. See http://www.gnu.org/ for details.
 
-VERSION=0.2
+VERSION=0.3
 
-ifneq ($(shell which colorgcc),)
-CC=colorgcc
-else
 CC=gcc
-endif
 INSTALL=install
 INSTALLDIR=$(INSTALL) -d
 
-CFLAGS=-Wall -Wstrict-prototypes -std=gnu99 -O -g
-LDFLAGS=-g
+CFLAGS=-Wall -Wstrict-prototypes -std=gnu99 -O
+LDFLAGS=
 
 DESTDIR=
 SBINDIR=/usr/sbin
