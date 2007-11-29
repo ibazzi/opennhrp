@@ -7,13 +7,20 @@
 # under the terms of the GNU General Public License version 3 as published
 # by the Free Software Foundation. See http://www.gnu.org/ for details.
 
-VERSION=0.3
+VERSION := 0.3
+
+SVN_REV := $(shell svn info | grep ^Revision | cut -d ' ' -f 2)
+ifneq ($(SVN_REV),)
+FULL_VERSION := $(VERSION)-r$(SVN_REV)
+else
+FULL_VERSION := $(VERSION)
+endif
 
 CC=gcc
 INSTALL=install
 INSTALLDIR=$(INSTALL) -d
 
-CFLAGS=-Wall -Wstrict-prototypes -std=gnu99 -O
+CFLAGS=-Wall -Wstrict-prototypes -std=gnu99 -O -DOPENNHRP_VERSION=\"$(FULL_VERSION)\"
 LDFLAGS=
 
 DESTDIR=

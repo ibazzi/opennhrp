@@ -197,6 +197,7 @@ int main(int argc, char **argv)
 
 	if (!log_init())
 		return 1;
+	nhrp_info("OpenNHRP " OPENNHRP_VERSION " starting");
 	if (!signal_init())
 		return 2;
 	if (!load_config(nhrp_config_file))
@@ -210,3 +211,4 @@ int main(int argc, char **argv)
 
 	return 0;
 }
+
