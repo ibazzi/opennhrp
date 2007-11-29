@@ -203,10 +203,10 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 static void nhrp_peer_static_up(struct nhrp_peer *peer, int status)
 {
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+		nhrp_peer_up(peer);
+
 		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
 			nhrp_peer_register(peer);
-		else
-			nhrp_peer_up(peer);
 	} else {
 		nhrp_task_schedule(&peer->task, 10000, nhrp_run_up_script_task);
 	}
@@ -310,9 +310,6 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	nhrp_task_schedule(&peer->task,
 			   (NHRP_HOLDING_TIME - NHRP_RENEW_TIME) * 1000,
 			   nhrp_peer_register_task);
-
-	/* We are done */
-	nhrp_peer_up(peer);
 }
 
 static void nhrp_peer_register_task(struct nhrp_task *task)
@@ -332,15 +329,15 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 	if (packet == NULL)
 		goto error;
 
-	*packet = (struct nhrp_packet) {
-		.hdr.afnum = peer->afnum,
-		.hdr.protocol_type = peer->protocol_type,
-		.hdr.version = NHRP_VERSION_RFC2332,
-		.hdr.type = NHRP_PACKET_REGISTRATION_REQUEST,
-		.hdr.flags = NHRP_FLAG_REGISTRATION_UNIQUE |
-			     NHRP_FLAG_REGISTRATION_NAT,
-		.dst_protocol_address = peer->protocol_address,
+	packet->hdr = (struct nhrp_packet_header) {
+		.afnum = peer->afnum,
+		.protocol_type = peer->protocol_type,
+		.version = NHRP_VERSION_RFC2332,
+		.type = NHRP_PACKET_REGISTRATION_REQUEST,
+		.flags = NHRP_FLAG_REGISTRATION_UNIQUE |
+			 NHRP_FLAG_REGISTRATION_NAT
 	};
+        packet->dst_protocol_address = peer->protocol_address;
 
 	/* Payload CIE */
 	cie = nhrp_cie_alloc();
@@ -362,7 +359,7 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 	/* Cisco NAT extension CIE */
 	cie = nhrp_cie_alloc();
 	if (cie == NULL)
-		goto error;
+		goto error_free_packet;
 
         *cie = (struct nhrp_cie) {
 		.hdr.code = NHRP_CODE_SUCCESS,
@@ -385,9 +382,10 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 					nhrp_peer_dup(peer));
 	peer->interface = packet->dst_iface;
 
+error_free_packet:
+	nhrp_packet_free(packet);
 error:
 	if (!sent) {
-		nhrp_packet_free(packet);
 		/* Try again later */
 		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME * 1000,
 				   nhrp_peer_register_task);
@@ -504,16 +502,16 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 	if (packet == NULL)
 		goto error;
 
-	*packet = (struct nhrp_packet) {
-		.hdr.afnum = peer->afnum,
-		.hdr.protocol_type = peer->protocol_type,
-		.hdr.version = NHRP_VERSION_RFC2332,
-		.hdr.type = NHRP_PACKET_RESOLUTION_REQUEST,
-		.hdr.flags = NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
-			     NHRP_FLAG_RESOLUTION_AUTHORATIVE |
-			     NHRP_FLAG_RESOLUTION_NAT,
-		.dst_protocol_address = peer->protocol_address,
+	packet->hdr = (struct nhrp_packet_header) {
+		.afnum = peer->afnum,
+		.protocol_type = peer->protocol_type,
+		.version = NHRP_VERSION_RFC2332,
+		.type = NHRP_PACKET_RESOLUTION_REQUEST,
+		.flags = NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
+			 NHRP_FLAG_RESOLUTION_AUTHORATIVE |
+			 NHRP_FLAG_RESOLUTION_NAT
 	};
+	packet->dst_protocol_address = peer->protocol_address;
 
 	/* Payload CIE */
 	cie = nhrp_cie_alloc();
@@ -698,6 +696,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		break;
 	case NHRP_PEER_TYPE_LOCAL:
 		peer->flags |= NHRP_PEER_FLAG_UP;
+		forward_local_addresses_changed();
 		break;
 	case NHRP_PEER_TYPE_INCOMPLETE:
 		nhrp_peer_resolve(peer);

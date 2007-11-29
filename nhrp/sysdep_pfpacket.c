@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <unistd.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <net/if.h>
@@ -117,11 +118,13 @@ static int check_ipv4(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-static int rebuild_filter(void)
+int forward_local_addresses_changed(void)
 {
 	struct sock_fprog prog;
 	struct filter f;
 	int i;
+
+	memset(&f, 0, sizeof(f));
 
 	/* First, we are interested only on outgoing stuff */
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_PKTTYPE);
@@ -237,7 +240,7 @@ int forward_init(void)
 		return FALSE;
 	}
 
-	rebuild_filter();
+	forward_local_addresses_changed();
 
 	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfp_read, NULL))
 		goto err_close;

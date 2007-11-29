@@ -200,9 +200,14 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 
 	for (i = 0; i < packet->num_extensions; i++)
 		nhrp_payload_free(&packet->extension_by_order[i]);
-	if (packet->handler)
-		TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
 	free(packet);
+}
+
+static void nhrp_packet_dequeue(struct nhrp_packet *packet)
+{
+	nhrp_task_cancel(&packet->timeout);
+	TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
+	nhrp_packet_free(packet);
 }
 
 static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
@@ -402,9 +407,8 @@ static int nhrp_do_handle_error_indication(struct nhrp_packet *error_pkt,
 				     &req->src_protocol_address))
 			continue;
 
-		nhrp_task_cancel(&req->timeout);
 		req->handler(req->handler_ctx, error_pkt);
-		nhrp_packet_free(req);
+		nhrp_packet_dequeue(req);
 
 		return TRUE;
 	}
@@ -772,16 +776,15 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 					     &req->src_protocol_address))
 				continue;
 
-			nhrp_task_cancel(&req->timeout);
 			req->handler(req->handler_ctx, packet);
-			nhrp_packet_free(req);
+			nhrp_packet_dequeue(req);
 
 			return TRUE;
 		}
 
 		/* Reply to unsent request? */
 		nhrp_packet_send_error(packet, NHRP_ERROR_INVALID_RESOLUTION_REPLY, 0);
-		return FALSE;
+		return TRUE;
 	}
 
 	if (packet_types[packet->hdr.type].handler == NULL) {
@@ -945,8 +948,10 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 
 	if (!marshall_packet_header(&pos, &pduleft, packet))
 		return -1;
+#if 0
 	if (!marshall_payload(&pos, &pduleft, nhrp_packet_payload(packet)))
 		return -1;
+#endif
 
 	phdr->extension_offset = htons((int)(pos - pdu));
 	for (i = 1; i < packet->num_extensions; i++) {
@@ -1066,8 +1071,11 @@ int nhrp_packet_do_send(struct nhrp_packet *packet)
 	if (size < 0)
 		return FALSE;
 
-	return kernel_send(pdu, size, packet->dst_iface,
-			   &packet->dst_peer->next_hop_address);
+	if (!kernel_send(pdu, size, packet->dst_iface,
+			 &packet->dst_peer->next_hop_address))
+		return FALSE;
+
+	return TRUE;
 }
 
 int nhrp_packet_send(struct nhrp_packet *packet)
@@ -1141,11 +1149,8 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	if (packet->dst_peer->flags & NHRP_PEER_FLAG_UP)
 		return nhrp_packet_do_send(packet);
 
-	if (packet->dst_peer->queued_packet) {
-		nhrp_packet_send_error(packet->dst_peer->queued_packet,
-				       NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
+	if (packet->dst_peer->queued_packet != NULL)
 		nhrp_packet_free(packet->dst_peer->queued_packet);
-	}
 	packet->dst_peer->queued_packet = nhrp_packet_dup(packet);
 
 	return TRUE;
@@ -1153,7 +1158,9 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 
 static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
 {
-        struct nhrp_packet *packet = container_of(task, struct nhrp_packet, timeout);
+	struct nhrp_packet *packet = container_of(task, struct nhrp_packet, timeout);
+
+	TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
 
 	if (++packet->retry < 3) {
 		nhrp_packet_do_send(packet);
@@ -1162,14 +1169,18 @@ static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
 		nhrp_task_schedule(&packet->timeout, 5000, nhrp_packet_xmit_timeout);
 	} else {
 		packet->handler(packet->handler_ctx, NULL);
-		nhrp_packet_free(packet);
+		nhrp_packet_dequeue(packet);
 	}
 }
 
-int nhrp_packet_send_request(struct nhrp_packet *packet,
+int nhrp_packet_send_request(struct nhrp_packet *pkt,
 			     void (*handler)(void *ctx, struct nhrp_packet *packet),
 			     void *ctx)
 {
+	struct nhrp_packet *packet;
+
+	packet = nhrp_packet_dup(pkt);
+
 	packet->retry = 0;
 	request_id++;
 	packet->hdr.u.request_id = htonl(request_id);
@@ -1179,14 +1190,7 @@ int nhrp_packet_send_request(struct nhrp_packet *packet,
 	TAILQ_INSERT_TAIL(&pending_requests, packet, request_list_entry);
 	nhrp_task_schedule(&packet->timeout, 5000, nhrp_packet_xmit_timeout);
 
-	if (!nhrp_packet_send(packet)) {
-		nhrp_task_cancel(&packet->timeout);
-		TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
-
-		return FALSE;
-	}
-
-	return TRUE;
+	return nhrp_packet_send(packet);
 }
 
 int nhrp_packet_send_error(struct nhrp_packet *error_packet,

@@ -201,9 +201,9 @@ int main(int argc, char **argv)
 		return 2;
 	if (!load_config(nhrp_config_file))
 		return 3;
-	if (!kernel_init())
-		return 4;
 	if (!forward_init())
+		return 4;
+	if (!kernel_init())
 		return 5;
 
 	nhrp_task_run();
