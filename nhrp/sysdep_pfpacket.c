@@ -21,7 +21,6 @@
 #include <linux/if_packet.h>
 #include <linux/ip.h>
 
-#include "nhrp_address.h"
 #include "nhrp_defines.h"
 #include "nhrp_common.h"
 #include "nhrp_interface.h"
@@ -192,9 +191,7 @@ static void pfp_read(void *ctx, int fd, short events)
 		.msg_iov = &iov,
 		.msg_iovlen = 1,
 	};
-	struct nhrp_address src, dst;
 	uint8_t buf[2048];
-	char tmp1[64], tmp2[64];
 	int status;
 
 	if (!(events & POLLIN))
@@ -221,14 +218,7 @@ static void pfp_read(void *ctx, int fd, short events)
 		if (lladdr.sll_pkttype != PACKET_OUTGOING)
 			continue;
 
-		if (!nhrp_address_parse_packet(lladdr.sll_protocol,
-					       status, buf, &src, &dst))
-			continue;
-
-		nhrp_info("Detected packet from %s to %s (if %d)",
-			nhrp_address_format(&src, sizeof(tmp1), tmp1),
-			nhrp_address_format(&dst, sizeof(tmp2), tmp2),
-			lladdr.sll_ifindex);
+		nhrp_packet_send_traffic(lladdr.sll_protocol, buf, status);
 	}
 }
 

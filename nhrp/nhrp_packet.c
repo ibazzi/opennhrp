@@ -948,10 +948,8 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 
 	if (!marshall_packet_header(&pos, &pduleft, packet))
 		return -1;
-#if 0
 	if (!marshall_payload(&pos, &pduleft, nhrp_packet_payload(packet)))
 		return -1;
-#endif
 
 	phdr->extension_offset = htons((int)(pos - pdu));
 	for (i = 1; i < packet->num_extensions; i++) {
@@ -1097,6 +1095,8 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 		packet->src_nbma_address = packet->my_nbma_address;
 	if (packet->src_protocol_address.addr_len == 0)
 		packet->src_protocol_address = packet->my_protocol_address;
+	if (packet->hdr.afnum == AFNUM_RESERVED)
+		packet->hdr.afnum = packet->dst_peer->afnum;
 	if (packet->hdr.hop_count == 0)
 		packet->hdr.hop_count = 16;
 
@@ -1231,3 +1231,36 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 	return r;
 }
 
+int nhrp_packet_send_traffic(int protocol_type, uint8_t *pdu, size_t pdulen)
+{
+	struct nhrp_packet *p;
+	struct nhrp_payload *pl;
+	struct nhrp_address src, dst;
+	char tmp1[64], tmp2[64];
+	int r;
+
+	if (!nhrp_address_parse_packet(protocol_type, pdulen, pdu, &src, &dst))
+		return FALSE;
+
+	p = nhrp_packet_alloc();
+	p->hdr = (struct nhrp_packet_header) {
+		.protocol_type = protocol_type,
+		.version = NHRP_VERSION_RFC2332,
+		.type = NHRP_PACKET_TRAFFIC_INDICATION,
+	};
+	p->dst_protocol_address = src;
+
+	pl = nhrp_packet_payload(p);
+	nhrp_payload_set_type(pl, NHRP_PAYLOAD_TYPE_RAW);
+	pl->u.raw = nhrp_buffer_alloc(pdulen);
+	memcpy(pl->u.raw->data, pdu, pdulen);
+
+	nhrp_info("Sending Traffic Indication about packet from %s to %s",
+		nhrp_address_format(&src, sizeof(tmp1), tmp1),
+		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
+
+	r = nhrp_packet_send(p);
+	nhrp_packet_free(p);
+
+	return r;
+}
