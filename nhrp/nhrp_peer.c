@@ -413,6 +413,10 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 					      sizeof(tmp), tmp),
 			  nhrp_error_indication_text(ec), ntohs(ec));
 
+		/* Negative and up: no route what so ever - do not
+		 * use static routes to send stuff to this address */
+		peer->flags |= NHRP_PEER_FLAG_UP;
+
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 		return;
 	}
@@ -722,7 +726,6 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 				   nhrp_peer_check_renew_task);
 		break;
 	case NHRP_PEER_TYPE_NEGATIVE:
-		peer->flags |= NHRP_PEER_FLAG_UP;
 		peer->expire_time = time(NULL) + NHRP_NEGATIVE_CACHE_TIME;
 		kernel_inject_neighbor(&peer->protocol_address,
 				       &peer->next_hop_address,
