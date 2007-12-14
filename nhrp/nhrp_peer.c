@@ -851,12 +851,19 @@ void nhrp_peer_traffic_indication(uint16_t afnum, struct nhrp_address *dst)
 {
 	struct nhrp_peer *peer;
 
+	/* Are we already doing something for this destination? */
+	peer = nhrp_peer_find(dst, 0xff, NHRP_PEER_FIND_EXACT);
+	if (peer != NULL)
+		return;
+
+	/* Get the route */
 	peer = nhrp_peer_find(dst, 0xff, NHRP_PEER_FIND_ROUTE);
 	if (peer != NULL) {
-		if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ||
-		    peer->type == NHRP_PEER_TYPE_NEGATIVE)
+		/* Is this routed to somewhere already? */
+		if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE)
 			return;
 
+		/* Are shortcuts allowed? */
 		if ((peer->interface != NULL) &&
 		    !(peer->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT))
 			return;
