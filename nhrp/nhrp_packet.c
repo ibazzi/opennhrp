@@ -20,8 +20,8 @@
 
 #define RATE_LIMIT_HASH_SIZE		256
 #define RATE_LIMIT_MAX_TOKENS		4
-#define RATE_LIMIT_SEND_INTERVAL	1
-#define RATE_LIMIT_SILENCE		60
+#define RATE_LIMIT_SEND_INTERVAL	5
+#define RATE_LIMIT_SILENCE		360
 #define MAX_PDU_SIZE			1500
 
 struct nhrp_rate_limit {
