@@ -727,9 +727,9 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		break;
 	case NHRP_PEER_TYPE_NEGATIVE:
 		peer->expire_time = time(NULL) + NHRP_NEGATIVE_CACHE_TIME;
-		kernel_inject_neighbor(&peer->protocol_address,
-				       &peer->next_hop_address,
-				       peer->interface);
+		if (peer->flags & NHRP_PEER_FLAG_UP)
+			kernel_inject_neighbor(&peer->protocol_address,
+					       NULL, peer->interface);
 		nhrp_task_schedule(&peer->task,
 				   NHRP_NEGATIVE_CACHE_TIME * 1000,
 				   nhrp_peer_prune_task);
