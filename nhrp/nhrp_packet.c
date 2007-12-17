@@ -1313,6 +1313,7 @@ int nhrp_packet_send_traffic(int protocol_type, uint8_t *pdu, size_t pdulen)
 		.protocol_type = protocol_type,
 		.version = NHRP_VERSION_RFC2332,
 		.type = NHRP_PACKET_TRAFFIC_INDICATION,
+		.hop_count = 1,
 	};
 	p->dst_protocol_address = src;
 
