@@ -356,6 +356,14 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
+	/* Standard extensions */
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_FORWARD_TRANSIT_NHS | NHRP_EXTENSION_FLAG_COMPULSORY);
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_REVERSE_TRANSIT_NHS | NHRP_EXTENSION_FLAG_COMPULSORY);
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_RESPONDER_ADDRESS | NHRP_EXTENSION_FLAG_COMPULSORY);
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+
 	/* Cisco NAT extension CIE */
 	cie = nhrp_cie_alloc();
 	if (cie == NULL)
