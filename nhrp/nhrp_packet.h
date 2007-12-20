@@ -34,6 +34,7 @@ struct nhrp_cie {
 
 TAILQ_HEAD(nhrp_cie_list_head, nhrp_cie);
 
+#define NHRP_PAYLOAD_TYPE_ANY		-1
 #define NHRP_PAYLOAD_TYPE_NONE		0
 #define NHRP_PAYLOAD_TYPE_RAW		1
 #define NHRP_PAYLOAD_TYPE_CIE_LIST	2
@@ -94,8 +95,9 @@ struct nhrp_cie *nhrp_payload_get_cie(struct nhrp_payload *payload, int index);
 
 struct nhrp_packet *nhrp_packet_alloc(void);
 struct nhrp_packet *nhrp_packet_dup(struct nhrp_packet *packet);
-struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet);
-struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet, uint32_t extension);
+struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet, int payload_type);
+struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
+					   uint32_t extension, int payload_type);
 void nhrp_packet_free(struct nhrp_packet *packet);
 int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,

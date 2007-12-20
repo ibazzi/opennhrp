@@ -209,18 +209,26 @@ struct nhrp_packet *nhrp_packet_dup(struct nhrp_packet *packet)
 	return packet;
 }
 
-struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet)
+struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet, int payload_type)
 {
-	return nhrp_packet_extension(packet, NHRP_EXTENSION_PAYLOAD);
+	return nhrp_packet_extension(packet, NHRP_EXTENSION_PAYLOAD, payload_type);
 }
 
 struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
-					   uint32_t extension)
+					   uint32_t extension, int payload_type)
 {
 	struct nhrp_payload *p;
 
-	if (packet->extension_by_type[extension & 0x7fff] != NULL)
-		return packet->extension_by_type[extension & 0x7fff];
+	p = packet->extension_by_type[extension & 0x7fff];
+	if (p != NULL) {
+		if (payload_type == NHRP_PAYLOAD_TYPE_ANY ||
+		    payload_type == p->payload_type)
+			return p;
+		if (extension & NHRP_EXTENSION_FLAG_NOCREATE)
+			return NULL;
+		nhrp_payload_set_type(p, payload_type);
+		return p;
+	}
 
 	if (extension & NHRP_EXTENSION_FLAG_NOCREATE)
 		return NULL;
@@ -228,6 +236,8 @@ struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
 	p = &packet->extension_by_order[packet->num_extensions++];
 	p->extension_type = extension & 0xffff;
 	packet->extension_by_type[extension & 0x7fff] = p;
+	if (payload_type != NHRP_PAYLOAD_TYPE_ANY)
+		nhrp_payload_set_type(p, payload_type);
 
 	return p;
 }
@@ -283,7 +293,7 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 		.holding_time = constant_htons(NHRP_HOLDING_TIME),
 	};
 
-	payload = nhrp_packet_payload(packet);
+	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_ANY);
 	nhrp_payload_free(payload);
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
@@ -302,7 +312,11 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 		nhrp_address_format(&packet->my_nbma_address,
 			sizeof(tmp2), tmp2));
 
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE);
+	/* Reset NAT header to regenerate it for reply */
+	payload = nhrp_packet_extension(packet,
+					NHRP_EXTENSION_NAT_ADDRESS |
+					NHRP_EXTENSION_FLAG_NOCREATE,
+					NHRP_PAYLOAD_TYPE_ANY);
 	if (payload != NULL) {
 		nhrp_payload_free(payload);
 		nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
@@ -330,14 +344,19 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	 *    (=no entries in forward transit CIE list)
 	 * 2. NAT is detected (link layer address != announced address)
 	 * 3. NAT extension is requested */
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_FORWARD_TRANSIT_NHS | NHRP_EXTENSION_FLAG_NOCREATE);
+	payload = nhrp_packet_extension(packet,
+					NHRP_EXTENSION_FORWARD_TRANSIT_NHS |
+					NHRP_EXTENSION_FLAG_NOCREATE,
+					NHRP_PAYLOAD_TYPE_CIE_LIST);
 	if (payload != NULL && TAILQ_EMPTY(&payload->u.cie_list_head) &&
 	    packet->src_linklayer_address.type != PF_UNSPEC &&
 	    nhrp_address_cmp(&packet->src_nbma_address, &packet->src_linklayer_address) != 0) {
 		natted = 1;
-		payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE);
+		payload = nhrp_packet_extension(packet,
+						NHRP_EXTENSION_NAT_ADDRESS |
+						NHRP_EXTENSION_FLAG_NOCREATE,
+						NHRP_PAYLOAD_TYPE_CIE_LIST);
 		if (payload != NULL) {
-			nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 			cie = nhrp_cie_alloc();
 			if (cie != NULL) {
 				cie->nbma_address = packet->src_linklayer_address;
@@ -352,7 +371,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 			     NHRP_FLAG_REGISTRATION_NAT;
 	packet->hdr.hop_count = 0;
 
-	payload = nhrp_packet_payload(packet);
+	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	TAILQ_FOREACH(cie, &payload->u.cie_list_head, cie_list_entry) {
 		peer = nhrp_peer_alloc();
 		if (peer == NULL) {
@@ -441,7 +460,7 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 	if (!(packet->hdr.flags & NHRP_FLAG_PURGE_NO_REPLY))
 		ret = nhrp_packet_send(packet);
 
-	payload = nhrp_packet_payload(packet);
+	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	TAILQ_FOREACH(cie, &payload->u.cie_list_head, cie_list_entry) {
 		nhrp_info("Purge proto %s/%d nbma %s",
 			nhrp_address_format(&cie->protocol_address,
@@ -497,7 +516,7 @@ static int nhrp_handle_error_indication(struct nhrp_packet *error_packet)
 	if (packet == NULL)
 		return FALSE;
 
-	payload = nhrp_packet_payload(error_packet);
+	payload = nhrp_packet_payload(error_packet, NHRP_PAYLOAD_TYPE_RAW);
 	pdu = payload->u.raw->data;
 	pduleft = payload->u.raw->length;
 
@@ -518,7 +537,7 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 	struct nhrp_address dst;
 	struct nhrp_payload *pl;
 
-	pl = nhrp_packet_payload(packet);
+	pl = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_RAW);
 	if (pl == NULL)
 		return FALSE;
 
@@ -729,7 +748,7 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 
 	if (!unmarshall_payload(&pos, &pduleft, packet,
 				packet_types[packet->hdr.type].payload_type,
-				size, nhrp_packet_payload(packet))) {
+				size, nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_ANY))) {
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ERROR, pos - pdu);
 		return FALSE;
 	}
@@ -763,7 +782,7 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 
 		if (!unmarshall_payload(&pos, &pduleft, packet,
 					payload_type, ntohs(eh.length),
-					nhrp_packet_extension(packet, ntohs(eh.type)))) {
+					nhrp_packet_extension(packet, ntohs(eh.type), NHRP_PAYLOAD_TYPE_ANY))) {
 			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ERROR, pos - pdu);
 			return FALSE;
 		}
@@ -799,10 +818,16 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 
 	switch (packet_types[packet->hdr.type].type) {
 	case NHRP_TYPE_REQUEST:
-		p = nhrp_packet_extension(packet, NHRP_EXTENSION_FORWARD_TRANSIT_NHS | NHRP_EXTENSION_FLAG_NOCREATE);
+		p = nhrp_packet_extension(packet,
+					  NHRP_EXTENSION_FORWARD_TRANSIT_NHS |
+					  NHRP_EXTENSION_FLAG_NOCREATE,
+					  NHRP_PAYLOAD_TYPE_CIE_LIST);
 		break;
 	case NHRP_TYPE_REPLY:
-		p = nhrp_packet_extension(packet, NHRP_EXTENSION_REVERSE_TRANSIT_NHS | NHRP_EXTENSION_FLAG_NOCREATE);
+		p = nhrp_packet_extension(packet,
+					  NHRP_EXTENSION_REVERSE_TRANSIT_NHS |
+					  NHRP_EXTENSION_FLAG_NOCREATE,
+					  NHRP_PAYLOAD_TYPE_CIE_LIST);
 		break;
 	}
 	if (p != NULL) {
@@ -918,7 +943,10 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	    (packet->hdr.type != NHRP_PACKET_ERROR_INDICATION ||
 	     packet->hdr.u.error.code != NHRP_ERROR_AUTHENTICATION_FAILURE)) {
 		struct nhrp_payload *p;
-		p = nhrp_packet_extension(packet, NHRP_EXTENSION_AUTHENTICATION | NHRP_EXTENSION_FLAG_NOCREATE);
+		p = nhrp_packet_extension(packet,
+					  NHRP_EXTENSION_AUTHENTICATION |
+					  NHRP_EXTENSION_FLAG_NOCREATE,
+					  NHRP_PAYLOAD_TYPE_RAW);
 		if (p == NULL ||
 		    nhrp_buffer_cmp(packet->src_iface->auth_token, p->u.raw) != 0) {
 			nhrp_error("Dropping packet from %s with bad authentication",
@@ -1017,7 +1045,7 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 
 	if (!marshall_packet_header(&pos, &pduleft, packet))
 		return -1;
-	if (!marshall_payload(&pos, &pduleft, nhrp_packet_payload(packet)))
+	if (!marshall_payload(&pos, &pduleft, nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_ANY)))
 		return -1;
 
 	phdr->extension_offset = htons((int)(pos - pdu));
@@ -1081,7 +1109,8 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 		dest = &packet->dst_protocol_address;
 		r = NHRP_EXTENSION_FORWARD_TRANSIT_NHS;
 	}
-	payload = nhrp_packet_extension(packet, r | NHRP_EXTENSION_FLAG_NOCREATE);
+	payload = nhrp_packet_extension(packet, r | NHRP_EXTENSION_FLAG_NOCREATE,
+					NHRP_PAYLOAD_TYPE_CIE_LIST);
 	if (payload != NULL)
 		cielist = &payload->u.cie_list_head;
 
@@ -1175,7 +1204,8 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 	/* RFC2332 5.3.1 */
 	payload = nhrp_packet_extension(
 		packet, NHRP_EXTENSION_RESPONDER_ADDRESS |
-		NHRP_EXTENSION_FLAG_COMPULSORY | NHRP_EXTENSION_FLAG_NOCREATE);
+		NHRP_EXTENSION_FLAG_COMPULSORY | NHRP_EXTENSION_FLAG_NOCREATE,
+		NHRP_PAYLOAD_TYPE_CIE_LIST);
 	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY &&
 	    (payload != NULL && TAILQ_EMPTY(&payload->u.cie_list_head))) {
 		struct nhrp_cie *cie;
@@ -1193,7 +1223,10 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 
 	/* RFC2332 5.3.4 - Authentication is always done pairwise on an NHRP
 	 * hop-by-hop basis; i.e. regenerated at each hop. */
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_AUTHENTICATION | NHRP_EXTENSION_FLAG_COMPULSORY);
+	payload = nhrp_packet_extension(packet,
+					NHRP_EXTENSION_AUTHENTICATION |
+					NHRP_EXTENSION_FLAG_COMPULSORY,
+					NHRP_PAYLOAD_TYPE_RAW);
 	nhrp_payload_free(payload);
 	if (packet->dst_iface->auth_token != NULL)
 		nhrp_payload_set_raw(payload,
@@ -1227,11 +1260,11 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	/* Cisco NAT extension CIE */
 	if (packet_types[packet->hdr.type].type != NHRP_TYPE_INDICATION &&
 	    (packet->hdr.flags & NHRP_FLAG_REGISTRATION_NAT)) {
-		payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS);
-		nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+		payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS,
+						NHRP_PAYLOAD_TYPE_CIE_LIST);
 
 		if (packet->dst_iface->nat_cie.nbma_address.addr_len &&
-		    TAILQ_EMPTY(&payload->u.cie_list_head)) {
+		    payload != NULL && TAILQ_EMPTY(&payload->u.cie_list_head)) {
 			cie = nhrp_cie_alloc();
 			if (cie != NULL) {
 				*cie = packet->dst_iface->nat_cie;
@@ -1304,8 +1337,7 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 	else
 		p->dst_protocol_address = error_packet->src_protocol_address;
 
-	pl = nhrp_packet_payload(p);
-	nhrp_payload_set_type(pl, NHRP_PAYLOAD_TYPE_RAW);
+	pl = nhrp_packet_payload(p, NHRP_PAYLOAD_TYPE_RAW);
 	pl->u.raw = nhrp_buffer_alloc(error_packet->req_pdulen);
 	memcpy(pl->u.raw->data, error_packet->req_pdu, error_packet->req_pdulen);
 
@@ -1368,8 +1400,7 @@ int nhrp_packet_send_traffic(int protocol_type, uint8_t *pdu, size_t pdulen)
 	};
 	p->dst_protocol_address = src;
 
-	pl = nhrp_packet_payload(p);
-	nhrp_payload_set_type(pl, NHRP_PAYLOAD_TYPE_RAW);
+	pl = nhrp_packet_payload(p, NHRP_PAYLOAD_TYPE_RAW);
 	pl->u.raw = nhrp_buffer_alloc(pdulen);
 	memcpy(pl->u.raw->data, pdu, pdulen);
 

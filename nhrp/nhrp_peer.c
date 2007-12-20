@@ -305,7 +305,10 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 				      sizeof(tmp), tmp));
 
 	/* Check for NAT */
-	payload = nhrp_packet_extension(reply, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE);
+	payload = nhrp_packet_extension(reply,
+					NHRP_EXTENSION_NAT_ADDRESS |
+					NHRP_EXTENSION_FLAG_NOCREATE,
+					NHRP_PAYLOAD_TYPE_CIE_LIST);
 	if (payload != NULL) {
 		cie = nhrp_payload_get_cie(payload, 2);
 		if (cie != NULL) {
@@ -361,17 +364,22 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 		.hdr.preference = 0,
 	};
 
-	payload = nhrp_packet_payload(packet);
-	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
 	/* Standard extensions */
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_FORWARD_TRANSIT_NHS | NHRP_EXTENSION_FLAG_COMPULSORY);
-	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_REVERSE_TRANSIT_NHS | NHRP_EXTENSION_FLAG_COMPULSORY);
-	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_RESPONDER_ADDRESS | NHRP_EXTENSION_FLAG_COMPULSORY);
-	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_packet_extension(packet,
+			      NHRP_EXTENSION_FORWARD_TRANSIT_NHS |
+			      NHRP_EXTENSION_FLAG_COMPULSORY,
+			      NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_packet_extension(packet,
+			      NHRP_EXTENSION_REVERSE_TRANSIT_NHS |
+			      NHRP_EXTENSION_FLAG_COMPULSORY,
+			      NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_packet_extension(packet,
+			      NHRP_EXTENSION_RESPONDER_ADDRESS |
+			      NHRP_EXTENSION_FLAG_COMPULSORY,
+			      NHRP_PAYLOAD_TYPE_CIE_LIST);
 
 	/* Cisco NAT extension CIE */
 	cie = nhrp_cie_alloc();
@@ -386,8 +394,8 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 		.protocol_address = peer->protocol_address,
 	};
 
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS);
-	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS,
+					NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
 	nhrp_info("Sending Registration Request to %s",
@@ -438,11 +446,10 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		return;
 	}
 
-	payload = nhrp_packet_payload(reply);
-	if (payload->payload_type != NHRP_PAYLOAD_TYPE_CIE_LIST)
-		return;
-
+	payload = nhrp_packet_payload(reply, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	cie = TAILQ_FIRST(&payload->u.cie_list_head);
+	if (cie == NULL)
+		return;
 
 	nhrp_info("Received Resolution Reply %s/%d is at proto %s nbma %s",
 		  nhrp_address_format(&peer->protocol_address,
@@ -453,7 +460,10 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		  nhrp_address_format(&cie->nbma_address,
 				      sizeof(nbma), nbma));
 
-	payload = nhrp_packet_extension(reply, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE);
+	payload = nhrp_packet_extension(reply,
+					NHRP_EXTENSION_NAT_ADDRESS |
+					NHRP_EXTENSION_FLAG_NOCREATE,
+					NHRP_PAYLOAD_TYPE_CIE_LIST);
 	if ((reply->hdr.flags & NHRP_FLAG_RESOLUTION_NAT) &&
 	    (payload != NULL)) {
 		natcie = TAILQ_FIRST(&payload->u.cie_list_head);
@@ -546,22 +556,29 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 		.hdr.holding_time = constant_htons(NHRP_HOLDING_TIME),
 	};
 
-	payload = nhrp_packet_payload(packet);
-	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
 	nhrp_info("Sending Resolution Request to %s",
 		  nhrp_address_format(&peer->protocol_address,
 				      sizeof(dst), dst));
 
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_FORWARD_TRANSIT_NHS | NHRP_EXTENSION_FLAG_COMPULSORY);
-	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_REVERSE_TRANSIT_NHS | NHRP_EXTENSION_FLAG_COMPULSORY);
-	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_RESPONDER_ADDRESS | NHRP_EXTENSION_FLAG_COMPULSORY);
-	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
-	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS);
-	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	/* Standard extensions */
+	nhrp_packet_extension(packet,
+			      NHRP_EXTENSION_FORWARD_TRANSIT_NHS |
+			      NHRP_EXTENSION_FLAG_COMPULSORY,
+			      NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_packet_extension(packet,
+			      NHRP_EXTENSION_REVERSE_TRANSIT_NHS |
+			      NHRP_EXTENSION_FLAG_COMPULSORY,
+			      NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_packet_extension(packet,
+			      NHRP_EXTENSION_RESPONDER_ADDRESS |
+			      NHRP_EXTENSION_FLAG_COMPULSORY,
+			      NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_packet_extension(packet,
+			      NHRP_EXTENSION_NAT_ADDRESS,
+			      NHRP_PAYLOAD_TYPE_CIE_LIST);
 
 	sent = nhrp_packet_send_request(packet,
 					nhrp_peer_handle_resolution_reply,
