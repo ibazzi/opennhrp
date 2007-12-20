@@ -679,7 +679,8 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 		if (!(peer->flags & NHRP_PEER_FLAG_REPLACED)) {
 			if (peer->flags & NHRP_PEER_FLAG_UP)
 				nhrp_peer_run_script(peer, "peer-down", NULL);
-			if (peer->protocol_address.type != PF_UNSPEC)
+			if (peer->protocol_address.type != PF_UNSPEC &&
+			    peer->interface != NULL)
 				kernel_inject_neighbor(&peer->protocol_address,
 						       NULL, peer->interface);
 		}
