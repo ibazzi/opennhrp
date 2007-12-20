@@ -53,6 +53,7 @@ struct nhrp_peer {
 	/* Protocol address for NHRP_PEER_TYPE_ROUTE,
 	 * NBMA address for other type of entries */
 	struct nhrp_address next_hop_address;
+	struct nhrp_address next_hop_nat_oa;
 
 	struct nhrp_packet *queued_packet;
 };

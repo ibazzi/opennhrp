@@ -18,7 +18,7 @@
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
 
-#define NHRP_PEER_FORMAT_LEN		80
+#define NHRP_PEER_FORMAT_LEN		128
 #define NHRP_NEGATIVE_CACHE_TIME	(3*60)
 #define NHRP_RENEW_TIME			(2*60)
 #define NHRP_RETRY_REGISTER_TIME	(60)
@@ -107,6 +107,10 @@ static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 			peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ? "nexthop" : "nbma",
 			nhrp_address_format(&peer->next_hop_address, sizeof(tmp), tmp));
 	}
+	if (peer->next_hop_nat_oa.type != PF_UNSPEC) {
+		i += snprintf(&buf[i], len - i, " nbma-nat-oa %s",
+			nhrp_address_format(&peer->next_hop_nat_oa, sizeof(tmp), tmp));
+	}
 	if (peer->interface != NULL) {
 		i += snprintf(&buf[i], len - i, " dev %s",
 			      peer->interface->name);
@@ -184,7 +188,12 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 	case NHRP_PEER_TYPE_STATIC:
 	case NHRP_PEER_TYPE_DYNAMIC:
 		envp[i++] = env("NHRP_DESTNBMA",
-			nhrp_address_format(&peer->next_hop_address, sizeof(tmp), tmp));
+			nhrp_address_format(&peer->next_hop_address,
+					    sizeof(tmp), tmp));
+		if (peer->next_hop_nat_oa.type != PF_UNSPEC)
+			envp[i++] = env("NHRP_DESTNBMA_NAT_OA",
+				nhrp_address_format(&peer->next_hop_nat_oa,
+						    sizeof(tmp), tmp));
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
 		envp[i++] = env("NHRP_NEXTHOP",
