@@ -1216,6 +1216,13 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
 
+	if (packet->dst_iface == NULL) {
+		if (!nhrp_packet_route(packet, 0)) {
+			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
+			return TRUE;
+		}
+	}
+
 	/* Cisco NAT extension CIE */
 	if (packet_types[packet->hdr.type].type != NHRP_TYPE_INDICATION &&
 	    (packet->hdr.flags & NHRP_FLAG_REGISTRATION_NAT)) {
