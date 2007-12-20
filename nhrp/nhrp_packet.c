@@ -404,9 +404,8 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		if (peer->prefix_length == 0xff)
 			peer->prefix_length = peer->protocol_address.addr_len * 8;
 
-		while ((p = nhrp_peer_find(&peer->protocol_address,
-					   peer->prefix_length,
-					   NHRP_PEER_FIND_SUBNET |
+		while ((p = nhrp_peer_find(&peer->protocol_address, peer->prefix_length,
+					   NHRP_PEER_FIND_EXACT |
 					   NHRP_PEER_FIND_REMOVABLE)) != NULL) {
 			/* If re-registration, mark the new connection up */
 			if ((p->flags & NHRP_PEER_FLAG_UP) &&
@@ -418,15 +417,16 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 			nhrp_peer_remove(p);
 		}
 
-		p = nhrp_peer_find(&peer->protocol_address,
-				   peer->prefix_length,
-				   NHRP_PEER_FIND_SUBNET);
-		if (p == NULL) {
+		p = nhrp_peer_find(&peer->protocol_address, peer->prefix_length,
+				   NHRP_PEER_FIND_ROUTE);
+		if (p == NULL ||
+		    nhrp_address_cmp(&peer->protocol_address, &p->protocol_address)) {
 			cie->hdr.code = NHRP_CODE_SUCCESS;
 			nhrp_peer_insert(peer);
 		} else {
 			/* Static binding already exists */
 			cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
+			peer->flags |= NHRP_PEER_FLAG_REPLACED;
 		}
 		nhrp_peer_free(peer);
 	}
