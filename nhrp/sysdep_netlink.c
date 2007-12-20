@@ -517,6 +517,8 @@ static void pfpacket_read(void *ctx, int fd, short events)
 			continue;
 
 		nhrp_address_set(&from, PF_INET, lladdr.sll_halen, lladdr.sll_addr);
+		if (memcmp(lladdr.sll_addr, "\x00\x00\x00\x00", 4) == 0)
+			nhrp_address_set_type(&from, PF_UNSPEC);
 		nhrp_packet_receive(buf, status, iface, &from);
 	}
 }

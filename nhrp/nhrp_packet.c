@@ -332,6 +332,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	 * 3. NAT extension is requested */
 	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_FORWARD_TRANSIT_NHS | NHRP_EXTENSION_FLAG_NOCREATE);
 	if (payload != NULL && TAILQ_EMPTY(&payload->u.cie_list_head) &&
+	    packet->src_linklayer_address.type != PF_UNSPEC &&
 	    nhrp_address_cmp(&packet->src_nbma_address, &packet->src_linklayer_address) != 0) {
 		natted = 1;
 		payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE);

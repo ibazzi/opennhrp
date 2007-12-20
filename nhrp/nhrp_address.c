@@ -102,6 +102,12 @@ int nhrp_address_parse_packet(uint16_t protocol, size_t len, uint8_t *packet,
 	return TRUE;
 }
 
+void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type)
+{
+	addr->type = type;
+	addr->addr_len = addr->subaddr_len = 0;
+}
+
 int nhrp_address_set(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes)
 {
 	if (len > NHRP_MAX_ADDRESS_LEN)
