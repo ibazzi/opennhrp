@@ -271,7 +271,7 @@ static void nhrp_peer_up(struct nhrp_peer *peer)
 	}
 
 	if (peer->queued_packet != NULL) {
-		nhrp_packet_do_send(peer->queued_packet);
+		nhrp_packet_marshall_and_send(peer->queued_packet);
 		nhrp_packet_free(peer->queued_packet);
 		peer->queued_packet = NULL;
 	}
@@ -559,6 +559,8 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_REVERSE_TRANSIT_NHS | NHRP_EXTENSION_FLAG_COMPULSORY);
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_RESPONDER_ADDRESS | NHRP_EXTENSION_FLAG_COMPULSORY);
+	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS);
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 
 	sent = nhrp_packet_send_request(packet,

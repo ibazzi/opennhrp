@@ -125,6 +125,11 @@ void nhrp_cie_free(struct nhrp_cie *cie)
 	free(cie);
 }
 
+void nhrp_cie_reset(struct nhrp_cie *cie)
+{
+	memset(&cie->cie_list_entry, 0, sizeof(cie->cie_list_entry));
+}
+
 void nhrp_payload_free(struct nhrp_payload *payload)
 {
 	struct nhrp_cie *cie;
@@ -283,13 +288,25 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
-	if (!nhrp_packet_route(packet)) {
+	if (!nhrp_packet_route(packet, 0)) {
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
 	}
 
 	cie->nbma_address = packet->my_nbma_address;
 	cie->protocol_address = packet->my_protocol_address;
+
+	nhrp_info("Sending Resolution Reply %s is-at %s",
+		nhrp_address_format(&packet->my_protocol_address,
+			sizeof(tmp), tmp),
+		nhrp_address_format(&packet->my_nbma_address,
+			sizeof(tmp2), tmp2));
+
+	payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE);
+	if (payload != NULL) {
+		nhrp_payload_free(payload);
+		nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	}
 
 	return nhrp_packet_send(packet);
 }
@@ -392,6 +409,11 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 			cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
 		}
 		nhrp_peer_free(peer);
+	}
+
+	if (!nhrp_packet_route(packet, 1)) {
+		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
+		return FALSE;
 	}
 
 	return nhrp_packet_send(packet);
@@ -769,7 +791,7 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 	}
 	packet->hdr.hop_count--;
 
-	if (!nhrp_packet_route(packet)) {
+	if (!nhrp_packet_route(packet, 0)) {
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
 	}
@@ -804,7 +826,7 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 		}
 	}
 
-	return nhrp_packet_send(packet);
+	return nhrp_packet_route_and_send(packet);
 }
 
 static int nhrp_packet_receive_local(struct nhrp_packet *packet)
@@ -1039,13 +1061,17 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	return size;
 }
 
-int nhrp_packet_route(struct nhrp_packet *packet)
+int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 {
 	struct nhrp_address proto_nexthop, *dest;
 	struct nhrp_cie_list_head *cielist = NULL;
 	struct nhrp_payload *payload;
 	char tmp[64];
 	int r, ifindex = -1;
+	int up = 0;
+
+	if (!need_direct)
+		up = NHRP_PEER_FIND_UP;
 
 	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY) {
 		dest = &packet->src_protocol_address;
@@ -1078,7 +1104,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	packet->dst_peer = nhrp_peer_find_full(
 		&proto_nexthop, 0xff,
 		NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_COMPLETE |
-		NHRP_PEER_FIND_NEXTHOP, cielist);
+		NHRP_PEER_FIND_NEXTHOP | up, cielist);
 	if (packet->dst_peer == NULL ||
 	    packet->dst_peer->type == NHRP_PEER_TYPE_NEGATIVE) {
 		nhrp_error("No peer entry for protocol address %s",
@@ -1101,7 +1127,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	return TRUE;
 }
 
-int nhrp_packet_do_send(struct nhrp_packet *packet)
+int nhrp_packet_marshall_and_send(struct nhrp_packet *packet)
 {
 	uint8_t pdu[MAX_PDU_SIZE];
 	char tmp[64];
@@ -1122,16 +1148,15 @@ int nhrp_packet_do_send(struct nhrp_packet *packet)
 	return TRUE;
 }
 
-int nhrp_packet_send(struct nhrp_packet *packet)
+int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 {
 	struct nhrp_payload *payload;
-	struct nhrp_cie *cie;
 
 	if (packet->dst_peer == NULL ||
 	    packet->dst_iface == NULL ||
 	    packet->my_nbma_address.addr_len == 0 ||
 	    packet->my_protocol_address.addr_len == 0) {
-		if (!nhrp_packet_route(packet)) {
+		if (!nhrp_packet_route(packet, 0)) {
 			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 			return TRUE;
 		}
@@ -1173,6 +1198,24 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 		nhrp_payload_set_raw(payload,
 			nhrp_buffer_copy(packet->dst_iface->auth_token));
 
+        if (packet->dst_peer->type == NHRP_PEER_TYPE_LOCAL)
+		return nhrp_packet_receive_local(packet);
+
+	if (packet->dst_peer->flags & NHRP_PEER_FLAG_UP)
+		return nhrp_packet_marshall_and_send(packet);
+
+	if (packet->dst_peer->queued_packet != NULL)
+		nhrp_packet_free(packet->dst_peer->queued_packet);
+	packet->dst_peer->queued_packet = nhrp_packet_dup(packet);
+
+	return TRUE;
+}
+
+int nhrp_packet_send(struct nhrp_packet *packet)
+{
+	struct nhrp_payload *payload;
+	struct nhrp_cie *cie;
+
 	/* Cisco NAT extension CIE */
 	if (packet_types[packet->hdr.type].type != NHRP_TYPE_INDICATION &&
 	    (packet->hdr.flags & NHRP_FLAG_REGISTRATION_NAT)) {
@@ -1184,22 +1227,13 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 			cie = nhrp_cie_alloc();
 			if (cie != NULL) {
 				*cie = packet->dst_iface->nat_cie;
+				nhrp_cie_reset(cie);
 				nhrp_payload_add_cie(payload, cie);
 			}
 		}
 	}
 
-	if (packet->dst_peer->type == NHRP_PEER_TYPE_LOCAL)
-		return nhrp_packet_receive_local(packet);
-
-	if (packet->dst_peer->flags & NHRP_PEER_FLAG_UP)
-		return nhrp_packet_do_send(packet);
-
-	if (packet->dst_peer->queued_packet != NULL)
-		nhrp_packet_free(packet->dst_peer->queued_packet);
-	packet->dst_peer->queued_packet = nhrp_packet_dup(packet);
-
-	return TRUE;
+	return nhrp_packet_route_and_send(packet);
 }
 
 static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
@@ -1209,7 +1243,7 @@ static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
 	TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
 
 	if (++packet->retry < 3) {
-		nhrp_packet_do_send(packet);
+		nhrp_packet_marshall_and_send(packet);
 
 		TAILQ_INSERT_TAIL(&pending_requests, packet, request_list_entry);
 		nhrp_task_schedule(&packet->timeout, 5000, nhrp_packet_xmit_timeout);

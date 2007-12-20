@@ -85,6 +85,7 @@ void nhrp_buffer_free(struct nhrp_buffer *buffer);
 
 struct nhrp_cie *nhrp_cie_alloc(void);
 void nhrp_cie_free(struct nhrp_cie *cie);
+void nhrp_cie_reset(struct nhrp_cie *cie);
 
 void nhrp_payload_set_type(struct nhrp_payload *payload, int type);
 void nhrp_payload_set_raw(struct nhrp_payload *payload, struct nhrp_buffer *buf);
@@ -99,8 +100,9 @@ void nhrp_packet_free(struct nhrp_packet *packet);
 int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,
 			struct nhrp_address *from);
-int nhrp_packet_route(struct nhrp_packet *packet);
-int nhrp_packet_do_send(struct nhrp_packet *packet);
+int nhrp_packet_route(struct nhrp_packet *packet, int need_direct);
+int nhrp_packet_marshall_and_send(struct nhrp_packet *packet);
+int nhrp_packet_route_and_send(struct nhrp_packet *packet);
 int nhrp_packet_send(struct nhrp_packet *packet);
 int nhrp_packet_send_request(struct nhrp_packet *packet,
 			     void (*handler)(void *ctx, struct nhrp_packet *packet),
