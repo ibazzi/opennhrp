@@ -9,6 +9,8 @@
  */
 
 #include <time.h>
+#include <stdio.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
 #include <malloc.h>
@@ -290,6 +292,21 @@ static int netlink_link_arp_on(struct nhrp_interface *iface)
 	return TRUE;
 }
 
+static int proc_icmp_redirect_off(struct nhrp_interface *iface)
+{
+	char fname[256];
+	int fd;
+
+	sprintf(fname, "/proc/sys/net/ipv4/conf/%s/send_redirects", iface->name);
+	fd = open(fname, O_WRONLY);
+	if (fd < 0)
+		return FALSE;
+	write(fd, "0\n", 2);
+	close(fd);
+
+	return TRUE;
+}
+
 static void netlink_neigh_request(struct nlmsghdr *msg)
 {
 	struct ndmsg *ndm = NLMSG_DATA(msg);
@@ -378,6 +395,7 @@ static void netlink_link_update(struct nlmsghdr *msg)
 	if (!(iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)) {
 		netlink_configure_arp(iface, PF_INET);
 		netlink_link_arp_on(iface);
+		proc_icmp_redirect_off(iface);
 	}
 }
 
