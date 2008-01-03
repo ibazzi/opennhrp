@@ -3,9 +3,14 @@
 case $1 in
 peer-up)
 	echo "Neighbor $NHRP_DESTADDR at $NHRP_DESTNBMA discovered"
+	MY_IP=`ip route get $NHRP_DESTNBMA | awk 'match($0, /src [^ ]*/) { print substr($0, RSTART+4, RLENGTH-4) };'`
+
+	racoonctl establish-sa -w isakmp inet $MY_IP $NHRP_DESTNBMA || exit 1
+	racoonctl establish-sa -w esp inet $MY_IP $NHRP_DESTNBMA gre || exit 1 
 	;;
 peer-down)
 	echo "Neighbor $NHRP_DESTADDR at $NHRP_DESTNBMA is gone"
+	racoonctl vpn-disconnect $NHRP_DESTADDR
 	;;
 route-up)
 	echo "Route $NHRP_DESTADDR/$NHRP_DESTPREFIX is up"
