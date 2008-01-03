@@ -8,10 +8,15 @@ Project homepage: http://sourceforge.net/projects/opennhrp
 
 	KERNEL REQUIREMENTS
 
-You need a kernel with ip_gre patched to support setting and getting
-of NBMA address. This is available in vanilla kernel since 2.6.24-rc2.
-Also it is present in Gentoo patches: gentoo-sources-2.6.23-r1 and
-gentoo-sources-2.6.22-r10 have it.
+You need a kernel with ip_gre patched to support sending and receiving
+using NBMA address. 
+
+The support was originally added to 2.6.24-rc2, but it contains a bug
+that prevents NAT detection. The latest fixes will be present in
+2.6.24-rc7.
+
+Gentoo kernels: gentoo-sources-2.6.23-r1 and gentoo-sources-2.6.22-r10
+have the partitial support too (no NAT there either).
 
 Also remember to turn on CONFIG_ARPD and CONFIG_NET_IPGRE in your kernel
 configuration.
@@ -30,6 +35,10 @@ To create NBMA GRE tunnel you might use following:
 	ip link set gre1 up
 	
 This should work with the configuration example in opennhrp.conf(5).
+
+	IPSEC ENCRYPTION OF GRE PACKETS
+
+To be documented when ipsec-tools is properly patched.
 
 	DOCUMENTATION
 
