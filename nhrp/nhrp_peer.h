@@ -24,6 +24,7 @@
 #define NHRP_PEER_TYPE_DYNAMIC		0x04	/* NHC registration */
 #define NHRP_PEER_TYPE_LOCAL		0x05	/* Learned from interface config */
 #define NHRP_PEER_TYPE_STATIC		0x06	/* Static mapping from config file */
+#define NHRP_PEER_TYPE_MAX		0x07
 
 #define NHRP_PEER_FLAG_USED		0x01	/* Peer is in kernel ARP table */
 #define NHRP_PEER_FLAG_UNIQUE		0x02	/* Peer is unique; see RFC2332 */
@@ -58,6 +59,7 @@ struct nhrp_peer {
 	struct nhrp_packet *queued_packet;
 };
 
+const char * const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
 typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);
 
 void nhrp_peer_reap_pid(pid_t pid, int status);

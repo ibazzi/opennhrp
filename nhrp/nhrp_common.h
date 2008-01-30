@@ -31,7 +31,7 @@ struct nhrp_task {
 	void (*callback)(struct nhrp_task *task);
 };
 
-int nhrp_task_poll_fd(int fd, short events, void (*callback)(void *ctx, int fd, short events),
+int nhrp_task_poll_fd(int fd, short events, int (*callback)(void *ctx, int fd, short events),
 		      void *ctx);
 void nhrp_task_unpoll_fd(int fd);
 void nhrp_task_run(void);
@@ -62,5 +62,6 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor,
 
 int log_init(void);
 int signal_init(void);
+int admin_init(const char *socket);
 
 #endif

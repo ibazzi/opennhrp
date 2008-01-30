@@ -21,14 +21,14 @@ static void signal_handler(int sig)
 	send(signal_pipe[1], &sig, sizeof(sig), MSG_DONTWAIT);
 }
 
-static void reap_children(void *ctx, int fd, short events)
+static int reap_children(void *ctx, int fd, short events)
 {
 	struct nhrp_peer *peer;
 	pid_t pid;
 	int status, sig;
 
 	if (read(fd, &sig, sizeof(sig)) != sizeof(sig))
-		return;
+		return 0;
 
 	switch (sig) {
 	case SIGCHLD:
@@ -50,6 +50,7 @@ static void reap_children(void *ctx, int fd, short events)
 			nhrp_peer_remove(peer);
 		break;
 	}
+	return 0;
 }
 
 int signal_init(void)

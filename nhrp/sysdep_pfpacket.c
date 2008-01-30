@@ -181,7 +181,7 @@ int forward_local_addresses_changed(void)
 	return TRUE;
 }
 
-static void pfp_read(void *ctx, int fd, short events)
+static int pfp_read(void *ctx, int fd, short events)
 {
 	struct sockaddr_ll lladdr;
 	struct iovec iov;
@@ -195,7 +195,7 @@ static void pfp_read(void *ctx, int fd, short events)
 	int status;
 
 	if (!(events & POLLIN))
-		return;
+		return 0;
 
 	iov.iov_base = buf;
 	while (TRUE) {
@@ -205,14 +205,14 @@ static void pfp_read(void *ctx, int fd, short events)
 			if (errno == EINTR)
 				continue;
 			if (errno == EAGAIN)
-				return;
+				return 0;
 			nhrp_perror("PF_PACKET overrun");
 			continue;
 		}
 
 		if (status == 0) {
 			nhrp_error("PF_PACKET returned EOF");
-			return;
+			return 0;
 		}
 
 		if (lladdr.sll_pkttype != PACKET_OUTGOING)
@@ -220,6 +220,8 @@ static void pfp_read(void *ctx, int fd, short events)
 
 		nhrp_packet_send_traffic(lladdr.sll_protocol, buf, status);
 	}
+
+	return 0;
 }
 
 int forward_init(void)

@@ -442,12 +442,14 @@ static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
 	[RTM_DELADDR] = netlink_addr_update,
 };
 
-static void netlink_read(void *ctx, int fd, short events)
+static int netlink_read(void *ctx, int fd, short events)
 {
 	struct netlink_fd *nfd = (struct netlink_fd *) ctx;
 
 	if (events & POLLIN)
 		netlink_receive(nfd, NULL);
+
+	return 0;
 }
 
 static void netlink_close(struct netlink_fd *fd)
@@ -496,7 +498,7 @@ error:
 	return FALSE;
 }
 
-static void pfpacket_read(void *ctx, int fd, short events)
+static int pfpacket_read(void *ctx, int fd, short events)
 {
 	struct sockaddr_ll lladdr;
 	struct nhrp_interface *iface;
@@ -520,14 +522,14 @@ static void pfpacket_read(void *ctx, int fd, short events)
 			if (errno == EINTR)
 				continue;
 			if (errno == EAGAIN)
-				return;
+				return 0;
 			nhrp_perror("PF_PACKET overrun");
 			continue;
 		}
 
 		if (status == 0) {
 			nhrp_error("PF_PACKET returned EOF");
-			return;
+			return 0;
 		}
 
 		iface = nhrp_interface_get_by_index(lladdr.sll_ifindex, FALSE);
@@ -539,6 +541,8 @@ static void pfpacket_read(void *ctx, int fd, short events)
 			nhrp_address_set_type(&from, PF_UNSPEC);
 		nhrp_packet_receive(buf, status, iface, &from);
 	}
+
+	return 0;
 }
 
 int kernel_init(void)

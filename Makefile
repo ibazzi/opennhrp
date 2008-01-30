@@ -20,7 +20,7 @@ CC=gcc
 INSTALL=install
 INSTALLDIR=$(INSTALL) -d
 
-CFLAGS=-g -Wall -Wstrict-prototypes -std=gnu99 -O -DOPENNHRP_VERSION=\"$(FULL_VERSION)\"
+CFLAGS=-g -Werror -Wall -Wstrict-prototypes -std=gnu99 -O -DOPENNHRP_VERSION=\"$(FULL_VERSION)\"
 LDFLAGS=-g
 
 DESTDIR=
@@ -28,6 +28,7 @@ SBINDIR=/usr/sbin
 CONFDIR=/etc/opennhrp
 MANDIR=/usr/share/man
 DOCDIR=/usr/share/doc/opennhrp
+STATEDIR=/var/run
 
 SUBDIRS=nhrp etc man
 

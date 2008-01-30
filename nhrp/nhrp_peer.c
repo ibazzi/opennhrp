@@ -27,7 +27,7 @@
 
 static struct nhrp_peer_list peer_cache = CIRCLEQ_HEAD_INITIALIZER(peer_cache);
 
-static const char * const peer_type[] = {
+const char * const nhrp_peer_type[] = {
 	[NHRP_PEER_TYPE_INCOMPLETE]	= "incomplete",
 	[NHRP_PEER_TYPE_NEGATIVE]	= "negative",
 	[NHRP_PEER_TYPE_CACHED]		= "cached",
@@ -775,7 +775,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 	}
 
 	nhrp_info("Adding %s %s",
-		  peer_type[peer->type],
+		  nhrp_peer_type[peer->type],
 		  nhrp_peer_format(peer, sizeof(tmp), tmp));
 }
 
@@ -947,7 +947,7 @@ void nhrp_peer_dump_cache(void)
 	nhrp_info("Peer cache dump:");
 	CIRCLEQ_FOREACH(peer, &peer_cache, peer_list) {
 		nhrp_info("%s %s",
-			peer_type[peer->type],
+			nhrp_peer_type[peer->type],
 			nhrp_peer_format(peer, sizeof(tmp), tmp));
 		num_total++;
 	}

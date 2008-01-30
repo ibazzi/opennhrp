@@ -18,6 +18,7 @@
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
 
+const char *nhrp_admin_socket = OPENNHRP_ADMIN_SOCKET;
 const char *nhrp_config_file = "/etc/opennhrp/opennhrp.conf";
 const char *nhrp_script_file = "/etc/opennhrp/opennhrp-script";
 
@@ -190,6 +191,11 @@ int main(int argc, char **argv)
 				return usage(argv[0]);
 			nhrp_script_file = argv[i];
 			break;
+		case 'a':
+			if (++i >= argc)
+				return usage(argv[0]);
+			nhrp_admin_socket = argv[i];
+			break;
 		default:
 			return usage(argv[0]);
 		}
@@ -206,6 +212,8 @@ int main(int argc, char **argv)
 		return 4;
 	if (!kernel_init())
 		return 5;
+	if (!admin_init(nhrp_admin_socket))
+		return 6;
 
 	nhrp_task_run();
 

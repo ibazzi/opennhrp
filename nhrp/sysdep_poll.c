@@ -17,7 +17,7 @@
 LIST_HEAD(nhrp_task_list, nhrp_task);
 
 struct pollctx {
-	void (*callback)(void *ctx, int fd, short events);
+	int (*callback)(void *ctx, int fd, short events);
 	void *ctx;
 };
 
@@ -26,7 +26,7 @@ static struct pollfd gfds[MAX_FDS];
 static struct pollctx gctx[MAX_FDS];
 static struct nhrp_task_list tasks;
 
-int nhrp_task_poll_fd(int fd, short events, void (*callback)(void *ctx, int fd, short events),
+int nhrp_task_poll_fd(int fd, short events, int (*callback)(void *ctx, int fd, short events),
 		      void *ctx)
 {
 	if (numfds >= MAX_FDS) {
@@ -43,6 +43,13 @@ int nhrp_task_poll_fd(int fd, short events, void (*callback)(void *ctx, int fd, 
 	return TRUE;
 }
 
+static void nhrp_task_unpoll_index(int i)
+{
+	gfds[i] = gfds[numfds - 1];
+	gctx[i] = gctx[numfds - 1];
+	numfds--;
+}
+
 void nhrp_task_unpoll_fd(int fd)
 {
 	int i;
@@ -50,12 +57,9 @@ void nhrp_task_unpoll_fd(int fd)
 	for (i = 0; i < numfds; i++)
 		if (gfds[i].fd == fd)
 			break;
-	if (i >= numfds)
-		return;
 
-	gfds[i] = gfds[numfds - 1];
-	gctx[i] = gctx[numfds - 1];
-	numfds--;
+	if (i < numfds)
+		nhrp_task_unpoll_index(i);
 }
 
 void nhrp_task_schedule(struct nhrp_task *task, int timeout, void (*callback)(struct nhrp_task *task))
@@ -125,9 +129,11 @@ void nhrp_task_run(void)
 		poll(gfds, numfds, timeout);
 
 		for (i = 0; i < numfds; i++) {
-			if (gfds[i].revents)
-				gctx[i].callback(gctx[i].ctx, gfds[i].fd,
-						 gfds[i].revents);
+			if (gfds[i].revents) {
+				if (gctx[i].callback(gctx[i].ctx, gfds[i].fd,
+						     gfds[i].revents))
+					nhrp_task_unpoll_index(i);
+			}
 		}
 	} while (running);
 }
