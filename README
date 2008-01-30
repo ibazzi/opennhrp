@@ -12,14 +12,14 @@ You need a kernel with ip_gre patched to support sending and receiving
 using NBMA address. 
 
 The support was originally added to 2.6.24-rc2, but it contains a bug
-that prevents NAT detection. The latest fixes will be present in
-2.6.24-rc7.
+that prevents NAT detection. The latest fix is present in 2.6.24-rc7.
 
 Gentoo kernels: gentoo-sources-2.6.23-r1 and gentoo-sources-2.6.22-r10
 have the partitial support too (no NAT there either).
 
 For the brave who compile their own kernels, there are patches against
-vanilla 2.6.20 and 2.6.22 kernels in the patches directory.
+vanilla 2.6.20 and 2.6.22 kernels in the patches directory. Or just
+upgrade to 2.6.24 or later and no patching is required.
 
 Also remember to turn on CONFIG_ARPD and CONFIG_NET_IPGRE in your kernel
 configuration.
@@ -59,7 +59,7 @@ spdadd 0.0.0.0/0 0.0.0.0/0 gre -P in  ipsec esp/transport//require ;
 
 Most of the OpenNHRP documentation is in the manpages. Read them.
 
-Also some general NHRP documents can be found from Cisco pages
+Also some general NHRP documents can be found from Cisco website
 (www.cisco.com).
 
 	BUGS
