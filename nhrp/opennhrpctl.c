@@ -52,8 +52,11 @@ static int admin_receive(int fd)
 	char msg[512];
 	size_t len;
 
-	while ((len = recv(fd, msg, sizeof(msg), MSG_DONTWAIT)) > 0)
+	while ((len = recv(fd, msg, sizeof(msg), 0)) > 0)
 		write(fileno(stdout), msg, len);
+
+	if (len < 0)
+		return -1;
 
 	return 0;
 }
@@ -88,7 +91,7 @@ int main(int argc, char **argv)
 		}
 	}
 	if (cmd == pos)
-		usage(argv[0]);
+		return usage(argv[0]);
 
 	fd = admin_init(socket);
 	if (fd < 0) {

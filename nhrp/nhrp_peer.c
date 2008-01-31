@@ -839,7 +839,11 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 		    dest->type != p->protocol_address.type)
 			continue;
 
-		if (flags & NHRP_PEER_FIND_SUBNET) {
+		if (flags & NHRP_PEER_FIND_NBMA) {
+			prefix = min_prefix;
+			if (p->type == NHRP_PEER_TYPE_CACHED_ROUTE)
+				continue;
+		} else if (flags & NHRP_PEER_FIND_SUBNET) {
 			if (min_prefix > p->prefix_length)
 				continue;
 			prefix = min_prefix;
@@ -873,9 +877,17 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 						cielist))
 			continue;
 
-		if (dest != NULL &&
-		    bitcmp(dest->addr, p->protocol_address.addr, prefix) != 0)
-			continue;
+		if (dest != NULL) {
+			struct nhrp_address *addr;
+
+			if (flags & NHRP_PEER_FIND_NBMA)
+				addr = &p->next_hop_address;
+			else
+				addr = &p->protocol_address;
+
+			if (bitcmp(dest->addr, addr->addr, prefix) != 0)
+				continue;
+		}
 
 		if (found_peer != NULL &&
 		    found_peer->prefix_length > p->prefix_length)

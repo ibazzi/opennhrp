@@ -81,6 +81,7 @@ int nhrp_peer_enumerate(nhrp_peer_enumerator e, void *ctx);
 #define NHRP_PEER_FIND_NEXTHOP		0x10
 #define NHRP_PEER_FIND_REMOVABLE	0x20
 #define NHRP_PEER_FIND_UP		0x40
+#define NHRP_PEER_FIND_NBMA		0x80
 
 struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 				      int prefix_length, int flags,
@@ -90,6 +91,11 @@ static inline struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
 					      int prefix_length, int flags)
 {
 	return nhrp_peer_find_full(dest, prefix_length, flags, NULL);
+}
+
+static inline struct nhrp_peer *nhrp_peer_find_nbma(struct nhrp_address *dest, int flags)
+{
+	return nhrp_peer_find_full(dest, 0xff, flags | NHRP_PEER_FIND_NBMA, NULL);
 }
 
 void nhrp_peer_traffic_indication(uint16_t afnum, struct nhrp_address *dst);

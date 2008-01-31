@@ -18,9 +18,10 @@
 
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
+#include "nhrp_address.h"
 #include "nhrp_interface.h"
 
-static void admin_write(void *fd, const char *format, ...)
+static void admin_write(void *ctx, const char *format, ...)
 {
 	char msg[1024];
 	va_list ap;
@@ -30,7 +31,7 @@ static void admin_write(void *fd, const char *format, ...)
 	len = vsnprintf(msg, sizeof(msg), format, ap);
 	va_end(ap);
 
-	write((int) fd, msg, len);
+	write((int) ctx, msg, len);
 }
 
 static int admin_show_one_peer(void *ctx, struct nhrp_peer *peer)
@@ -39,7 +40,10 @@ static int admin_show_one_peer(void *ctx, struct nhrp_peer *peer)
 	size_t len = sizeof(buf);
 	int i = 0;
 
-	i += snprintf(&buf[i], len - i, "Protocol-Address: %s/%d\n",
+	i += snprintf(&buf[i], len - i,
+		"Type: %s\n"
+		"Protocol-Address: %s/%d\n",
+		nhrp_peer_type[peer->type],
 		nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp),
 		peer->prefix_length);
 
@@ -76,33 +80,116 @@ static int admin_show_one_peer(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-static void admin_show(int fd, const char *cmd)
+static void admin_show(void *ctx, const char *cmd)
 {
-	nhrp_peer_enumerate(admin_show_one_peer, (void *) fd);
+	nhrp_peer_enumerate(admin_show_one_peer, ctx);
+}
+
+static void admin_flush(void *ctx, const char *cmd)
+{
+	struct nhrp_peer *peer;
+	int count = 0;
+
+	while ((peer = nhrp_peer_find(NULL, 0,
+				      NHRP_PEER_FIND_SUBNET |
+				      NHRP_PEER_FIND_REMOVABLE)) != NULL) {
+		nhrp_peer_remove(peer);
+		count++;
+	}
+
+	admin_write(ctx,
+		    "Status: ok\n"
+		    "Entries-Affected: %d\n",
+		    count);
+}
+
+static void admin_purge_protocol(void *ctx, const char *cmd)
+{
+	struct nhrp_peer *peer;
+	struct nhrp_address protocol_address;
+	uint8_t prefix_length;
+	int count = 0;
+
+	if (!nhrp_address_parse(cmd, &protocol_address, &prefix_length)) {
+		admin_write(ctx,
+			    "Status: failed\n"
+			    "Reason: bad-address-format\n");
+		return;
+	}
+
+	while ((peer = nhrp_peer_find(&protocol_address,
+				      prefix_length,
+				      NHRP_PEER_FIND_EXACT |
+				      NHRP_PEER_FIND_REMOVABLE)) != NULL) {
+		nhrp_peer_remove(peer);
+		count++;
+	}
+
+	admin_write(ctx,
+		    "Status: ok\n"
+		    "Entries-Affected: %d\n",
+		    count);
+}
+
+static void admin_purge_nbma(void *ctx, const char *cmd)
+{
+	struct nhrp_peer *peer;
+	struct nhrp_address nbma_address;
+	int count = 0;
+
+	if (!nhrp_address_parse(cmd, &nbma_address, NULL)) {
+		admin_write(ctx,
+			    "Status: failed\n"
+			    "Reason: bad-address-format\n");
+		return;
+	}
+
+	while ((peer = nhrp_peer_find_nbma(&nbma_address,
+					   NHRP_PEER_FIND_REMOVABLE)) != NULL) {
+		nhrp_peer_remove(peer);
+		count++;
+	}
+
+	admin_write(ctx,
+		    "Status: ok\n"
+		    "Entries-Purged: %d\n",
+		    count);
 }
 
 static struct {
 	const char *command;
-	void (*handler)(int fd, const char *cmd);
+	void (*handler)(void *ctx, const char *cmd);
 } admin_handler[] = {
-	{ "show", admin_show },
+	{ "show",		admin_show },
+	{ "flush",		admin_flush },
+	{ "purge protocol",	admin_purge_protocol },
+	{ "purge nbma",		admin_purge_nbma },
 };
 
 static int admin_receive(void *ctx, int fd, short events)
 {
 	char buf[1024];
-	size_t len;
-	int i;
+	ssize_t len;
+	int i, cmdlen;
 
 	len = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
-	if (len < 0)
+	if (len < 0 && errno == EAGAIN)
+		return 0;
+	if (len <= 0)
 		goto err;
 
 	for (i = 0; i < ARRAY_SIZE(admin_handler); i++) {
-		if (strncasecmp(buf, admin_handler[i].command,
-				strlen(admin_handler[i].command)) == 0) {
-			admin_handler[i].handler(fd, buf);
+		cmdlen = strlen(admin_handler[i].command);
+		if (len >= cmdlen &&
+		    strncasecmp(buf, admin_handler[i].command, cmdlen) == 0) {
+			admin_handler[i].handler((void *) fd, &buf[cmdlen]);
+			break;
 		}
+	}
+	if (i >= ARRAY_SIZE(admin_handler)) {
+		admin_write((void *) fd,
+			    "Status: failed\n"
+			    "Reason: unrecognized command\n");
 	}
 
 err:
