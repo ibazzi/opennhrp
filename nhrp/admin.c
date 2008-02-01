@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <malloc.h>
 #include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
@@ -20,6 +21,11 @@
 #include "nhrp_peer.h"
 #include "nhrp_address.h"
 #include "nhrp_interface.h"
+
+struct admin_remote {
+	int			fd;
+	struct nhrp_task	timeout;
+};
 
 static void admin_write(void *ctx, const char *format, ...)
 {
@@ -168,6 +174,7 @@ static struct {
 
 static int admin_receive(void *ctx, int fd, short events)
 {
+	struct admin_remote *rm = (struct admin_remote *) ctx;
 	char buf[1024];
 	ssize_t len;
 	int i, cmdlen;
@@ -182,23 +189,36 @@ static int admin_receive(void *ctx, int fd, short events)
 		cmdlen = strlen(admin_handler[i].command);
 		if (len >= cmdlen &&
 		    strncasecmp(buf, admin_handler[i].command, cmdlen) == 0) {
-			admin_handler[i].handler((void *) fd, &buf[cmdlen]);
+			admin_handler[i].handler(ctx, &buf[cmdlen]);
 			break;
 		}
 	}
 	if (i >= ARRAY_SIZE(admin_handler)) {
-		admin_write((void *) fd,
+		admin_write(ctx,
 			    "Status: failed\n"
 			    "Reason: unrecognized command\n");
 	}
 
 err:
-	close(fd);
+	nhrp_task_cancel(&rm->timeout);
+	close(rm->fd);
+	free(rm);
+
 	return -1;
+}
+
+static void admin_timeout(struct nhrp_task *task)
+{
+	struct admin_remote *rm = container_of(task, struct admin_remote, timeout);
+
+	nhrp_task_unpoll_fd(rm->fd);
+	close(rm->fd);
+	free(rm);
 }
 
 static int admin_accept(void *ctx, int fd, short events)
 {
+	struct admin_remote *rm;
 	struct sockaddr_storage from;
 	size_t fromlen = sizeof(from);
 	int cnx;
@@ -207,8 +227,13 @@ static int admin_accept(void *ctx, int fd, short events)
 	if (cnx < 0)
 		return 0;
 
-	if (!nhrp_task_poll_fd(cnx, POLLIN, admin_receive, NULL))
+	rm = calloc(1, sizeof(struct admin_remote));
+	rm->fd = cnx;
+
+	if (!nhrp_task_poll_fd(cnx, POLLIN, admin_receive, rm))
 		close(cnx);
+
+	nhrp_task_schedule(&rm->timeout, 10000, admin_timeout);
 
 	return 0;
 }
