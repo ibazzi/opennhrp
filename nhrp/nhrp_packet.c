@@ -22,6 +22,7 @@
 #define RATE_LIMIT_MAX_TOKENS		4
 #define RATE_LIMIT_SEND_INTERVAL	5
 #define RATE_LIMIT_SILENCE		360
+#define RATE_LIMIT_PURGE_INTERVAL	600
 #define MAX_PDU_SIZE			1500
 
 struct nhrp_rate_limit {
@@ -40,8 +41,40 @@ static struct nhrp_packet_list_head pending_requests =
 	TAILQ_HEAD_INITIALIZER(pending_requests);
 
 static struct nhrp_rate_limit_list_head rate_limit_hash[RATE_LIMIT_HASH_SIZE];
+static struct nhrp_task rate_limit_task;
+static int num_rate_limit_entries = 0;
 
 static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize, struct nhrp_packet *packet);
+
+static void prune_rate_limit_entries(struct nhrp_task *task)
+{
+	struct nhrp_rate_limit *rl, *rm;
+	struct timeval now, tv;
+	int i;
+
+	gettimeofday(&now, NULL);
+
+	for (i = 0; i < RATE_LIMIT_HASH_SIZE; i++) {
+		LIST_FOREACH(rl, &rate_limit_hash[i], hash_entry) {
+			tv = rl->rate_last;
+			tv.tv_sec += 2 * RATE_LIMIT_SILENCE;
+
+			if (timercmp(&now, &tv, >)) {
+				rm = rl;
+				rl = LIST_NEXT(rl, hash_entry);
+				LIST_REMOVE(rm, hash_entry);
+				free(rm);
+
+				num_rate_limit_entries--;
+			}
+		}
+	}
+
+	if (num_rate_limit_entries)
+		nhrp_task_schedule(&rate_limit_task,
+				   RATE_LIMIT_PURGE_INTERVAL * 1000,
+				   prune_rate_limit_entries);
+}
 
 static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src, struct nhrp_address *dst)
 {
@@ -61,6 +94,12 @@ static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src, struct n
 	e->src = *src;
 	e->dst = *dst;
 	LIST_INSERT_HEAD(&rate_limit_hash[key], e, hash_entry);
+
+	if (num_rate_limit_entries == 0)
+		nhrp_task_schedule(&rate_limit_task,
+				   RATE_LIMIT_PURGE_INTERVAL * 1000,
+				   prune_rate_limit_entries);
+	num_rate_limit_entries++;
 
 	return e;
 }
