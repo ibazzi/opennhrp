@@ -7,7 +7,7 @@
 # under the terms of the GNU General Public License version 3 as published
 # by the Free Software Foundation. See http://www.gnu.org/ for details.
 
-TARGETS = opennhrp.conf opennhrp-script
+TARGETS = opennhrp.conf opennhrp-script racoon-ph1down.sh
 
 compile::
 
