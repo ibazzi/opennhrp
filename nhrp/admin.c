@@ -29,6 +29,7 @@ struct admin_remote {
 
 static void admin_write(void *ctx, const char *format, ...)
 {
+	struct admin_remote *rmt = (struct admin_remote *) ctx;
 	char msg[1024];
 	va_list ap;
 	size_t len;
@@ -37,7 +38,7 @@ static void admin_write(void *ctx, const char *format, ...)
 	len = vsnprintf(msg, sizeof(msg), format, ap);
 	va_end(ap);
 
-	write((int) ctx, msg, len);
+	write(rmt->fd, msg, len);
 }
 
 static int admin_show_one_peer(void *ctx, struct nhrp_peer *peer)
@@ -96,6 +97,8 @@ static void admin_flush(void *ctx, const char *cmd)
 	struct nhrp_peer *peer;
 	int count = 0;
 
+	nhrp_info("Admin: flushing entries");
+
 	while ((peer = nhrp_peer_find(NULL, 0,
 				      NHRP_PEER_FIND_SUBNET |
 				      NHRP_PEER_FIND_REMOVABLE)) != NULL) {
@@ -115,6 +118,7 @@ static void admin_purge_protocol(void *ctx, const char *cmd)
 	struct nhrp_address protocol_address;
 	uint8_t prefix_length;
 	int count = 0;
+	char tmp[64];
 
 	if (!nhrp_address_parse(cmd, &protocol_address, &prefix_length)) {
 		admin_write(ctx,
@@ -122,6 +126,10 @@ static void admin_purge_protocol(void *ctx, const char *cmd)
 			    "Reason: bad-address-format\n");
 		return;
 	}
+
+	nhrp_info("Admin: purge protocol address %s/%d",
+		  nhrp_address_format(&protocol_address, sizeof(tmp), tmp),
+		  prefix_length);
 
 	while ((peer = nhrp_peer_find(&protocol_address,
 				      prefix_length,
@@ -142,6 +150,7 @@ static void admin_purge_nbma(void *ctx, const char *cmd)
 	struct nhrp_peer *peer;
 	struct nhrp_address nbma_address;
 	int count = 0;
+	char tmp[64];
 
 	if (!nhrp_address_parse(cmd, &nbma_address, NULL)) {
 		admin_write(ctx,
@@ -149,6 +158,9 @@ static void admin_purge_nbma(void *ctx, const char *cmd)
 			    "Reason: bad-address-format\n");
 		return;
 	}
+
+	nhrp_info("Admin: purge nbma address %s",
+		  nhrp_address_format(&nbma_address, sizeof(tmp), tmp));
 
 	while ((peer = nhrp_peer_find_nbma(&nbma_address,
 					   NHRP_PEER_FIND_REMOVABLE)) != NULL) {
