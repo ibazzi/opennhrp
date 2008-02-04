@@ -163,8 +163,8 @@ static void admin_purge_nbma(void *ctx, const char *cmd)
 		  nhrp_address_format(&nbma_address, sizeof(tmp), tmp));
 
 	while ((peer = nhrp_peer_find_nbma(&nbma_address,
-					   NHRP_PEER_FIND_REMOVABLE)) != NULL) {
-		nhrp_peer_remove(peer);
+					   NHRP_PEER_FIND_PURGEABLE)) != NULL) {
+		nhrp_peer_purge(peer);
 		count++;
 	}
 

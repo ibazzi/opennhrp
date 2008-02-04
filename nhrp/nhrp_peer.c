@@ -779,6 +779,20 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		  nhrp_peer_format(peer, sizeof(tmp), tmp));
 }
 
+void nhrp_peer_purge(struct nhrp_peer *peer)
+{
+	switch (peer->type) {
+	case NHRP_PEER_TYPE_STATIC:
+		peer->flags &= ~NHRP_PEER_FLAG_UP;
+		nhrp_task_cancel(&peer->task);
+		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_static_up);
+		break;
+	default:
+		nhrp_peer_remove(peer);
+		break;
+	}
+}
+
 void nhrp_peer_remove(struct nhrp_peer *peer)
 {
 	CIRCLEQ_REMOVE(&peer_cache, peer, peer_list);
@@ -868,6 +882,12 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 		if ((flags & NHRP_PEER_FIND_REMOVABLE) &&
 		    (p->type == NHRP_PEER_TYPE_LOCAL ||
 		     p->type == NHRP_PEER_TYPE_STATIC))
+			continue;
+
+		if ((flags & NHRP_PEER_FIND_PURGEABLE) &&
+		    (p->type == NHRP_PEER_TYPE_LOCAL ||
+		     (p->type == NHRP_PEER_TYPE_STATIC &&
+		      !(p->flags & NHRP_PEER_FLAG_UP))))
 			continue;
 
 		if (p->type != NHRP_PEER_TYPE_CACHED_ROUTE &&

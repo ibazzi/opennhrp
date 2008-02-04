@@ -70,6 +70,7 @@ int nhrp_peer_free(struct nhrp_peer *peer);
 
 void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
+void nhrp_peer_purge(struct nhrp_peer *peer);
 
 void nhrp_peer_set_used(struct nhrp_address *peer_address, int used);
 int nhrp_peer_enumerate(nhrp_peer_enumerator e, void *ctx);
@@ -82,6 +83,7 @@ int nhrp_peer_enumerate(nhrp_peer_enumerator e, void *ctx);
 #define NHRP_PEER_FIND_REMOVABLE	0x20
 #define NHRP_PEER_FIND_UP		0x40
 #define NHRP_PEER_FIND_NBMA		0x80
+#define NHRP_PEER_FIND_PURGEABLE	0x100
 
 struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 				      int prefix_length, int flags,
