@@ -1,0 +1,62 @@
+.TH OPENNHRP 8 "25 February 2008" "" "OpenNHRP Documentation"
+
+.SH NAME
+opennhrpctl \- opennhrp administrative control tool
+
+.SH SYNOPSIS
+.BR opennhrpctl " show"
+.br
+.BR opennhrpctl " flush"
+.br
+.BR opennhrpctl " purge protocol "
+.BI "[" protocol-address "[" "/prefix" "]]"
+.br
+.BR opennhrpctl " purge nbma"
+.BI "[" nbma-address "]"
+.br
+
+.SH DESCRIPTION
+.B opennhrpctl
+is an utility to control
+.BR opennhrp (8)
+daemon operation. A UNIX socket is used for communication between
+.B opennhrpctl
+and
+.BR opennhrp (8).
+Administration priviledges for a non-root user can be granted by modifying
+the permissions and ownership of the socket.
+
+The following commands are available:
+
+.BI show
+.RS
+Show contents of next hop cache (configured and resolved entries).
+.RE
+
+.BI flush
+.RS
+Clear all non-permanent entries from the cache.
+.RE
+
+.BI "purge protocol"
+.RS
+Purge cache entries based on protocol address.
+.RE
+
+.BI "purge nbma"
+.RS
+Purge cache entries with specific NBMA address (e.g. this can be used
+to flush entries when IPsec SA expires).
+.RE
+
+.SH FILES
+.I /var/run/opennhrp.socket
+.RS
+.BR opennhrp "(8) control socket"
+.RE
+
+.SH "SEE ALSO"
+.BR opennhrp (8)
+
+.SH AUTHORS
+Timo Teras <timo.teras@iki.fi>

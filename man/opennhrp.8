@@ -63,6 +63,11 @@ on important events. See
 for more information how the script is executed.
 .RE
 
+.I /var/run/opennhrp.socket
+.RS
+.BR opennhrp "(8) control socket"
+.RE
+
 .SH BUGS
 Currently only IPv4 over IPv4 networks using NBMA GRE tunnels is
 supported (you need Linux kernel 2.6.24-rc2 or later).
@@ -74,6 +79,7 @@ Please send bug reports to OpenNHRP issue tracker in SourceForge.
 
 .SH "SEE ALSO"
 .BR opennhrp.conf (5),
+.BR opennhrpctl (8),
 .BR opennhrp\-script (8)
 .br
 http://sourceforge.net/projects/opennhrp

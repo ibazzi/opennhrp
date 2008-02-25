@@ -8,7 +8,7 @@
 # by the Free Software Foundation. See http://www.gnu.org/ for details.
 
 MAN5PAGES = opennhrp.conf.5
-MAN8PAGES = opennhrp.8 opennhrp-script.8
+MAN8PAGES = opennhrp.8 opennhrpctl.8 opennhrp-script.8
 
 compile::
 
