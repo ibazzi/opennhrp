@@ -232,7 +232,7 @@ static int admin_accept(void *ctx, int fd, short events)
 {
 	struct admin_remote *rm;
 	struct sockaddr_storage from;
-	size_t fromlen = sizeof(from);
+	socklen_t fromlen = sizeof(from);
 	int cnx;
 
 	cnx = accept(fd, (struct sockaddr *) &from, &fromlen);
