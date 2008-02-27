@@ -841,7 +841,8 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 {
 	struct nhrp_peer *found_peer = NULL;
 	struct nhrp_peer *p;
-	int prefix;
+	struct nhrp_address *addr;
+	int prefix, exact, found_exact = 0;
 
 	if (min_prefix == 0xff)
 		min_prefix = dest->addr_len * 8;
@@ -872,11 +873,26 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 		} else
 			return NULL;
 
+		if (flags & NHRP_PEER_FIND_NBMA)
+			addr = &p->next_hop_address;
+		else
+			addr = &p->protocol_address;
+
+		if (p->type == NHRP_PEER_TYPE_STATIC &&
+		    min_prefix == dest->addr_len * 8 &&
+		    memcmp(dest->addr, addr->addr, dest->addr_len) == 0)
+			exact = 1;
+		else
+			exact = 0;
+
+		if (found_exact > exact)
+			continue;
+
 		if ((flags & NHRP_PEER_FIND_COMPLETE) &&
 		    p->type == NHRP_PEER_TYPE_INCOMPLETE)
 			continue;
 		if ((flags & NHRP_PEER_FIND_UP) &&
-		     !(p->flags & NHRP_PEER_FLAG_UP))
+		    !(p->flags & NHRP_PEER_FLAG_UP) && !exact)
 			continue;
 
 		if ((flags & NHRP_PEER_FIND_REMOVABLE) &&
@@ -897,25 +913,25 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 						cielist))
 			continue;
 
-		if (dest != NULL) {
-			struct nhrp_address *addr;
-
-			if (flags & NHRP_PEER_FIND_NBMA)
-				addr = &p->next_hop_address;
-			else
-				addr = &p->protocol_address;
-
-			if (bitcmp(dest->addr, addr->addr, prefix) != 0)
-				continue;
-		}
+		if (dest != NULL && bitcmp(dest->addr, addr->addr, prefix) != 0)
+			continue;
 
 		if (found_peer != NULL &&
 		    found_peer->prefix_length > p->prefix_length)
 			continue;
 
+		if (found_peer != NULL && found_exact == exact &&
+		    found_peer->prefix_length == p->prefix_length &&
+		    found_peer->last_used < p->last_used)
+			continue;
+
 		/* Best match so far */
 		found_peer = p;
+		found_exact = exact;
 	}
+
+	if (found_peer != NULL)
+		time(&found_peer->last_used);
 
 	return found_peer;
 }

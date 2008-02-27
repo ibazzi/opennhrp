@@ -49,6 +49,7 @@ struct nhrp_peer {
 	uint16_t protocol_type;
 	uint16_t mtu;
 	time_t expire_time;
+	time_t last_used;
 	struct nhrp_address protocol_address;
 
 	/* Protocol address for NHRP_PEER_TYPE_ROUTE,
