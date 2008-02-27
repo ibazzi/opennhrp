@@ -48,6 +48,10 @@ the patch from patches/ directory. Compile it with adminport support
 enabled. Then you will be able to use the opennhrp-script example in
 etc/.
 
+If you prefer to use a ipsec-tools release as a basis check
+patches/ipsec-tools-0.7.diff. It was contributed by Steffen Schmidt.
+Applying that against ipsec-tools 0.7 release should get you going.
+
 With the above-mentioned patches you could use following SPDs to require
 encryption of all GRE traffic:
 
