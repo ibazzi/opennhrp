@@ -27,6 +27,16 @@
 #define FALSE 0
 #endif
 
+#ifndef __bswap_constant_16
+#define __bswap_constant_16(x) \
+	((((x) >> 8) & 0xff) | (((x) & 0xff) << 8))
+#endif
+#ifndef __bswap_constant_32
+#define __bswap_constant_32(x) \
+	((((x) & 0xff000000) >> 24) | (((x) & 0x00ff0000) >>  8) | \
+	 (((x) & 0x0000ff00) <<  8) | (((x) & 0x000000ff) << 24))
+#endif
+
 #if __BYTE_ORDER == __BIG_ENDIAN
 #define constant_ntohl(x) (x)
 #define constant_ntohs(x) (x)
