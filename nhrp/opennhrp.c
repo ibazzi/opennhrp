@@ -10,17 +10,25 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <errno.h>
 #include <malloc.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
 
 const char *nhrp_admin_socket = OPENNHRP_ADMIN_SOCKET;
-const char *nhrp_config_file = "/etc/opennhrp/opennhrp.conf";
-const char *nhrp_script_file = "/etc/opennhrp/opennhrp-script";
+const char *nhrp_pid_file     = "/var/run/opennhrp.pid";
+const char *nhrp_config_file  = "/etc/opennhrp/opennhrp.conf";
+const char *nhrp_script_file  = "/etc/opennhrp/opennhrpr-script";
+
+static int pid_file_fd;
 
 void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes)
 {
@@ -172,15 +180,81 @@ static int load_config(const char *config_file)
 	return TRUE;
 }
 
+static void remove_pid_file(void)
+{
+	if (pid_file_fd != 0) {
+		close(pid_file_fd);
+		pid_file_fd = 0;
+		remove(nhrp_pid_file);
+	}
+}
+
+static int daemonize(void)
+{
+	char tmp[16];
+	pid_t pid;
+
+	pid = fork();
+	if (pid < 0)
+		return FALSE;
+	if (pid > 0)
+		exit(0);
+
+	if (setsid() < 0)
+		return FALSE;
+
+	pid = fork();
+	if (pid < 0)
+		return FALSE;
+	if (pid > 0)
+		exit(0);
+
+	if (chdir("/") < 0)
+		return FALSE;
+
+	pid_file_fd = open(nhrp_pid_file, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR);
+	if (pid_file_fd < 0) {
+		nhrp_error("Unable to open pid file: %s.", strerror(errno));
+		return FALSE;
+	}
+
+	if (flock(pid_file_fd, LOCK_EX | LOCK_NB) < 0) {
+		nhrp_error("Unable to lock pid file (already running?).");
+		close(pid_file_fd);
+		pid_file_fd = 0;
+		return FALSE;
+	}
+
+	ftruncate(pid_file_fd, 0);
+	write(pid_file_fd, tmp, sprintf(tmp, "%d\n", getpid()));
+	atexit(remove_pid_file);
+
+	freopen("/dev/null", "r", stdin);
+	freopen("/dev/null", "w", stdout);
+	freopen("/dev/null", "w", stderr);
+
+	umask(0);
+
+	return TRUE;
+}
+
 int usage(const char *prog)
 {
-	fprintf(stderr, "usage: %s [-c config-file] [-s script-file]\n", prog);
+	fprintf(stderr,
+		"usage: %s [-c config-file] [-s script-file] [-p pid-file] [-d]\n"
+		"\n"
+		"\t-c config-file\tread configuration from config-file\n"
+		"\t-s script-file\tuse specified script-file for event handling\n"
+		"\t-p pid-file\tspecify pid-file\n"
+		"\t-d\t\tfork to background after startup\n"
+		"\n",
+		prog);
 	return 1;
 }
 
 int main(int argc, char **argv)
 {
-	int i;
+	int i, daemonmode = 0;
 
 	for (i = 1; i < argc; i++) {
 		if (strlen(argv[i]) != 2 || argv[i][0] != '-')
@@ -202,6 +276,14 @@ int main(int argc, char **argv)
 				return usage(argv[0]);
 			nhrp_admin_socket = argv[i];
 			break;
+		case 'p':
+			if (++i >= argc)
+				return usage(argv[0]);
+			nhrp_pid_file = argv[i];
+			break;
+		case 'd':
+			daemonmode = 1;
+			break;
 		default:
 			return usage(argv[0]);
 		}
@@ -209,7 +291,12 @@ int main(int argc, char **argv)
 
 	if (!log_init())
 		return 1;
+
 	nhrp_info("OpenNHRP " OPENNHRP_VERSION " starting");
+	if (daemonmode && !daemonize()) {
+		nhrp_error("Failed to daemonize. Exit.");
+		return 1;
+	}
 	if (!signal_init())
 		return 2;
 	if (!load_config(nhrp_config_file))
