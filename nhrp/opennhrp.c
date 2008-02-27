@@ -53,14 +53,20 @@ void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes)
 
 static int read_word(FILE *in, int *lineno, size_t len, char *word)
 {
-	int ch, i;
+	int ch, i, comment = 0;
 
 	ch = fgetc(in);
-	while (isspace(ch)) {
+	while (1) {
+		if (ch == '#')
+			comment = 1;
+		if (!comment && !isspace(ch))
+			break;
 		if (ch == EOF)
 			return FALSE;
-		if (ch == '\n')
+		if (ch == '\n') {
 			(*lineno)++;
+			comment = 0;
+		}
 		ch = fgetc(in);
 	}
 
