@@ -7,6 +7,8 @@ opennhrp \- daemon to resolve next hop address in NBMA network
 .B opennhrp
 .BI "[\-c " config\-file "]"
 .BI "[\-s " script\-file "]"
+.BI "[\-p " pid\-file "]"
+.BI "[\-d]"
 
 .SH DESCRIPTION
 .B opennhrp
@@ -39,6 +41,19 @@ Execute
 instead of
 .I /etc/opennhrp/opennhrp\-script
 on important events.
+
+.IP "\fB\-p \fIpid\-file"
+Store process id in
+.I pid\-file
+instead of
+.IR /var/run/opennhrp.pid .
+This file is also used to detect if opennhrp daemon is already running.
+Pid-file is not created unless
+.B -d
+is specified too.
+
+.IP "\fB-d"
+Run in daemon mode, forking to background after initialization.
 
 .SH SIGNALS
 .IP \fBSIGHUP
