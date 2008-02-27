@@ -293,10 +293,6 @@ int main(int argc, char **argv)
 		return 1;
 
 	nhrp_info("OpenNHRP " OPENNHRP_VERSION " starting");
-	if (daemonmode && !daemonize()) {
-		nhrp_error("Failed to daemonize. Exit.");
-		return 1;
-	}
 	if (!signal_init())
 		return 2;
 	if (!load_config(nhrp_config_file))
@@ -307,6 +303,11 @@ int main(int argc, char **argv)
 		return 5;
 	if (!admin_init(nhrp_admin_socket))
 		return 6;
+
+	if (daemonmode && !daemonize()) {
+		nhrp_error("Failed to daemonize. Exit.");
+		return 7;
+	}
 
 	nhrp_task_run();
 
