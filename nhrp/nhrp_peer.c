@@ -178,6 +178,7 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 		return TRUE;
 	}
 
+	envp[i++] = env("NHRP_TYPE", nhrp_peer_type[peer->type]);
 	envp[i++] = env("NHRP_DESTADDR", nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp));
 	sprintf(tmp, "%d", peer->prefix_length);
 	envp[i++] = env("NHRP_DESTPREFIX", tmp);

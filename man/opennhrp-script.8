@@ -49,6 +49,15 @@ The associated shortcut route information is no longer valid and should be
 removed from kernel routing table.
 
 .SH ENVIRONMENT
+.B NHRP_TYPE
+.RS
+For peer-up and peer-down reasons this can be: \fBstatic\fR (configured
+information), \fBdynamic\fR (client told us where he is) or \fBcached\fR
+(resolved since we had packets going there).
+
+For route-up and route-down reasons this is always defined as \fBroute\fR.
+.RE
+
 .B NHRP_DESTADDR
 .RS
 Destination protocol address. E.g. for NBMA GRE tunnels this is the IP address
