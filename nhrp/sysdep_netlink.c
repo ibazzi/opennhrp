@@ -328,7 +328,7 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 
 	peer = nhrp_peer_find(&addr, 0xff,
 			      NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_UP);
-	if (peer == NULL)
+	if (peer == NULL || !(peer->flags & NHRP_PEER_FLAG_UP))
 		return;
 
 	kernel_inject_neighbor(&addr, &peer->next_hop_address, peer->interface);
