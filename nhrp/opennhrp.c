@@ -26,7 +26,7 @@
 const char *nhrp_admin_socket = OPENNHRP_ADMIN_SOCKET;
 const char *nhrp_pid_file     = "/var/run/opennhrp.pid";
 const char *nhrp_config_file  = "/etc/opennhrp/opennhrp.conf";
-const char *nhrp_script_file  = "/etc/opennhrp/opennhrpr-script";
+const char *nhrp_script_file  = "/etc/opennhrp/opennhrp-script";
 
 static int pid_file_fd;
 
