@@ -48,22 +48,22 @@ static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize, struct nhrp_
 
 static void prune_rate_limit_entries(struct nhrp_task *task)
 {
-	struct nhrp_rate_limit *rl, *rm;
+	struct nhrp_rate_limit *rl, *next;
 	struct timeval now, tv;
 	int i;
 
 	gettimeofday(&now, NULL);
 
 	for (i = 0; i < RATE_LIMIT_HASH_SIZE; i++) {
-		LIST_FOREACH(rl, &rate_limit_hash[i], hash_entry) {
+		for (rl = LIST_FIRST(&rate_limit_hash[i]); rl != NULL; rl = next) {
+			next = LIST_NEXT(rl, hash_entry);
+
 			tv = rl->rate_last;
 			tv.tv_sec += 2 * RATE_LIMIT_SILENCE;
 
 			if (timercmp(&now, &tv, >)) {
-				rm = rl;
-				rl = LIST_NEXT(rl, hash_entry);
-				LIST_REMOVE(rm, hash_entry);
-				free(rm);
+				LIST_REMOVE(rl, hash_entry);
+				free(rl);
 
 				num_rate_limit_entries--;
 			}
