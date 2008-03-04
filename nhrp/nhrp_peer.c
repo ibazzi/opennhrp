@@ -718,20 +718,10 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 	return TRUE;
 }
 
-void nhrp_peer_insert(struct nhrp_peer *ins)
+static void nhrp_peer_insert_task(struct nhrp_task *task)
 {
-	char tmp[NHRP_PEER_FORMAT_LEN];
-	struct nhrp_peer *peer, *nexthop;
-
-	/* First, prune all duplicates */
-	while ((peer = nhrp_peer_find(&ins->protocol_address,
-				      ins->prefix_length,
-				      NHRP_PEER_FIND_SUBNET |
-				      NHRP_PEER_FIND_REMOVABLE)) != NULL)
-		nhrp_peer_remove(peer);
-
-	peer = nhrp_peer_dup(ins);
-	CIRCLEQ_INSERT_HEAD(&peer_cache, peer, peer_list);
+	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
+	struct nhrp_peer *nexthop;
 
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
@@ -774,10 +764,31 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 				   nhrp_peer_prune_task);
 		break;
 	}
+}
+
+void nhrp_peer_insert(struct nhrp_peer *ins)
+{
+	char tmp[NHRP_PEER_FORMAT_LEN];
+	struct nhrp_peer *peer;
+
+	/* First, prune all duplicates */
+	while ((peer = nhrp_peer_find(&ins->protocol_address,
+				      ins->prefix_length,
+				      NHRP_PEER_FIND_SUBNET |
+				      NHRP_PEER_FIND_REMOVABLE)) != NULL)
+		nhrp_peer_remove(peer);
+
+	peer = nhrp_peer_dup(ins);
+	CIRCLEQ_INSERT_HEAD(&peer_cache, peer, peer_list);
 
 	nhrp_info("Adding %s %s",
 		  nhrp_peer_type[peer->type],
 		  nhrp_peer_format(peer, sizeof(tmp), tmp));
+
+	if (nhrp_running)
+		nhrp_peer_insert_task(&peer->task);
+	else
+		nhrp_task_schedule(&peer->task, 0, nhrp_peer_insert_task);
 }
 
 void nhrp_peer_purge(struct nhrp_peer *peer)
