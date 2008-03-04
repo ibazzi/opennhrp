@@ -879,7 +879,8 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
 		else
 			addr = &p->protocol_address;
 
-		if (p->type == NHRP_PEER_TYPE_STATIC &&
+		if (dest != NULL &&
+		    p->type == NHRP_PEER_TYPE_STATIC &&
 		    min_prefix == dest->addr_len * 8 &&
 		    memcmp(dest->addr, addr->addr, dest->addr_len) == 0)
 			exact = 1;
