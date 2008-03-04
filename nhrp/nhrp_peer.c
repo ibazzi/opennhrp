@@ -704,7 +704,7 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 		}
 
 		/* Fall-through */
-	case NHRP_PEER_TYPE_INCOMPLITE:
+	case NHRP_PEER_TYPE_INCOMPLETE:
 	case NHRP_PEER_TYPE_NEGATIVE:
 		/* Remove from arp cache */
 		if (!(peer->flags & NHRP_PEER_FLAG_REPLACED)) {
