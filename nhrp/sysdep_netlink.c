@@ -13,9 +13,11 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include <malloc.h>
 #include <string.h>
 #include <sys/uio.h>
+#include <sys/wait.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -307,6 +309,24 @@ static int proc_icmp_redirect_off(struct nhrp_interface *iface)
 	return TRUE;
 }
 
+static int neigh_flush_cache(struct nhrp_interface *iface)
+{
+	pid_t pid;
+	int status;
+
+	pid = fork();
+	if (pid == 0) {
+		execl("/sbin/ip", "ip", "neigh", "flush", "dev",
+		      iface->name, NULL);
+		exit(EXIT_FAILURE);
+	}
+	if (pid < 0)
+		return FALSE;
+
+	waitpid(pid, &status, 0);
+	return TRUE;
+}
+
 static void netlink_neigh_request(struct nlmsghdr *msg)
 {
 	struct ndmsg *ndm = NLMSG_DATA(msg);
@@ -396,6 +416,7 @@ static void netlink_link_update(struct nlmsghdr *msg)
 		netlink_configure_arp(iface, PF_INET);
 		netlink_link_arp_on(iface);
 		proc_icmp_redirect_off(iface);
+		neigh_flush_cache(iface);
 	}
 }
 
