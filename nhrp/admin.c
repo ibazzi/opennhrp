@@ -80,7 +80,7 @@ static int admin_show_one_peer(void *ctx, struct nhrp_peer *peer)
 		i += snprintf(&buf[i], len - i, "\n");
 	}
 	if (peer->expire_time)
-		i += snprintf(&buf[i], len - i, "Expires-At: %s\n",
+		i += snprintf(&buf[i], len - i, "Expires-At: %s",
 			      ctime(&peer->expire_time));
 
 	admin_write(ctx, "%s\n", buf);
