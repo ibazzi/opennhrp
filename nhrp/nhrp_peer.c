@@ -678,6 +678,9 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 			nhrp_peer_run_script(peer, "route-down", NULL);
 		break;
 	case NHRP_PEER_TYPE_CACHED:
+	case NHRP_PEER_TYPE_DYNAMIC:
+	case NHRP_PEER_TYPE_STATIC:
+		/* Remove cached routes using this entry as next-hop */
 		for (p = CIRCLEQ_FIRST(&peer_cache); p != (void*) &peer_cache; p = next) {
 			next = CIRCLEQ_NEXT(p, peer_list);
 
@@ -693,10 +696,18 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 
 			nhrp_peer_remove(p);
 		}
-	default:
+
+		/* Execute peer-down */
 		if (!(peer->flags & NHRP_PEER_FLAG_REPLACED)) {
 			if (peer->flags & NHRP_PEER_FLAG_UP)
 				nhrp_peer_run_script(peer, "peer-down", NULL);
+		}
+
+		/* Fall-through */
+	case NHRP_PEER_TYPE_INCOMPLITE:
+	case NHRP_PEER_TYPE_NEGATIVE:
+		/* Remove from arp cache */
+		if (!(peer->flags & NHRP_PEER_FLAG_REPLACED)) {
 			if (peer->protocol_address.type != PF_UNSPEC &&
 			    peer->interface != NULL)
 				kernel_inject_neighbor(&peer->protocol_address,
