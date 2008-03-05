@@ -241,14 +241,15 @@ static int daemonize(void)
 int usage(const char *prog)
 {
 	fprintf(stderr,
-		"usage: %s [-c config-file] [-s script-file] [-p pid-file] [-d]\n"
+		"usage: opennhrp [-a admin-socket] [-c config-file] [-s script-file]\n"
+		"                [-p pid-file] [-d]\n"
 		"\n"
+		"\t-a admin-socket\tspecify management interface socket\n"
 		"\t-c config-file\tread configuration from config-file\n"
 		"\t-s script-file\tuse specified script-file for event handling\n"
 		"\t-p pid-file\tspecify pid-file\n"
 		"\t-d\t\tfork to background after startup\n"
-		"\n",
-		prog);
+		"\n");
 	return 1;
 }
 
