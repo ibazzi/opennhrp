@@ -6,7 +6,7 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
- opennhrp 0.5 - not released yet
+ opennhrp 0.5 - released 05/Mar/2008
 -----------------------------------------------------------------------------
  - opennhrpctl command line tool
    - list nhrp cache
