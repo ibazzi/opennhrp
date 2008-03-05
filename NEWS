@@ -1,0 +1,25 @@
+=============================================================================
+OpenNHRP ChangeLog                   http://sourceforge.net/projects/opennhrp
+=============================================================================
+
+Detailed changelog is available via SVN history using:
+svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
+
+-----------------------------------------------------------------------------
+ opennhrp 0.5 - not released yet
+-----------------------------------------------------------------------------
+ - opennhrpctl command line tool
+   - list nhrp cache
+   - purge entries by protocol or nbma address
+   - flush entries
+ - daemon mode
+ - allow comments in configuration file
+ - various bug fixes
+   - flush neighbor cache when interface is found
+   - do not create proxy arp entries when static mapping exists
+
+-----------------------------------------------------------------------------
+ opennhrp 0.4 - released 04/Jan/2008
+-----------------------------------------------------------------------------
+ - first announced release
+
