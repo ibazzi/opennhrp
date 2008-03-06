@@ -10,7 +10,7 @@ peer-up)
 	;;
 peer-down)
 	echo "Neighbor $NHRP_DESTADDR at $NHRP_DESTNBMA is gone"
-	racoonctl vpn-disconnect $NHRP_DESTADDR
+	racoonctl vpn-disconnect $NHRP_DESTNBMA
 	;;
 route-up)
 	echo "Route $NHRP_DESTADDR/$NHRP_DESTPREFIX is up"
