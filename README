@@ -41,25 +41,54 @@ This should work with the configuration example in opennhrp.conf(5).
 
 	IPSEC ENCRYPTION OF GRE PACKETS
 
-To be documented in more detail when ipsec-tools is properly patched.
-All the patches have been sent to ipsec-tools-devel list for review.
-I expect them to get committed to ipsec-tools cvs soon.
+ipsec-tools CVS HEAD version contains now everything required to integrate
+it smoothly with OpenNHRP. Grab it.
 
-Before that happens, you can get the latest CVS version of ipsec-tools
-and apply the patch from patches/ directory. Compile it with adminport
-support enabled. Then you will be able to use the opennhrp-script
-example in etc/.
-
-If you prefer to use a ipsec-tools release as a basis check
+Or if you prefer to use a ipsec-tools release as a basis, check
 patches/ipsec-tools-0.7.diff. It was contributed by Steffen Schmidt.
-Applying that against ipsec-tools 0.7 release should get you going.
+Applying that against ipsec-tools 0.7 release should give you working
+ipsec-tools installation too.
 
-With the above-mentioned patches you could use following SPDs to require
-encryption of all GRE traffic:
+The ipsec-tools configuration I prefer to use is: encrypt all GRE
+traffic in transport mode. IPsec policy for that should be defined in
+/etc/ipsec.conf:
+	spdflush;
+	spdadd 0.0.0.0/0 0.0.0.0/0 gre -P out ipsec esp/transport//require;
+	spdadd 0.0.0.0/0 0.0.0.0/0 gre -P in  ipsec esp/transport//require;
 
-spdadd 0.0.0.0/0 0.0.0.0/0 gre -P out ipsec esp/transport//require ;
-spdadd 0.0.0.0/0 0.0.0.0/0 gre -P in  ipsec esp/transport//require ;
+And ipsec-tools configuration with pre-shared key could look something
+like this:
 
+/etc/racoon/racoon.conf:
+	path pre_shared_key "/etc/racoon/psk.txt";
+	remote anonymous {
+		exchange_mode aggressive;
+		lifetime time 24 hour;
+		my_identifier user_fqdn "my-user-name@my-domain.example";
+		nat_traversal on;
+		script "/etc/opennhrp/racoon-ph1down.sh" phase1_down;
+		proposal {
+			encryption_algorithm 3des;
+			hash_algorithm sha1;
+			authentication_method pre_shared_key;
+			dh_group 2;
+		}        
+	}
+	sainfo anonymous {
+		pfs_group 2;
+		lifetime time 12 hour;
+		encryption_algorithm 3des, blowfish 448, rijndael;
+		authentication_algorithm hmac_sha1, hmac_md5;
+		compression_algorithm deflate;
+	}
+
+And /etc/racoon/psk.txt:
+	my-user-name@my-domain.example	"my-secret-pre-shared-key"
+
+It is of course more secure to use certificates for authentication.
+And using aggressive main mode is not recommended either, but it is
+required to make FQDN pre-shared authentication work. This setup is
+fast to do and can get you started with testing OpenNHRP.
 
 	DOCUMENTATION
 
