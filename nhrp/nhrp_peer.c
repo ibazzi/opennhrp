@@ -222,6 +222,11 @@ static void nhrp_peer_static_up(struct nhrp_peer *peer, int status)
 	}
 }
 
+static void nhrp_peer_static_down(struct nhrp_peer *peer, int status)
+{
+	nhrp_task_schedule(&peer->task, 5000, nhrp_run_up_script_task);
+}
+
 static void nhrp_peer_dynamic_up(struct nhrp_peer *peer, int status)
 {
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
@@ -808,7 +813,7 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 	case NHRP_PEER_TYPE_STATIC:
 		peer->flags &= ~NHRP_PEER_FLAG_UP;
 		nhrp_task_cancel(&peer->task);
-		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_static_up);
+		nhrp_peer_run_script(peer, "peer-down", nhrp_peer_static_down);
 		break;
 	default:
 		nhrp_peer_remove(peer);
