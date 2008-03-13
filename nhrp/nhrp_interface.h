@@ -33,6 +33,10 @@ struct nhrp_interface {
 	uint16_t afnum;
 	struct nhrp_address nbma_address;
 	struct nhrp_cie nat_cie;
+
+	/* Actually, we should have list of protocol addresses;
+	 * we might have multiple address and multiple protocol types */
+	struct nhrp_address protocol_address;
 };
 
 typedef int (*nhrp_interface_enumerator)(void *ctx, struct nhrp_interface *iface);

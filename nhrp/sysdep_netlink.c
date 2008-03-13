@@ -433,6 +433,10 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 	if (iface == NULL || rta[IFA_LOCAL] == NULL)
 		return;
 
+	nhrp_address_set(&iface->protocol_address, ifa->ifa_family,
+			 RTA_PAYLOAD(rta[IFA_LOCAL]),
+			 RTA_DATA(rta[IFA_LOCAL]));
+
 	peer = nhrp_peer_alloc();
 	peer->type = NHRP_PEER_TYPE_LOCAL;
 	peer->afnum = AFNUM_RESERVED;

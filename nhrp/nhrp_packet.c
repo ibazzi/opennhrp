@@ -1153,34 +1153,43 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 	if (payload != NULL)
 		cielist = &payload->u.cie_list_head;
 
-	r = kernel_route(dest, &packet->my_protocol_address,
-			 &proto_nexthop, &ifindex);
-	if (!r) {
-		nhrp_error("No route to protocol address %s",
-			nhrp_address_format(dest, sizeof(tmp), tmp));
-		return FALSE;
+	if (packet->dst_peer != NULL &&
+	    packet->dst_peer->interface != NULL) {
+		packet->dst_iface = packet->dst_peer->interface;
+		packet->my_protocol_address = packet->dst_iface->protocol_address;
+		proto_nexthop = packet->dst_peer->next_hop_address;
+	} else {
+		r = kernel_route(dest, &packet->my_protocol_address,
+			&proto_nexthop, &ifindex);
+		if (!r) {
+			nhrp_error("No route to protocol address %s",
+				nhrp_address_format(dest, sizeof(tmp), tmp));
+			return FALSE;
+		}
+
+		if (packet->dst_iface == NULL)
+			packet->dst_iface = nhrp_interface_get_by_index(
+				ifindex, FALSE);
+
+		packet->dst_peer = nhrp_peer_find_full(
+			&proto_nexthop, 0xff,
+			NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_COMPLETE |
+			NHRP_PEER_FIND_NEXTHOP | up, cielist);
+		if (packet->dst_peer == NULL ||
+			packet->dst_peer->type == NHRP_PEER_TYPE_NEGATIVE) {
+			nhrp_error("No peer entry for protocol address %s",
+				nhrp_address_format(&proto_nexthop, sizeof(tmp), tmp));
+			return FALSE;
+		}
 	}
 
-	if (packet->dst_iface == NULL)
-		packet->dst_iface = nhrp_interface_get_by_index(ifindex, FALSE);
 	if (packet->dst_iface == NULL) {
 		nhrp_error("Protocol address %s routed to non-NHRP interface",
 			   nhrp_address_format(dest, sizeof(tmp), tmp));
 		return FALSE;
 	}
+
 	packet->my_nbma_address = packet->dst_iface->nbma_address;
-
-	packet->dst_peer = nhrp_peer_find_full(
-		&proto_nexthop, 0xff,
-		NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_COMPLETE |
-		NHRP_PEER_FIND_NEXTHOP | up, cielist);
-	if (packet->dst_peer == NULL ||
-	    packet->dst_peer->type == NHRP_PEER_TYPE_NEGATIVE) {
-		nhrp_error("No peer entry for protocol address %s",
-			nhrp_address_format(&proto_nexthop, sizeof(tmp), tmp));
-		return FALSE;
-	}
-
 	if (packet->my_nbma_address.type == PF_UNSPEC) {
 		r = kernel_route(&packet->dst_peer->next_hop_address,
 				 &packet->my_nbma_address, NULL, NULL);

@@ -408,10 +408,10 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 		  nhrp_address_format(&peer->protocol_address,
 				      sizeof(dst), dst));
 
+	packet->dst_peer = peer;
 	sent = nhrp_packet_send_request(packet,
 					nhrp_peer_handle_registration_reply,
 					nhrp_peer_dup(peer));
-	peer->interface = packet->dst_iface;
 
 error_free_packet:
 	nhrp_packet_free(packet);
