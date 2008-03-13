@@ -294,9 +294,12 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 	free(packet);
 }
 
-static void nhrp_packet_clear_route(struct nhrp_packet *packet)
+static void nhrp_packet_clear_route(struct nhrp_packet *packet, int reply)
 {
-	packet->dst_iface = NULL;
+	if (reply)
+		packet->dst_iface = packet->src_iface;
+	else
+		packet->dst_iface = NULL;
 	packet->dst_peer = NULL;
 }
 
@@ -319,7 +322,6 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 		nhrp_address_format(&packet->dst_protocol_address,
 			sizeof(tmp2), tmp2));
 
-	nhrp_packet_clear_route(packet);
 	packet->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
 	packet->hdr.flags &= NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
 			     NHRP_FLAG_RESOLUTION_SOURCE_STABLE |
@@ -344,6 +346,7 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
+	nhrp_packet_clear_route(packet, TRUE);
 	if (!nhrp_packet_route(packet, 0)) {
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
@@ -412,7 +415,6 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		}
 	}
 
-	nhrp_packet_clear_route(packet);
 	packet->hdr.type = NHRP_PACKET_REGISTRATION_REPLY;
 	packet->hdr.flags &= NHRP_FLAG_REGISTRATION_UNIQUE |
 			     NHRP_FLAG_REGISTRATION_NAT;
@@ -478,6 +480,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		nhrp_peer_free(peer);
 	}
 
+	nhrp_packet_clear_route(packet, TRUE);
 	if (!nhrp_packet_route(packet, 1)) {
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
@@ -500,7 +503,6 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 		nhrp_address_format(&packet->dst_protocol_address,
 			sizeof(tmp2), tmp2));
 
-	nhrp_packet_clear_route(packet);
 	packet->hdr.type = NHRP_PACKET_PURGE_REPLY;
 	packet->hdr.flags = 0;
 	packet->hdr.hop_count = 0;
@@ -859,7 +861,7 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 	}
 	packet->hdr.hop_count--;
 
-	nhrp_packet_clear_route(packet);
+	nhrp_packet_clear_route(packet, FALSE);
 	if (!nhrp_packet_route(packet, 0)) {
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
@@ -1005,10 +1007,13 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 		}
 	}
 
-	if (peer == NULL || peer->type != NHRP_PEER_TYPE_LOCAL)
-		ret = nhrp_packet_forward(packet);
-	else
+	if (peer != NULL && peer->type == NHRP_PEER_TYPE_LOCAL) {
+		packet->my_nbma_address = iface->nbma_address;
+		packet->my_protocol_address = iface->protocol_address;
+
 		ret = nhrp_packet_receive_local(packet);
+	} else
+		ret = nhrp_packet_forward(packet);
 
 error:
 	nhrp_packet_free(packet);

@@ -637,6 +637,12 @@ int kernel_route(struct nhrp_address *dest,
 			     dest->addr, dest->addr_len);
 	req.r.rtm_dst_len = dest->addr_len * 8;
 
+	if (default_source != NULL &&
+	    default_source->type != AF_UNSPEC) {
+		netlink_add_rtattr_l(&req.n, sizeof(req), RTA_SRC,
+			default_source->addr, default_source->addr_len);
+	}
+
 	if (!netlink_talk(&netlink_fd, &req.n, sizeof(req), &req.n))
 		return FALSE;
 
