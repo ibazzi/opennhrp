@@ -243,12 +243,14 @@ int usage(const char *prog)
 	fprintf(stderr,
 		"usage: opennhrp [-a admin-socket] [-c config-file] [-s script-file]\n"
 		"                [-p pid-file] [-d]\n"
+		"       opennhrp -V\n"
 		"\n"
 		"\t-a admin-socket\tspecify management interface socket\n"
 		"\t-c config-file\tread configuration from config-file\n"
 		"\t-s script-file\tuse specified script-file for event handling\n"
 		"\t-p pid-file\tspecify pid-file\n"
 		"\t-d\t\tfork to background after startup\n"
+		"\t-V\t\tshow version number and exit\n"
 		"\n");
 	return 1;
 }
@@ -285,6 +287,9 @@ int main(int argc, char **argv)
 		case 'd':
 			daemonmode = 1;
 			break;
+		case 'V':
+			puts("OpenNHRP " OPENNHRP_VERSION);
+			return 0;
 		default:
 			return usage(argv[0]);
 		}
