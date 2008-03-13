@@ -294,6 +294,12 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 	free(packet);
 }
 
+static void nhrp_packet_clear_route(struct nhrp_packet *packet)
+{
+	packet->dst_iface = NULL;
+	packet->dst_peer = NULL;
+}
+
 static void nhrp_packet_dequeue(struct nhrp_packet *packet)
 {
 	nhrp_task_cancel(&packet->timeout);
@@ -313,6 +319,7 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 		nhrp_address_format(&packet->dst_protocol_address,
 			sizeof(tmp2), tmp2));
 
+	nhrp_packet_clear_route(packet);
 	packet->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
 	packet->hdr.flags &= NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
 			     NHRP_FLAG_RESOLUTION_SOURCE_STABLE |
@@ -405,6 +412,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		}
 	}
 
+	nhrp_packet_clear_route(packet);
 	packet->hdr.type = NHRP_PACKET_REGISTRATION_REPLY;
 	packet->hdr.flags &= NHRP_FLAG_REGISTRATION_UNIQUE |
 			     NHRP_FLAG_REGISTRATION_NAT;
@@ -492,6 +500,7 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 		nhrp_address_format(&packet->dst_protocol_address,
 			sizeof(tmp2), tmp2));
 
+	nhrp_packet_clear_route(packet);
 	packet->hdr.type = NHRP_PACKET_PURGE_REPLY;
 	packet->hdr.flags = 0;
 	packet->hdr.hop_count = 0;
@@ -850,6 +859,7 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 	}
 	packet->hdr.hop_count--;
 
+	nhrp_packet_clear_route(packet);
 	if (!nhrp_packet_route(packet, 0)) {
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
