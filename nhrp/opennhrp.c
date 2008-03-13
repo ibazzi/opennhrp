@@ -101,6 +101,7 @@ static int load_config(const char *config_file)
 		"missing keyword",
 		"interface context not defined",
 		"register is used with map",
+		"invalid address",
 	};
 	struct nhrp_interface *iface = NULL;
 	struct nhrp_peer *peer = NULL;
@@ -130,10 +131,21 @@ static int load_config(const char *config_file)
 			peer = nhrp_peer_alloc();
 			peer->type = NHRP_PEER_TYPE_STATIC;
 			peer->interface = iface;
-			nhrp_address_parse(addr, &peer->protocol_address,
-					   &peer->prefix_length);
+			if (!nhrp_address_parse(addr, &peer->protocol_address,
+						&peer->prefix_length)) {
+				rc = 4;
+				break;
+			}
 			peer->protocol_type = nhrp_protocol_from_pf(peer->protocol_address.type);
-			nhrp_address_parse(nbma, &peer->next_hop_address, NULL);
+			if (!nhrp_address_parse(nbma, &peer->next_hop_address,
+						NULL)) {
+				if (!nhrp_address_resolve(nbma,
+						&peer->next_hop_address)) {
+					rc = 4;
+					break;
+				}
+				peer->nbma_hostname = strdup(nbma);
+			}
 			peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
 			nhrp_peer_insert(peer);
 			nhrp_peer_free(peer);

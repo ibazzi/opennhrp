@@ -103,9 +103,19 @@ static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 		peer->prefix_length);
 
 	if (peer->next_hop_address.type != PF_UNSPEC) {
-		i += snprintf(&buf[i], len - i, " %s %s",
-			peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ? "nexthop" : "nbma",
-			nhrp_address_format(&peer->next_hop_address, sizeof(tmp), tmp));
+		i += snprintf(&buf[i], len - i, " %s",
+			peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ? "nexthop" : "nbma");
+
+		if (peer->nbma_hostname != NULL) {
+			i += snprintf(&buf[i], len - i, " %s[%s]",
+				peer->nbma_hostname,
+				nhrp_address_format(&peer->next_hop_address,
+						    sizeof(tmp), tmp));
+		} else {
+			i += snprintf(&buf[i], len - i, " %s",
+				nhrp_address_format(&peer->next_hop_address,
+						    sizeof(tmp), tmp));
+		}
 	}
 	if (peer->next_hop_nat_oa.type != PF_UNSPEC) {
 		i += snprintf(&buf[i], len - i, " nbma-nat-oa %s",
@@ -251,6 +261,20 @@ static void nhrp_peer_route_up(struct nhrp_peer *peer, int status)
 static void nhrp_run_up_script_task(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
+
+	if (peer->nbma_hostname) {
+		char host[64];
+
+		if (!nhrp_address_resolve(peer->nbma_hostname, &peer->next_hop_address)) {
+			nhrp_task_schedule(&peer->task, 5000, nhrp_run_up_script_task);
+			return;
+		}
+
+		nhrp_info("Resolved '%s' as %s",
+			peer->nbma_hostname,
+			nhrp_address_format(&peer->next_hop_address,
+					    sizeof(host), host));
+	}
 
 	nhrp_peer_run_script(peer, "peer-up", nhrp_peer_static_up);
 }
@@ -721,6 +745,10 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 		break;
 	}
 
+	if (peer->nbma_hostname) {
+		free(peer->nbma_hostname);
+		peer->nbma_hostname = NULL;
+	}
 
 	if (peer->script_pid) {
 		kill(SIGINT, peer->script_pid);
@@ -741,7 +769,7 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
-		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_static_up);
+		nhrp_run_up_script_task(task);
 		break;
 	case NHRP_PEER_TYPE_LOCAL:
 		peer->flags |= NHRP_PEER_FLAG_UP;

@@ -8,6 +8,7 @@
  * by the Free Software Foundation. See http://www.gnu.org/ for details.
  */
 
+#include <netdb.h>
 #include <stdio.h>
 #include <string.h>
 #include <arpa/inet.h>
@@ -98,6 +99,23 @@ int nhrp_address_parse_packet(uint16_t protocol, size_t len, uint8_t *packet,
 	default:
 		return FALSE;
 	}
+
+	return TRUE;
+}
+
+int nhrp_address_resolve(const char *hostname, struct nhrp_address *addr)
+{
+	struct hostent *he;
+
+	he = gethostbyname(hostname);
+	if (he == NULL)
+		return FALSE;
+
+	if (he->h_addrtype != AF_INET)
+		return FALSE;
+
+	nhrp_address_set(addr, he->h_addrtype, he->h_length,
+			 (unsigned char *) he->h_addr);
 
 	return TRUE;
 }

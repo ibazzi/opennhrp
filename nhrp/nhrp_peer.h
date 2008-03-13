@@ -51,6 +51,7 @@ struct nhrp_peer {
 	time_t expire_time;
 	time_t last_used;
 	struct nhrp_address protocol_address;
+	char *nbma_hostname;
 
 	/* Protocol address for NHRP_PEER_TYPE_ROUTE,
 	 * NBMA address for other type of entries */

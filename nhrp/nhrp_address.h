@@ -31,6 +31,7 @@ uint16_t nhrp_pf_from_afnum(uint16_t afnum);
 
 int nhrp_address_parse_packet(uint16_t protocol, size_t len, uint8_t *packet, struct nhrp_address *src, struct nhrp_address *dst);
 int nhrp_address_parse(const char *string, struct nhrp_address *addr, uint8_t *prefix_len);
+int nhrp_address_resolve(const char *hostname, struct nhrp_address *addr);
 void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type);
 int nhrp_address_set(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes);
 int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes, uint8_t sublen, uint8_t *subbytes);
