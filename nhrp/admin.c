@@ -8,6 +8,7 @@
  * by the Free Software Foundation. See http://www.gnu.org/ for details.
  */
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <malloc.h>
@@ -29,6 +30,26 @@ struct admin_remote {
 	int                     num_read;
 	char                    cmd[512];
 };
+
+static int parse_word(const char **bufptr, size_t len, char *word)
+{
+	const char *buf = *bufptr;
+	int i, pos = 0;
+
+	while (isspace(buf[pos]) && buf[pos] != '\n' && buf[pos])
+		pos++;
+
+	if (buf[pos] == '\n' || buf[pos] == 0)
+		return FALSE;
+
+	for (i = 0; i < len-1 && !isspace(buf[pos+i]); i++)
+		word[i] = buf[pos+i];
+	word[i] = 0;
+
+	*bufptr += i + pos;
+	return TRUE;
+}
+
 
 static void admin_write(void *ctx, const char *format, ...)
 {
@@ -123,61 +144,22 @@ static void admin_flush(void *ctx, const char *cmd)
 }
 
 struct purge_ctx {
+	int count;
+
+	int flags;
 	struct nhrp_address address;
 	uint8_t prefix_length;
-	int count;
+	void (*purge_action)(struct nhrp_peer *peer);
 };
 
-static int purge_protocol(void *ctx, struct nhrp_interface *iface)
+static int admin_purge_from_iface(void *ctx, struct nhrp_interface *iface)
 {
 	struct nhrp_peer *peer;
 	struct purge_ctx *pp = (struct purge_ctx *) ctx;
 
-	while ((peer = nhrp_peer_find(iface,
-				      &pp->address,
+	while ((peer = nhrp_peer_find(iface, &pp->address,
 				      pp->prefix_length,
-				      NHRP_PEER_FIND_EXACT |
-				      NHRP_PEER_FIND_REMOVABLE)) != NULL) {
-		nhrp_peer_remove(peer);
-		pp->count++;
-	}
-
-	return 0;
-}
-
-static void admin_purge_protocol(void *ctx, const char *cmd)
-{
-	struct purge_ctx pp;
-	char tmp[64];
-
-	pp.count = 0;
-	if (!nhrp_address_parse(cmd, &pp.address, &pp.prefix_length)) {
-		admin_write(ctx,
-			    "Status: failed\n"
-			    "Reason: bad-address-format\n");
-		return;
-	}
-
-	nhrp_info("Admin: purge protocol address %s/%d",
-		  nhrp_address_format(&pp.address, sizeof(tmp), tmp),
-		  pp.prefix_length);
-
-	nhrp_interface_foreach(purge_protocol, &pp);
-
-	admin_write(ctx,
-		    "Status: ok\n"
-		    "Entries-Affected: %d\n",
-		    pp.count);
-}
-
-static int purge_nbma(void *ctx, struct nhrp_interface *iface)
-{
-	struct nhrp_peer *peer;
-	struct purge_ctx *pp = (struct purge_ctx *) ctx;
-
-	while ((peer = nhrp_peer_find_nbma(iface,
-					   &pp->address,
-					   NHRP_PEER_FIND_PURGEABLE)) != NULL) {
+				      pp->flags)) != NULL) {
 		nhrp_peer_purge(peer);
 		pp->count++;
 	}
@@ -185,28 +167,99 @@ static int purge_nbma(void *ctx, struct nhrp_interface *iface)
 	return 0;
 }
 
-static void admin_purge_nbma(void *ctx, const char *cmd)
+static void admin_purge(void *ctx, const char *cmd)
 {
-	char tmp[64];
+	char keyword[64], tmp[64];
+	struct nhrp_interface *iface = NULL;
+	struct nhrp_address address;
 	struct purge_ctx pp;
+	uint8_t prefix_length;
 
-	pp.count = 0;
-	if (!nhrp_address_parse(cmd, &pp.address, NULL)) {
-		admin_write(ctx,
-			    "Status: failed\n"
-			    "Reason: bad-address-format\n");
-		return;
+	memset(&pp, 0, sizeof(pp));
+	while (parse_word(&cmd, sizeof(keyword), keyword)) {
+		nhrp_info("Admin: parsing keyword '%s'",
+			 keyword);
+
+		if (!parse_word(&cmd, sizeof(tmp), tmp)) {
+			admin_write(ctx,
+				    "Status: failed\n"
+				    "Reason: missing-argument\n"
+				    "Near-Keyword: '%s'\n",
+				    keyword);
+			return;
+		}
+
+		if (!nhrp_address_parse(tmp, &address, &prefix_length)) {
+			admin_write(ctx,
+				    "Status: failed\n"
+				    "Reason: invalid-address\n"
+				    "Near-Keyword: '%s'\n",
+				   keyword);
+			return;
+		}
+
+		if (strcmp(keyword, "protocol") == 0) {
+			if (pp.flags)
+				goto err_conflict;
+			pp.flags = NHRP_PEER_FIND_EXACT |
+				   NHRP_PEER_FIND_PURGEABLE;
+			pp.address = address;
+			pp.prefix_length = prefix_length;
+		} else if (strcmp(keyword, "nbma") == 0) {
+			if (pp.flags)
+				goto err_conflict;
+			pp.flags = NHRP_PEER_FIND_EXACT |
+				   NHRP_PEER_FIND_NBMA |
+				   NHRP_PEER_FIND_PURGEABLE;
+			pp.address = address;
+		} else if (strcmp(keyword, "local-protocol") == 0) {
+			if (iface != NULL)
+				goto err_conflict;
+			iface = nhrp_interface_get_by_protocol(&address);
+			if (iface == NULL)
+				goto err_noiface;
+		} else if (strcmp(keyword, "local-nbma") == 0) {
+			if (iface != NULL)
+				goto err_conflict;
+			iface = nhrp_interface_get_by_nbma(&address);
+			if (iface == NULL)
+				goto err_noiface;
+		} else {
+			admin_write(ctx,
+				    "Status: failed\n"
+				    "Reason: syntax-error\n"
+				    "Near-Keyword: '%s'\n",
+				    keyword);
+			return;
+		}
 	}
 
-	nhrp_info("Admin: purge nbma address %s",
-		  nhrp_address_format(&pp.address, sizeof(tmp), tmp));
-
-	nhrp_interface_foreach(purge_nbma, &pp);
+	if (iface == NULL)
+		nhrp_interface_foreach(admin_purge_from_iface, &pp);
+	else
+		admin_purge_from_iface(&pp, iface);
 
         admin_write(ctx,
 		    "Status: ok\n"
 		    "Entries-Purged: %d\n",
 		    pp.count);
+	return;
+
+err_conflict:
+	admin_write(ctx,
+		    "Status: failed\n"
+		    "Reason: conflicting-keyword\n"
+		    "Near-Keyword: '%s'\n",
+		    keyword);
+	return;
+err_noiface:
+	admin_write(ctx,
+		    "Status: failed\n"
+		    "Reason: interface-not-found\n"
+		    "Near-Keyword: '%s'\n"
+		    "Argument: '%s'\n",
+		    keyword, tmp);
+	return;
 }
 
 static struct {
@@ -215,8 +268,7 @@ static struct {
 } admin_handler[] = {
 	{ "show",		admin_show },
 	{ "flush",		admin_flush },
-	{ "purge protocol",	admin_purge_protocol },
-	{ "purge nbma",		admin_purge_nbma },
+	{ "purge",		admin_purge },
 };
 
 static int admin_receive(void *ctx, int fd, short events)
@@ -242,13 +294,15 @@ static int admin_receive(void *ctx, int fd, short events)
 		cmdlen = strlen(admin_handler[i].command);
 		if (rm->num_read >= cmdlen &&
 		    strncasecmp(rm->cmd, admin_handler[i].command, cmdlen) == 0) {
+			nhrp_info("Admin: executing command '%s'",
+				  admin_handler[i].command);
 			admin_handler[i].handler(ctx, &rm->cmd[cmdlen]);
 			break;
 		}
 	}
 	if (i >= ARRAY_SIZE(admin_handler)) {
 		admin_write(ctx,
-			    "Status: failed\n"
+			    "Status: error\n"
 			    "Reason: unrecognized command\n");
 	}
 

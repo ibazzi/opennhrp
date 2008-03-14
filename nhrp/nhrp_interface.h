@@ -49,5 +49,7 @@ void nhrp_interface_hash(struct nhrp_interface *iface);
 int nhrp_interface_foreach(nhrp_interface_enumerator enumerator, void *ctx);
 struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create);
 struct nhrp_interface *nhrp_interface_get_by_index(unsigned int index, int create);
+struct nhrp_interface *nhrp_interface_get_by_nbma(struct nhrp_address *addr);
+struct nhrp_interface *nhrp_interface_get_by_protocol(struct nhrp_address *addr);
 
 #endif

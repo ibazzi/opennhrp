@@ -4,16 +4,8 @@
 opennhrpctl \- opennhrp administrative control tool
 
 .SH SYNOPSIS
-.BR opennhrpctl " show"
-.br
-.BR opennhrpctl " flush"
-.br
-.BR opennhrpctl " purge protocol "
-.BI "[" protocol-address "[" "/prefix" "]]"
-.br
-.BR opennhrpctl " purge nbma"
-.BI "[" nbma-address "]"
-.br
+.B opennhrpctl
+.BI "[\-a " admin\-socket "]" " command " "[" "arguments..." "]"
 
 .SH DESCRIPTION
 .B opennhrpctl
@@ -38,15 +30,37 @@ Show contents of next hop cache (configured and resolved entries).
 Clear all non-permanent entries from the cache.
 .RE
 
-.BI "purge protocol"
+.BI purge
 .RS
-Purge cache entries based on protocol address.
+Purge entries from NHRP cache: cached entries are removed and permanent
+entries are forced down, up and finally reregistered. Following options can be
+used to limit purging to only matching entries:
+
+.BI nbma " nbma-address"
+.RS
+Purge only entries where the remote has NBMA address
+.IR nbma-address .
 .RE
 
-.BI "purge nbma"
+.BI protocol " protocol-address" "[/" "prefix-length" "]"
 .RS
-Purge cache entries with specific NBMA address (e.g. this can be used
-to flush entries when IPsec SA expires).
+Purge only entries where the remote has protocol address
+.IR protocol-address " with prefix length " prefix-length .
+Both specifiers must exactly for the entry to match.
+.RE
+
+.BI local-nbma " nbma-address"
+.RS
+Search entries only from local interface which owns the NBMA address
+.IR nbma-address .
+.RE
+
+.BI local-protocol " protocol-address"
+.RS
+Search entries only from local interface which owns the protocol address
+.IR protocol-address .
+.RE
+
 .RE
 
 .SH FILES

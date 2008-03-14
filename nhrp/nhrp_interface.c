@@ -78,3 +78,27 @@ struct nhrp_interface *nhrp_interface_get_by_index(unsigned int index, int creat
 
 	return NULL;
 }
+
+struct nhrp_interface *nhrp_interface_get_by_nbma(struct nhrp_address *addr)
+{
+	struct nhrp_interface *iface;
+
+	LIST_FOREACH(iface, &name_list, name_list) {
+		if (nhrp_address_cmp(addr, &iface->nbma_address) == 0)
+			return iface;
+	}
+
+	return NULL;
+}
+
+struct nhrp_interface *nhrp_interface_get_by_protocol(struct nhrp_address *addr)
+{
+	struct nhrp_interface *iface;
+
+	LIST_FOREACH(iface, &name_list, name_list) {
+		if (nhrp_address_cmp(addr, &iface->protocol_address) == 0)
+			return iface;
+	}
+
+	return NULL;
+}
