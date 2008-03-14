@@ -187,6 +187,16 @@ static void admin_purge(void *ctx, const char *cmd)
 			return;
 		}
 
+		if (strcmp(keyword, "interface") == 0 ||
+		    strcmp(keyword, "iface") == 0) {
+			if (iface != NULL)
+				goto err_conflict;
+			iface = nhrp_interface_get_by_name(tmp);
+			if (iface == NULL)
+				goto err_noiface;
+			continue;
+		}
+
 		if (!nhrp_address_parse(tmp, &address, &prefix_length)) {
 			admin_write(ctx,
 				    "Status: failed\n"
@@ -239,7 +249,7 @@ static void admin_purge(void *ctx, const char *cmd)
 
         admin_write(ctx,
 		    "Status: ok\n"
-		    "Entries-Purged: %d\n",
+		    "Entries-Affected: %d\n",
 		    pp.count);
 	return;
 
