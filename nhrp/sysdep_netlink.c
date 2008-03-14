@@ -532,6 +532,7 @@ static int netlink_open(struct netlink_fd *fd, int protocol, int groups)
 		return FALSE;
 	}
 
+	fcntl(fd->fd, F_SETFD, FD_CLOEXEC);
 	if (setsockopt(fd->fd, SOL_SOCKET, SO_SNDBUF, &buf, sizeof(buf)) < 0) {
 		nhrp_perror("SO_SNDBUF");
 		goto error;
@@ -613,6 +614,8 @@ int kernel_init(void)
 		nhrp_error("Unable to create PF_PACKET socket");
 		return FALSE;
 	}
+
+	fcntl(packet_fd, F_SETFD, FD_CLOEXEC);
 	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfpacket_read, NULL))
 		goto err_close_packetfd;
 

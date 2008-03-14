@@ -9,6 +9,7 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -239,6 +240,7 @@ int forward_init(void)
 		return FALSE;
 	}
 
+	fcntl(packet_fd, F_SETFD, FD_CLOEXEC);
 	install_filter(&install_filter_task);
 
 	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfp_read, NULL))

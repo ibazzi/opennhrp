@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
+#include <fcntl.h>
 #include <malloc.h>
 #include <stdarg.h>
 #include <string.h>
@@ -330,6 +331,7 @@ static int admin_accept(void *ctx, int fd, short events)
 	cnx = accept(fd, (struct sockaddr *) &from, &fromlen);
 	if (cnx < 0)
 		return 0;
+	fcntl(cnx, F_SETFD, FD_CLOEXEC);
 
 	rm = calloc(1, sizeof(struct admin_remote));
 	rm->fd = cnx;
@@ -355,6 +357,7 @@ int admin_init(const char *opennhrp_socket)
 	if (fd < 0)
 		return 0;
 
+	fcntl(fd, F_SETFD, FD_CLOEXEC);
 	unlink(opennhrp_socket);
 	if (bind(fd, (struct sockaddr *) &sun, sizeof(sun)) != 0)
 		goto err_close;
