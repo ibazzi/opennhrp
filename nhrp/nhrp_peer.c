@@ -862,7 +862,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		  nhrp_peer_type[peer->type],
 		  nhrp_peer_format(peer, sizeof(tmp), tmp));
 
-	if (nhrp_running)
+	if (nhrp_running || peer->type == NHRP_PEER_TYPE_LOCAL)
 		nhrp_peer_insert_task(&peer->task);
 	else
 		nhrp_task_schedule(&peer->task, 0, nhrp_peer_insert_task);

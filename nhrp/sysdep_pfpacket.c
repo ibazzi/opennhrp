@@ -117,7 +117,9 @@ static int check_ipv4(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-int forward_local_addresses_changed(void)
+static struct nhrp_task install_filter_task;
+
+void install_filter(struct nhrp_task *task)
 {
 	struct sock_fprog prog;
 	struct filter f;
@@ -133,7 +135,7 @@ int forward_local_addresses_changed(void)
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_IFINDEX);
 	nhrp_interface_foreach(check_interface, &f);
 	if (!patch_jump(&f, LABEL_DROP))
-		return FALSE;
+		return;
 	mark(&f, LABEL_IF_OK);
 
 	/* Check for non-local IPv4 source */
@@ -156,7 +158,7 @@ int forward_local_addresses_changed(void)
 	if (f.numops >= MAX_OPCODES) {
 		nhrp_error("Filter code buffer too small (code actual length %d)",
 			   f.numops);
-		return FALSE;
+		return;
 	}
 
 	/* Fixup jumps to be relative */
@@ -174,10 +176,14 @@ int forward_local_addresses_changed(void)
 	prog.filter = f.code;
 	if (setsockopt(packet_fd, SOL_SOCKET, SO_ATTACH_FILTER,
 		       &prog, sizeof(prog)))
-		return FALSE;
+		return;
 
 	nhrp_info("Filter code installed (%d opcodes)", f.numops);
+}
 
+int forward_local_addresses_changed(void)
+{
+	nhrp_task_schedule(&install_filter_task, 0, install_filter);
 	return TRUE;
 }
 
