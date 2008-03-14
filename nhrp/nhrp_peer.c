@@ -190,9 +190,9 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 		envp[i++] = env("NHRP_SRCADDR",
 				nhrp_address_format(&iface->protocol_address,
 						    sizeof(tmp), tmp));
-	if (iface->nbma_address.type != AF_UNSPEC)
+	if (peer->my_nbma_address.type != AF_UNSPEC)
 		envp[i++] = env("NHRP_SRCNBMA",
-				nhrp_address_format(&iface->nbma_address,
+				nhrp_address_format(&peer->my_nbma_address,
 						    sizeof(tmp), tmp));
 	envp[i++] = env("NHRP_DESTADDR",
 			nhrp_address_format(&peer->protocol_address,
@@ -772,6 +772,24 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 	return TRUE;
 }
 
+static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer)
+{
+	char tmp[64];
+	int r;
+
+	if (peer->interface->nbma_address.type == AF_UNSPEC) {
+		r = kernel_route(NULL, &peer->next_hop_address,
+				 &peer->my_nbma_address, NULL);
+		if (!r) {
+			nhrp_error("No route to next hop address %s",
+				   nhrp_address_format(&peer->next_hop_address,
+						       sizeof(tmp), tmp));
+		}
+	} else {
+		peer->my_nbma_address = peer->interface->nbma_address;
+	}
+}
+
 static void nhrp_peer_insert_task(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
@@ -779,6 +797,7 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
+		nhrp_peer_resolve_nbma(peer);
 		nhrp_run_up_script_task(task);
 		break;
 	case NHRP_PEER_TYPE_LOCAL:
@@ -794,6 +813,7 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 				   nhrp_peer_check_renew_task);
 		/* Fallthrough to bring peer up */
 	case NHRP_PEER_TYPE_DYNAMIC:
+		nhrp_peer_resolve_nbma(peer);
 		if (!(peer->flags & NHRP_PEER_FLAG_UP))
 			nhrp_peer_run_script(peer, "peer-up", nhrp_peer_dynamic_up);
 		break;

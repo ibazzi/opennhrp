@@ -414,10 +414,17 @@ static void netlink_link_update(struct nlmsghdr *msg)
 	switch (ifi->ifi_type) {
 	case ARPHRD_IPGRE:
 		iface->afnum = AFNUM_INET;
+
+		/* try hard to get the interface nbma address */
 		do_get_ioctl(ifname, &cfg);
 		if (cfg.iph.saddr) {
 			nhrp_address_set(&iface->nbma_address, PF_INET,
 					 4, (uint8_t *) &cfg.iph.saddr);
+		} else if (cfg.link) {
+			iface->link_index = cfg.link;
+		} else {
+			nhrp_error("Cannot figure out NBMA address for "
+				   "interface '%s'", ifname);
 		}
 		break;
 	}
@@ -430,12 +437,30 @@ static void netlink_link_update(struct nlmsghdr *msg)
 	}
 }
 
+static int netlink_addr_update_nbma(void *ctx, struct nhrp_interface *iface)
+{
+	struct nlmsghdr *msg = (struct nlmsghdr *) ctx;
+	struct ifaddrmsg *ifa = NLMSG_DATA(msg);
+	struct rtattr *rta[IFA_MAX+1];
+
+	if (iface->link_index == ifa->ifa_index) {
+		netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa),
+				     IFA_PAYLOAD(msg));
+		nhrp_address_set(&iface->nbma_address, ifa->ifa_family,
+				 RTA_PAYLOAD(rta[IFA_LOCAL]),
+				 RTA_DATA(rta[IFA_LOCAL]));
+	}
+	return 0;
+}
+
 static void netlink_addr_update(struct nlmsghdr *msg)
 {
 	struct nhrp_interface *iface;
 	struct nhrp_peer *peer;
 	struct ifaddrmsg *ifa = NLMSG_DATA(msg);
 	struct rtattr *rta[IFA_MAX+1];
+
+	nhrp_interface_foreach(netlink_addr_update_nbma, msg);
 
 	netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(msg));
 	iface = nhrp_interface_get_by_index(ifa->ifa_index, FALSE);

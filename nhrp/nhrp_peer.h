@@ -54,11 +54,11 @@ struct nhrp_peer {
 	uint16_t mtu;
 	time_t expire_time;
 	time_t last_used;
+	struct nhrp_address my_nbma_address;
 	struct nhrp_address protocol_address;
-	char *nbma_hostname;
 
-	/* Protocol address for NHRP_PEER_TYPE_ROUTE,
-	 * NBMA address for other type of entries */
+	char *nbma_hostname;
+	/* NHRP_PEER_TYPE_ROUTE: protocol addr., others: NBMA addr. */
 	struct nhrp_address next_hop_address;
 	struct nhrp_address next_hop_nat_oa;
 
