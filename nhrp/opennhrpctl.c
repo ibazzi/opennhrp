@@ -44,6 +44,7 @@ static void admin_close(int fd)
 static int admin_send(int fd, const char *str)
 {
 	write(fd, str, strlen(str));
+	shutdown(fd, SHUT_WR);
 	return 0;
 }
 
@@ -76,7 +77,7 @@ int main(int argc, char **argv)
 	for (i = 1; i < argc; i++) {
 		if (strlen(argv[i]) != 2 || argv[i][0] != '-') {
 			pos += snprintf(pos, &cmd[sizeof(cmd)-1]-pos,
-					" %s", argv[i]);
+					" %s\n", argv[i]) - 1;
 			continue;
 		}
 

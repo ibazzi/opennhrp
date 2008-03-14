@@ -25,6 +25,9 @@
 struct admin_remote {
 	int			fd;
 	struct nhrp_task	timeout;
+
+	int                     num_read;
+	char                    cmd[512];
 };
 
 static void admin_write(void *ctx, const char *format, ...)
@@ -219,21 +222,27 @@ static struct {
 static int admin_receive(void *ctx, int fd, short events)
 {
 	struct admin_remote *rm = (struct admin_remote *) ctx;
-	char buf[1024];
 	ssize_t len;
 	int i, cmdlen;
 
-	len = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+	len = recv(fd, rm->cmd, sizeof(rm->cmd) - rm->num_read, MSG_DONTWAIT);
 	if (len < 0 && errno == EAGAIN)
 		return 0;
 	if (len <= 0)
 		goto err;
 
+	rm->num_read += len;
+	if (rm->num_read >= sizeof(rm->cmd))
+		goto err;
+
+	if (rm->cmd[rm->num_read-1] != '\n')
+		return 0;
+
 	for (i = 0; i < ARRAY_SIZE(admin_handler); i++) {
 		cmdlen = strlen(admin_handler[i].command);
-		if (len >= cmdlen &&
-		    strncasecmp(buf, admin_handler[i].command, cmdlen) == 0) {
-			admin_handler[i].handler(ctx, &buf[cmdlen]);
+		if (rm->num_read >= cmdlen &&
+		    strncasecmp(rm->cmd, admin_handler[i].command, cmdlen) == 0) {
+			admin_handler[i].handler(ctx, &rm->cmd[cmdlen]);
 			break;
 		}
 	}
@@ -257,6 +266,7 @@ static void admin_timeout(struct nhrp_task *task)
 	struct admin_remote *rm = container_of(task, struct admin_remote, timeout);
 
 	nhrp_task_unpoll_fd(rm->fd);
+	shutdown(rm->fd, SHUT_RDWR);
 	close(rm->fd);
 	free(rm);
 }
