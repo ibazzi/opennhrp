@@ -82,7 +82,7 @@ int main(int argc, char **argv)
 		}
 
 		switch (argv[i][1]) {
-		case 's':
+		case 'a':
 			if (++i >= argc)
 				return usage(argv[0]);
 			socket = argv[i];
