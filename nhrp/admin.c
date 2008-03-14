@@ -177,9 +177,6 @@ static void admin_purge(void *ctx, const char *cmd)
 
 	memset(&pp, 0, sizeof(pp));
 	while (parse_word(&cmd, sizeof(keyword), keyword)) {
-		nhrp_info("Admin: parsing keyword '%s'",
-			 keyword);
-
 		if (!parse_word(&cmd, sizeof(tmp), tmp)) {
 			admin_write(ctx,
 				    "Status: failed\n"
@@ -294,8 +291,6 @@ static int admin_receive(void *ctx, int fd, short events)
 		cmdlen = strlen(admin_handler[i].command);
 		if (rm->num_read >= cmdlen &&
 		    strncasecmp(rm->cmd, admin_handler[i].command, cmdlen) == 0) {
-			nhrp_info("Admin: executing command '%s'",
-				  admin_handler[i].command);
 			admin_handler[i].handler(ctx, &rm->cmd[cmdlen]);
 			break;
 		}
