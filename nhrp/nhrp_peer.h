@@ -22,8 +22,8 @@
 #define NHRP_PEER_TYPE_CACHED		0x02	/* Received/relayed resolution reply */
 #define NHRP_PEER_TYPE_CACHED_ROUTE	0x03	/* Received/relayed resolution for route */
 #define NHRP_PEER_TYPE_DYNAMIC		0x04	/* NHC registration */
-#define NHRP_PEER_TYPE_LOCAL		0x05	/* Learned from interface config */
-#define NHRP_PEER_TYPE_STATIC		0x06	/* Static mapping from config file */
+#define NHRP_PEER_TYPE_STATIC		0x05	/* Static mapping from config file */
+#define NHRP_PEER_TYPE_LOCAL		0x06	/* Learned from interface config */
 #define NHRP_PEER_TYPE_MAX		0x07
 
 #define NHRP_PEER_FLAG_USED		0x01	/* Peer is in kernel ARP table */

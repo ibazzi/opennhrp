@@ -179,6 +179,7 @@ void install_filter(struct nhrp_task *task)
 		return;
 
 	nhrp_info("Filter code installed (%d opcodes)", f.numops);
+	nhrp_task_cancel(&install_filter_task);
 }
 
 int forward_local_addresses_changed(void)
@@ -238,7 +239,7 @@ int forward_init(void)
 		return FALSE;
 	}
 
-	forward_local_addresses_changed();
+	install_filter(&install_filter_task);
 
 	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfp_read, NULL))
 		goto err_close;

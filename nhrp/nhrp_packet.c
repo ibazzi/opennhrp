@@ -1186,7 +1186,7 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 						       up,
 						       cielist);
 		if (packet->dst_peer == NULL ||
-			packet->dst_peer->type == NHRP_PEER_TYPE_NEGATIVE) {
+		    packet->dst_peer->type == NHRP_PEER_TYPE_NEGATIVE) {
 			nhrp_error("No peer entry for protocol address %s",
 				nhrp_address_format(&proto_nexthop, sizeof(tmp), tmp));
 			return FALSE;

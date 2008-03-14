@@ -35,6 +35,9 @@ const char * const nhrp_peer_type[] = {
 	[NHRP_PEER_TYPE_STATIC]		= "static",
 };
 
+static struct nhrp_peer_list local_peer_cache =
+	CIRCLEQ_HEAD_INITIALIZER(local_peer_cache);
+
 static void nhrp_run_up_script_task(struct nhrp_task *task);
 static void nhrp_peer_register_task(struct nhrp_task *task);
 static void nhrp_peer_register(struct nhrp_peer *peer);
@@ -856,7 +859,10 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		nhrp_peer_remove(peer);
 
 	peer = nhrp_peer_dup(ins);
-	CIRCLEQ_INSERT_HEAD(&iface->peer_cache, peer, peer_list);
+	if (peer->type == NHRP_PEER_TYPE_LOCAL)
+		CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
+	else
+		CIRCLEQ_INSERT_HEAD(&iface->peer_cache, peer, peer_list);
 
 	nhrp_info("Adding %s %s",
 		  nhrp_peer_type[peer->type],
@@ -937,15 +943,28 @@ static int enum_interface_peers(void *ctx, struct nhrp_interface *iface)
 int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx)
 {
 	struct enum_interface_peers_ctx ectx = { e, ctx };
+	struct nhrp_peer *p;
+	int rc;
 
-	return nhrp_interface_foreach(enum_interface_peers, &ectx);
+	CIRCLEQ_FOREACH(p, &local_peer_cache, peer_list) {
+		rc = e(ctx, p);
+		if (rc != 0)
+			return rc;
+	}
+
+	rc = nhrp_interface_foreach(enum_interface_peers, &ectx);
+	if (rc != 0)
+		return rc;
+
+	return 0;
 }
 
-struct nhrp_peer *nhrp_peer_find_full(struct nhrp_interface *iface,
-				      struct nhrp_address *dest,
-				      int min_prefix, int flags,
-				      struct nhrp_cie_list_head *cielist)
+static struct nhrp_peer *nhrp_peer_find_internal(struct nhrp_interface *iface,
+						 struct nhrp_address *dest,
+						 int min_prefix, int flags,
+						 struct nhrp_cie_list_head *cielist)
 {
+	struct nhrp_peer_list *peer_cache;
 	struct nhrp_peer *found_peer = NULL;
 	struct nhrp_peer *p;
 	struct nhrp_address *addr;
@@ -956,7 +975,12 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_interface *iface,
 	if (min_prefix == 0 && (flags & NHRP_PEER_FIND_EXACT))
 		min_prefix = dest->addr_len * 8;
 
-	CIRCLEQ_FOREACH(p, &iface->peer_cache, peer_list) {
+	if (iface == NULL)
+		peer_cache = &local_peer_cache;
+	else
+		peer_cache = &iface->peer_cache;
+
+	CIRCLEQ_FOREACH(p, peer_cache, peer_list) {
 		if (dest != NULL &&
 		    dest->type != p->protocol_address.type)
 			continue;
@@ -1042,6 +1066,20 @@ struct nhrp_peer *nhrp_peer_find_full(struct nhrp_interface *iface,
 		time(&found_peer->last_used);
 
 	return found_peer;
+}
+
+struct nhrp_peer *nhrp_peer_find_full(struct nhrp_interface *iface,
+				      struct nhrp_address *dest,
+				      int min_prefix, int flags,
+				      struct nhrp_cie_list_head *cielist)
+{
+	struct nhrp_peer *p;
+
+	p = nhrp_peer_find_internal(NULL, dest, min_prefix, flags, cielist);
+	if (p != NULL)
+		return p;
+
+	return nhrp_peer_find_internal(iface, dest, min_prefix, flags, cielist);
 }
 
 void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
