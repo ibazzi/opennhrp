@@ -245,7 +245,8 @@ static int admin_receive(void *ctx, int fd, short events)
 
 err:
 	nhrp_task_cancel(&rm->timeout);
-	close(rm->fd);
+	shutdown(fd, SHUT_RDWR);
+	close(fd);
 	free(rm);
 
 	return -1;
