@@ -1144,6 +1144,11 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 	char tmp[64];
 	int r, up = 0;
 
+	if (packet->dst_iface == NULL) {
+		nhrp_error("nhrp_packet_route called without destination interface");
+		return FALSE;
+	}
+
 	if (!need_direct)
 		up = NHRP_PEER_FIND_UP;
 
@@ -1360,6 +1365,7 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 	p->hdr.type = NHRP_PACKET_ERROR_INDICATION;
 	p->hdr.u.error.code = indication_code;
 	p->hdr.u.error.offset = htons(offset);
+	p->dst_iface = error_packet->src_iface;
 
 	if (packet_types[error_packet->hdr.type].type == NHRP_TYPE_REPLY)
 		p->dst_protocol_address = error_packet->dst_protocol_address;
