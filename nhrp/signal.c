@@ -13,6 +13,7 @@
 #include <sys/socket.h>
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
+#include "nhrp_interface.h"
 
 static int signal_pipe[2];
 
@@ -21,9 +22,20 @@ static void signal_handler(int sig)
 	send(signal_pipe[1], &sig, sizeof(sig), MSG_DONTWAIT);
 }
 
-static int reap_children(void *ctx, int fd, short events)
+static int prune_all(void *ctx, struct nhrp_interface *iface)
 {
 	struct nhrp_peer *peer;
+
+	while ((peer = nhrp_peer_find(iface, NULL, 0,
+				      NHRP_PEER_FIND_SUBNET |
+				      NHRP_PEER_FIND_REMOVABLE)) != NULL)
+		nhrp_peer_remove(peer);
+
+	return 0;
+}
+
+static int reap_children(void *ctx, int fd, short events)
+{
 	pid_t pid;
 	int status, sig;
 
@@ -44,10 +56,7 @@ static int reap_children(void *ctx, int fd, short events)
 		nhrp_task_stop();
 		break;
 	case SIGHUP:
-		while ((peer = nhrp_peer_find(NULL, 0,
-					      NHRP_PEER_FIND_SUBNET |
-					      NHRP_PEER_FIND_REMOVABLE)) != NULL)
-			nhrp_peer_remove(peer);
+		nhrp_interface_foreach(prune_all, NULL);
 		break;
 	}
 	return 0;

@@ -13,6 +13,7 @@
 
 #include <sys/queue.h>
 #include "nhrp_packet.h"
+#include "nhrp_peer.h"
 
 #define NHRP_INTERFACE_FLAG_NON_CACHING		0x0001	/* Do not cache entries */
 #define NHRP_INTERFACE_FLAG_SHORTCUT		0x0002	/* Create shortcut routes */
@@ -37,6 +38,9 @@ struct nhrp_interface {
 	/* Actually, we should have list of protocol addresses;
 	 * we might have multiple address and multiple protocol types */
 	struct nhrp_address protocol_address;
+
+        /* Peer cache is interface specific */
+	struct nhrp_peer_list peer_cache;
 };
 
 typedef int (*nhrp_interface_enumerator)(void *ctx, struct nhrp_interface *iface);

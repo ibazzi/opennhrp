@@ -141,7 +141,7 @@ int forward_local_addresses_changed(void)
 	emit_jump(&f, BPF_JMP|BPF_JEQ|BPF_K,   ETH_P_IP, LABEL_NEXT, LABEL_NOT_IPV4);
 
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, saddr));
-	nhrp_peer_enumerate(check_ipv4, &f);
+	nhrp_peer_foreach(check_ipv4, &f);
 	emit_stmt(&f, BPF_RET|BPF_K, 65535);
 
 	mark(&f, LABEL_NOT_IPV4);

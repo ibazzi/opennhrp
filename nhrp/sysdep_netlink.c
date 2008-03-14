@@ -145,7 +145,7 @@ static int netlink_receive(struct netlink_fd *fd, struct nlmsghdr *reply)
 				fd->dispatch[h->nlmsg_type](h);
 			} else if (h->nlmsg_type != NLMSG_DONE) {
 				nhrp_info("Unknown NLmsg: 0x%08x, len %d",
-					h->nlmsg_type, h->nlmsg_len);
+					  h->nlmsg_type, h->nlmsg_len);
 			}
 			h = NLMSG_NEXT(h, status);
 		}
@@ -351,16 +351,15 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 	nhrp_info("NL-ARP(%s) who-has %s",
 		iface->name, nhrp_address_format(&addr, sizeof(tmp), tmp));
 
-	peer = nhrp_peer_find(&addr, 0xff,
+	peer = nhrp_peer_find(iface, &addr, 0xff,
 			      NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_UP);
-	if (peer == NULL || peer->interface == NULL ||
-	    !(peer->flags & NHRP_PEER_FLAG_UP))
+	if (peer == NULL || !(peer->flags & NHRP_PEER_FLAG_UP))
 		return;
 
 	kernel_inject_neighbor(&addr, &peer->next_hop_address, iface);
 
 	if (nhrp_address_cmp(&addr, &peer->protocol_address) != 0)
-		nhrp_peer_traffic_indication(peer->afnum, &addr);
+		nhrp_peer_traffic_indication(iface, peer->afnum, &addr);
 }
 
 static void netlink_neigh_update(struct nlmsghdr *msg)
@@ -368,6 +367,7 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 	struct ndmsg *ndm = NLMSG_DATA(msg);
 	struct rtattr *rta[NDA_MAX+1];
 	struct nhrp_address addr;
+	struct nhrp_interface *iface;
 
 	netlink_parse_rtattr(rta, NDA_MAX, NDA_RTA(ndm), NDA_PAYLOAD(msg));
 	if (rta[NDA_DST] == NULL)
@@ -376,14 +376,18 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 	if (!(ndm->ndm_state & (NUD_STALE | NUD_FAILED | NUD_REACHABLE)))
 		return;
 
+	iface = nhrp_interface_get_by_index(ndm->ndm_ifindex, 0);
+	if (iface == NULL)
+		return;
+
 	nhrp_address_set(&addr, ndm->ndm_family,
 			 RTA_PAYLOAD(rta[NDA_DST]),
 			 RTA_DATA(rta[NDA_DST]));
 
 	if (ndm->ndm_state & NUD_REACHABLE)
-		nhrp_peer_set_used(&addr, TRUE);
+		nhrp_peer_set_used(iface, &addr, TRUE);
 	else
-		nhrp_peer_set_used(&addr, FALSE);
+		nhrp_peer_set_used(iface, &addr, FALSE);
 }
 
 static void netlink_link_update(struct nlmsghdr *msg)
@@ -442,10 +446,9 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 			 RTA_PAYLOAD(rta[IFA_LOCAL]),
 			 RTA_DATA(rta[IFA_LOCAL]));
 
-	peer = nhrp_peer_alloc();
+	peer = nhrp_peer_alloc(iface);
 	peer->type = NHRP_PEER_TYPE_LOCAL;
 	peer->afnum = AFNUM_RESERVED;
-	peer->interface = iface;
 	nhrp_address_set(&peer->protocol_address, ifa->ifa_family,
 			 RTA_PAYLOAD(rta[IFA_LOCAL]),
 			 RTA_DATA(rta[IFA_LOCAL]));
@@ -614,10 +617,10 @@ err_close_packetfd:
 	return FALSE;
 }
 
-int kernel_route(struct nhrp_address *dest,
+int kernel_route(struct nhrp_interface *out_iface,
+		 struct nhrp_address *dest,
 		 struct nhrp_address *default_source,
-		 struct nhrp_address *next_hop,
-		 int *oif_index)
+		 struct nhrp_address *next_hop)
 {
 	struct {
 		struct nlmsghdr 	n;
@@ -637,21 +640,21 @@ int kernel_route(struct nhrp_address *dest,
 			     dest->addr, dest->addr_len);
 	req.r.rtm_dst_len = dest->addr_len * 8;
 
-	if (default_source != NULL &&
-	    default_source->type != AF_UNSPEC) {
+	if (default_source != NULL && default_source->type != AF_UNSPEC)
 		netlink_add_rtattr_l(&req.n, sizeof(req), RTA_SRC,
-			default_source->addr, default_source->addr_len);
-	}
+				     default_source->addr,
+				     default_source->addr_len);
+	if (out_iface != NULL)
+		netlink_add_rtattr_l(&req.n, sizeof(req), RTA_OIF,
+				     &out_iface->index, sizeof(int));
 
 	if (!netlink_talk(&netlink_fd, &req.n, sizeof(req), &req.n))
 		return FALSE;
 
 	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(r), RTM_PAYLOAD(&req.n));
 
-	if (oif_index != NULL && rta[RTA_OIF] != NULL)
-		*oif_index = *(int *) RTA_DATA(rta[RTA_OIF]);
-
-	if (default_source != NULL && rta[RTA_PREFSRC] != NULL) {
+	if (default_source != NULL && default_source->type == AF_UNSPEC &&
+	    rta[RTA_PREFSRC] != NULL) {
 		nhrp_address_set(default_source, dest->type,
 				 RTA_PAYLOAD(rta[RTA_PREFSRC]),
 				 RTA_DATA(rta[RTA_PREFSRC]));

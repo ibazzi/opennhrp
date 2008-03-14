@@ -296,10 +296,7 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 
 static void nhrp_packet_clear_route(struct nhrp_packet *packet, int reply)
 {
-	if (reply)
-		packet->dst_iface = packet->src_iface;
-	else
-		packet->dst_iface = NULL;
+	packet->dst_iface = packet->src_iface;
 	packet->dst_peer = NULL;
 }
 
@@ -347,18 +344,13 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	nhrp_payload_add_cie(payload, cie);
 
 	nhrp_packet_clear_route(packet, TRUE);
-	if (!nhrp_packet_route(packet, 0)) {
-		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
-		return FALSE;
-	}
-
-	cie->nbma_address = packet->my_nbma_address;
-	cie->protocol_address = packet->my_protocol_address;
+	cie->nbma_address = packet->dst_iface->nbma_address;
+	cie->protocol_address = packet->dst_iface->protocol_address;
 
 	nhrp_info("Sending Resolution Reply %s is-at %s",
-		nhrp_address_format(&packet->my_protocol_address,
+		nhrp_address_format(&cie->protocol_address,
 			sizeof(tmp), tmp),
-		nhrp_address_format(&packet->my_nbma_address,
+		nhrp_address_format(&cie->nbma_address,
 			sizeof(tmp2), tmp2));
 
 	/* Reset NAT header to regenerate it for reply */
@@ -422,7 +414,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 
 	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	TAILQ_FOREACH(cie, &payload->u.cie_list_head, cie_list_entry) {
-		peer = nhrp_peer_alloc();
+		peer = nhrp_peer_alloc(packet->src_iface);
 		if (peer == NULL) {
 			cie->hdr.code = NHRP_CODE_INSUFFICIENT_RESOURCES;
 			continue;
@@ -431,7 +423,6 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		peer->type = NHRP_PEER_TYPE_DYNAMIC;
 		peer->afnum = packet->hdr.afnum;
 		peer->protocol_type = packet->hdr.protocol_type;
-		peer->interface = packet->src_iface;
 		peer->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 
 		if (cie->nbma_address.addr_len != 0)
@@ -453,7 +444,9 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		if (peer->prefix_length == 0xff)
 			peer->prefix_length = peer->protocol_address.addr_len * 8;
 
-		while ((p = nhrp_peer_find(&peer->protocol_address, peer->prefix_length,
+		while ((p = nhrp_peer_find(packet->src_iface,
+					   &peer->protocol_address,
+					   peer->prefix_length,
 					   NHRP_PEER_FIND_EXACT |
 					   NHRP_PEER_FIND_REMOVABLE)) != NULL) {
 			/* If re-registration, mark the new connection up */
@@ -466,7 +459,9 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 			nhrp_peer_remove(p);
 		}
 
-		p = nhrp_peer_find(&peer->protocol_address, peer->prefix_length,
+		p = nhrp_peer_find(packet->src_iface,
+				   &peer->protocol_address,
+				   peer->prefix_length,
 				   NHRP_PEER_FIND_ROUTE);
 		if (p == NULL ||
 		    nhrp_address_cmp(&peer->protocol_address, &p->protocol_address)) {
@@ -519,7 +514,8 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 			nhrp_address_format(&cie->nbma_address,
 					    sizeof(tmp), tmp));
 
-		while ((p = nhrp_peer_find(&cie->protocol_address,
+		while ((p = nhrp_peer_find(packet->src_iface,
+					   &cie->protocol_address,
 					   cie->hdr.prefix_length,
 					   NHRP_PEER_FIND_EXACT |
 					   NHRP_PEER_FIND_REMOVABLE)) != NULL)
@@ -601,7 +597,9 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 				    sizeof(tmp), tmp),
 		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
 
-	nhrp_peer_traffic_indication(packet->hdr.afnum, &dst);
+	nhrp_peer_traffic_indication(packet->src_iface,
+				     packet->hdr.afnum,
+				     &dst);
 	return TRUE;
 }
 
@@ -862,10 +860,6 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 	packet->hdr.hop_count--;
 
 	nhrp_packet_clear_route(packet, FALSE);
-	if (!nhrp_packet_route(packet, 0)) {
-		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
-		return FALSE;
-	}
 
 	switch (packet_types[packet->hdr.type].type) {
 	case NHRP_TYPE_REQUEST:
@@ -884,8 +878,8 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 	if (p != NULL) {
 		struct nhrp_cie *cie;
 
-		if (nhrp_address_match_cie_list(&packet->my_nbma_address,
-						&packet->my_protocol_address,
+		if (nhrp_address_match_cie_list(&packet->dst_iface->nbma_address,
+						&packet->dst_iface->protocol_address,
 						&p->u.cie_list_head)) {
 			nhrp_packet_send_error(packet, NHRP_ERROR_LOOP_DETECTED, 0);
 			return FALSE;
@@ -897,8 +891,8 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 				.code = NHRP_CODE_SUCCESS,
 				.holding_time = NHRP_HOLDING_TIME,
 			};
-			cie->nbma_address = packet->my_nbma_address;
-			cie->protocol_address = packet->my_protocol_address;
+			cie->nbma_address = packet->dst_iface->nbma_address;
+			cie->protocol_address = packet->dst_iface->protocol_address;
 			nhrp_payload_add_cie(p, cie);
 		}
 	}
@@ -983,7 +977,8 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	else
 		dest = &packet->dst_protocol_address;
 
-	peer = nhrp_peer_find(dest, 0xff, NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_COMPLETE);
+	peer = nhrp_peer_find(iface, dest, 0xff,
+			      NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_COMPLETE);
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
 	packet->dst_peer = peer;
@@ -1007,12 +1002,9 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 		}
 	}
 
-	if (peer != NULL && peer->type == NHRP_PEER_TYPE_LOCAL) {
-		packet->my_nbma_address = iface->nbma_address;
-		packet->my_protocol_address = iface->protocol_address;
-
+	if (peer != NULL && peer->type == NHRP_PEER_TYPE_LOCAL)
 		ret = nhrp_packet_receive_local(packet);
-	} else
+	else
 		ret = nhrp_packet_forward(packet);
 
 error:
@@ -1150,8 +1142,7 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 	struct nhrp_cie_list_head *cielist = NULL;
 	struct nhrp_payload *payload;
 	char tmp[64];
-	int r, ifindex = -1;
-	int up = 0;
+	int r, up = 0;
 
 	if (!need_direct)
 		up = NHRP_PEER_FIND_UP;
@@ -1168,51 +1159,29 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 	if (payload != NULL)
 		cielist = &payload->u.cie_list_head;
 
-	if (packet->dst_peer != NULL &&
-	    packet->dst_peer->interface != NULL) {
-		packet->dst_iface = packet->dst_peer->interface;
-		packet->my_protocol_address = packet->dst_iface->protocol_address;
+	if (packet->dst_peer != NULL) {
 		proto_nexthop = packet->dst_peer->next_hop_address;
 	} else {
-		r = kernel_route(dest, &packet->my_protocol_address,
-			&proto_nexthop, &ifindex);
+		r = kernel_route(packet->dst_iface, dest,
+				 &packet->dst_iface->protocol_address,
+				 &proto_nexthop);
 		if (!r) {
 			nhrp_error("No route to protocol address %s",
 				nhrp_address_format(dest, sizeof(tmp), tmp));
 			return FALSE;
 		}
 
-		if (packet->dst_iface == NULL)
-			packet->dst_iface = nhrp_interface_get_by_index(
-				ifindex, FALSE);
-
-		packet->dst_peer = nhrp_peer_find_full(
-			&proto_nexthop, 0xff,
-			NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_COMPLETE |
-			NHRP_PEER_FIND_NEXTHOP | up, cielist);
+		packet->dst_peer = nhrp_peer_find_full(packet->dst_iface,
+						       &proto_nexthop, 0xff,
+						       NHRP_PEER_FIND_ROUTE |
+						       NHRP_PEER_FIND_COMPLETE |
+						       NHRP_PEER_FIND_NEXTHOP |
+						       up,
+						       cielist);
 		if (packet->dst_peer == NULL ||
 			packet->dst_peer->type == NHRP_PEER_TYPE_NEGATIVE) {
 			nhrp_error("No peer entry for protocol address %s",
 				nhrp_address_format(&proto_nexthop, sizeof(tmp), tmp));
-			return FALSE;
-		}
-	}
-
-	if (packet->dst_iface == NULL) {
-		nhrp_error("Protocol address %s routed to non-NHRP interface",
-			   nhrp_address_format(dest, sizeof(tmp), tmp));
-		return FALSE;
-	}
-
-	packet->my_nbma_address = packet->dst_iface->nbma_address;
-	if (packet->my_nbma_address.type == PF_UNSPEC) {
-		r = kernel_route(&packet->dst_peer->next_hop_address,
-				 &packet->my_nbma_address, NULL, NULL);
-		if (!r) {
-			nhrp_error("No route to NBMA address %s",
-				nhrp_address_format(
-					&packet->dst_peer->next_hop_address,
-					sizeof(tmp), tmp));
 			return FALSE;
 		}
 	}
@@ -1245,10 +1214,7 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 {
 	struct nhrp_payload *payload;
 
-	if (packet->dst_peer == NULL ||
-	    packet->dst_iface == NULL ||
-	    packet->my_nbma_address.addr_len == 0 ||
-	    packet->my_protocol_address.addr_len == 0) {
+	if (packet->dst_peer == NULL || packet->dst_iface == NULL) {
 		if (!nhrp_packet_route(packet, 0)) {
 			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 			return TRUE;
@@ -1256,9 +1222,9 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 	}
 
 	if (packet->src_nbma_address.addr_len == 0)
-		packet->src_nbma_address = packet->my_nbma_address;
+		packet->src_nbma_address = packet->dst_iface->nbma_address;
 	if (packet->src_protocol_address.addr_len == 0)
-		packet->src_protocol_address = packet->my_protocol_address;
+		packet->src_protocol_address = packet->dst_iface->protocol_address;
 	if (packet->hdr.afnum == AFNUM_RESERVED)
 		packet->hdr.afnum = packet->dst_peer->afnum;
 	if (packet->hdr.hop_count == 0)
@@ -1278,8 +1244,8 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 			return FALSE;
 
 		cie->hdr.holding_time = htons(NHRP_HOLDING_TIME);
-		cie->nbma_address = packet->my_nbma_address;
-		cie->protocol_address = packet->my_protocol_address;
+		cie->nbma_address = packet->dst_iface->nbma_address;
+		cie->protocol_address = packet->dst_iface->protocol_address;
 		nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 		nhrp_payload_add_cie(payload, cie);
 	}

@@ -64,10 +64,9 @@ static int admin_show_one_peer(void *ctx, struct nhrp_peer *peer)
 		i += snprintf(&buf[i], len - i, "NBMA-NAT-OA-Address: %s\n",
 			nhrp_address_format(&peer->next_hop_nat_oa, sizeof(tmp), tmp));
 	}
-	if (peer->interface != NULL) {
-		i += snprintf(&buf[i], len - i, "Interface: %s\n",
-			      peer->interface->name);
-	}
+	i += snprintf(&buf[i], len - i, "Interface: %s\n",
+		      peer->interface->name);
+
 	if (peer->flags & (NHRP_PEER_FLAG_USED | NHRP_PEER_FLAG_UNIQUE |
 			   NHRP_PEER_FLAG_UP)) {
 		i += snprintf(&buf[i], len - i, "Flags:");
@@ -89,22 +88,30 @@ static int admin_show_one_peer(void *ctx, struct nhrp_peer *peer)
 
 static void admin_show(void *ctx, const char *cmd)
 {
-	nhrp_peer_enumerate(admin_show_one_peer, ctx);
+	nhrp_peer_foreach(admin_show_one_peer, ctx);
+}
+
+static int flush_all(void *ctx, struct nhrp_interface *iface)
+{
+	struct nhrp_peer *peer;
+	int *count = (int *) ctx;
+
+	while ((peer = nhrp_peer_find(iface, NULL, 0,
+				      NHRP_PEER_FIND_SUBNET |
+				      NHRP_PEER_FIND_REMOVABLE)) != NULL) {
+		nhrp_peer_remove(peer);
+		(*count)++;
+	}
+
+	return 0;
 }
 
 static void admin_flush(void *ctx, const char *cmd)
 {
-	struct nhrp_peer *peer;
 	int count = 0;
 
 	nhrp_info("Admin: flushing entries");
-
-	while ((peer = nhrp_peer_find(NULL, 0,
-				      NHRP_PEER_FIND_SUBNET |
-				      NHRP_PEER_FIND_REMOVABLE)) != NULL) {
-		nhrp_peer_remove(peer);
-		count++;
-	}
+	nhrp_interface_foreach(flush_all, &count);
 
 	admin_write(ctx,
 		    "Status: ok\n"
@@ -112,15 +119,36 @@ static void admin_flush(void *ctx, const char *cmd)
 		    count);
 }
 
-static void admin_purge_protocol(void *ctx, const char *cmd)
+struct purge_ctx {
+	struct nhrp_address address;
+	uint8_t prefix_length;
+	int count;
+};
+
+static int purge_protocol(void *ctx, struct nhrp_interface *iface)
 {
 	struct nhrp_peer *peer;
-	struct nhrp_address protocol_address;
-	uint8_t prefix_length;
-	int count = 0;
+	struct purge_ctx *pp = (struct purge_ctx *) ctx;
+
+	while ((peer = nhrp_peer_find(iface,
+				      &pp->address,
+				      pp->prefix_length,
+				      NHRP_PEER_FIND_EXACT |
+				      NHRP_PEER_FIND_REMOVABLE)) != NULL) {
+		nhrp_peer_remove(peer);
+		pp->count++;
+	}
+
+	return 0;
+}
+
+static void admin_purge_protocol(void *ctx, const char *cmd)
+{
+	struct purge_ctx pp;
 	char tmp[64];
 
-	if (!nhrp_address_parse(cmd, &protocol_address, &prefix_length)) {
+	pp.count = 0;
+	if (!nhrp_address_parse(cmd, &pp.address, &pp.prefix_length)) {
 		admin_write(ctx,
 			    "Status: failed\n"
 			    "Reason: bad-address-format\n");
@@ -128,31 +156,39 @@ static void admin_purge_protocol(void *ctx, const char *cmd)
 	}
 
 	nhrp_info("Admin: purge protocol address %s/%d",
-		  nhrp_address_format(&protocol_address, sizeof(tmp), tmp),
-		  prefix_length);
+		  nhrp_address_format(&pp.address, sizeof(tmp), tmp),
+		  pp.prefix_length);
 
-	while ((peer = nhrp_peer_find(&protocol_address,
-				      prefix_length,
-				      NHRP_PEER_FIND_EXACT |
-				      NHRP_PEER_FIND_REMOVABLE)) != NULL) {
-		nhrp_peer_remove(peer);
-		count++;
-	}
+	nhrp_interface_foreach(purge_protocol, &pp);
 
 	admin_write(ctx,
 		    "Status: ok\n"
 		    "Entries-Affected: %d\n",
-		    count);
+		    pp.count);
+}
+
+static int purge_nbma(void *ctx, struct nhrp_interface *iface)
+{
+	struct nhrp_peer *peer;
+	struct purge_ctx *pp = (struct purge_ctx *) ctx;
+
+	while ((peer = nhrp_peer_find_nbma(iface,
+					   &pp->address,
+					   NHRP_PEER_FIND_PURGEABLE)) != NULL) {
+		nhrp_peer_purge(peer);
+		pp->count++;
+	}
+
+	return 0;
 }
 
 static void admin_purge_nbma(void *ctx, const char *cmd)
 {
-	struct nhrp_peer *peer;
-	struct nhrp_address nbma_address;
-	int count = 0;
 	char tmp[64];
+	struct purge_ctx pp;
 
-	if (!nhrp_address_parse(cmd, &nbma_address, NULL)) {
+	pp.count = 0;
+	if (!nhrp_address_parse(cmd, &pp.address, NULL)) {
 		admin_write(ctx,
 			    "Status: failed\n"
 			    "Reason: bad-address-format\n");
@@ -160,18 +196,14 @@ static void admin_purge_nbma(void *ctx, const char *cmd)
 	}
 
 	nhrp_info("Admin: purge nbma address %s",
-		  nhrp_address_format(&nbma_address, sizeof(tmp), tmp));
+		  nhrp_address_format(&pp.address, sizeof(tmp), tmp));
 
-	while ((peer = nhrp_peer_find_nbma(&nbma_address,
-					   NHRP_PEER_FIND_PURGEABLE)) != NULL) {
-		nhrp_peer_purge(peer);
-		count++;
-	}
+	nhrp_interface_foreach(purge_nbma, &pp);
 
-	admin_write(ctx,
+        admin_write(ctx,
 		    "Status: ok\n"
 		    "Entries-Purged: %d\n",
-		    count);
+		    pp.count);
 }
 
 static struct {

@@ -15,7 +15,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <sys/queue.h>
-#include "nhrp_packet.h"
+#include "nhrp_address.h"
 
 #define NHRP_PEER_TYPE_INCOMPLETE	0x00	/* Resolution request sent */
 #define NHRP_PEER_TYPE_NEGATIVE		0x01	/* Negative cached */
@@ -33,6 +33,10 @@
 #define NHRP_PEER_FLAG_REPLACED		0x10	/* Peer has been replaced */
 
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
+
+struct nhrp_interface;
+struct nhrp_packet;
+struct nhrp_cie_list_head;
 
 struct nhrp_peer {
 	int ref_count;
@@ -66,7 +70,7 @@ typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);
 
 void nhrp_peer_reap_pid(pid_t pid, int status);
 
-struct nhrp_peer *nhrp_peer_alloc(void);
+struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface);
 struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer);
 int nhrp_peer_free(struct nhrp_peer *peer);
 
@@ -74,8 +78,11 @@ void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
 void nhrp_peer_purge(struct nhrp_peer *peer);
 
-void nhrp_peer_set_used(struct nhrp_address *peer_address, int used);
-int nhrp_peer_enumerate(nhrp_peer_enumerator e, void *ctx);
+void nhrp_peer_set_used(struct nhrp_interface *iface,
+			struct nhrp_address *peer_address,
+			int used);
+
+int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx);
 
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02
@@ -87,22 +94,28 @@ int nhrp_peer_enumerate(nhrp_peer_enumerator e, void *ctx);
 #define NHRP_PEER_FIND_NBMA		0x80
 #define NHRP_PEER_FIND_PURGEABLE	0x100
 
-struct nhrp_peer *nhrp_peer_find_full(struct nhrp_address *dest,
+struct nhrp_peer *nhrp_peer_find_full(struct nhrp_interface *iface,
+				      struct nhrp_address *dest,
 				      int prefix_length, int flags,
 				      struct nhrp_cie_list_head *cielist);
 
-static inline struct nhrp_peer *nhrp_peer_find(struct nhrp_address *dest,
-					      int prefix_length, int flags)
+static inline struct nhrp_peer *nhrp_peer_find(
+	struct nhrp_interface *iface, struct nhrp_address *dest,
+	int prefix_length, int flags)
 {
-	return nhrp_peer_find_full(dest, prefix_length, flags, NULL);
+	return nhrp_peer_find_full(iface, dest, prefix_length, flags, NULL);
 }
 
-static inline struct nhrp_peer *nhrp_peer_find_nbma(struct nhrp_address *dest, int flags)
+static inline struct nhrp_peer *nhrp_peer_find_nbma(
+	struct nhrp_interface *iface, struct nhrp_address *dest,
+	int flags)
 {
-	return nhrp_peer_find_full(dest, 0xff, flags | NHRP_PEER_FIND_NBMA, NULL);
+	return nhrp_peer_find_full(iface, dest, 0xff,
+				   flags | NHRP_PEER_FIND_NBMA, NULL);
 }
 
-void nhrp_peer_traffic_indication(uint16_t afnum, struct nhrp_address *dst);
+void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
+				  uint16_t afnum, struct nhrp_address *dst);
 void nhrp_peer_dump_cache(void);
 
 #endif

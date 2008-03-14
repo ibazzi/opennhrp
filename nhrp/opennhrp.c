@@ -128,9 +128,8 @@ static int load_config(const char *config_file)
 			read_word(in, &lineno, sizeof(addr), addr);
 			read_word(in, &lineno, sizeof(nbma), nbma);
 
-			peer = nhrp_peer_alloc();
+			peer = nhrp_peer_alloc(iface);
 			peer->type = NHRP_PEER_TYPE_STATIC;
-			peer->interface = iface;
 			if (!nhrp_address_parse(addr, &peer->protocol_address,
 						&peer->prefix_length)) {
 				rc = 4;

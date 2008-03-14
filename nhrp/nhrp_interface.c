@@ -58,6 +58,7 @@ struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create)
 
 	iface = calloc(1, sizeof(struct nhrp_interface));
 	strncpy(iface->name, name, sizeof(iface->name));
+	CIRCLEQ_INIT(&iface->peer_cache);
 
 	LIST_INSERT_HEAD(&name_list, iface, name_list);
 	LIST_INSERT_HEAD(&index_hash[0], iface, index_list);

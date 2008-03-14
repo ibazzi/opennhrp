@@ -73,8 +73,6 @@ struct nhrp_packet {
 	struct nhrp_address		src_linklayer_address;
 	struct nhrp_interface *		dst_iface;
 	struct nhrp_peer *		dst_peer;
-	struct nhrp_address		my_nbma_address;
-	struct nhrp_address		my_protocol_address;
 };
 
 #define NHRP_EXTENSION_FLAG_NOCREATE	0x00010000

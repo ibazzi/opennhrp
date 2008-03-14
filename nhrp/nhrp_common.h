@@ -51,10 +51,10 @@ int forward_init(void);
 int forward_local_addresses_changed(void);
 
 int kernel_init(void);
-int kernel_route(struct nhrp_address *dest,
+int kernel_route(struct nhrp_interface *out_iface,
+		 struct nhrp_address *dest,
 		 struct nhrp_address *default_source,
-		 struct nhrp_address *next_hop,
-		 int *oif_index);
+		 struct nhrp_address *next_hop);
 int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 		struct nhrp_address *to);
 int kernel_inject_neighbor(struct nhrp_address *neighbor,
