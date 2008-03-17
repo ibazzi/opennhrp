@@ -172,9 +172,13 @@ static void admin_selector_action(struct selector_action_ctx *sa,
 		}
 
 		if (strcmp(keyword, "protocol") == 0) {
+			if (sa->sel.protocol_address.type != AF_UNSPEC)
+				goto err_conflict;
 			sa->sel.protocol_address = address;
 			sa->sel.prefix_length = prefix_length;
 		} else if (strcmp(keyword, "nbma") == 0) {
+			if (sa->sel.nbma_address.type != AF_UNSPEC)
+				goto err_conflict;
 			sa->sel.nbma_address = address;
 		} else if (strcmp(keyword, "local-protocol") == 0) {
 			if (sa->sel.interface != NULL)
