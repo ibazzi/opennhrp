@@ -5,7 +5,7 @@ opennhrpctl \- opennhrp administrative control tool
 
 .SH SYNOPSIS
 .B opennhrpctl
-.BI "[\-a " admin\-socket "]" " command " "[" "arguments..." "]"
+.BI "[\-a " admin\-socket "]" " command " "[" "arguments" "]..."
 
 .SH DESCRIPTION
 .B opennhrpctl
@@ -20,50 +20,55 @@ the permissions and ownership of the socket.
 
 The following commands are available:
 
-.BI show
+.BI "show [" selector "]..."
 .RS
 Show contents of next hop cache (configured and resolved entries).
 .RE
 
-.BI flush
+.BI "flush [" selector "]..."
 .RS
-Clear all non-permanent entries from the cache.
+Clear all non-permanent entries which matching the selector
+specifiers.
 .RE
 
-.BI purge
+.BI "purge [" selector "]..."
 .RS
 Purge entries from NHRP cache: cached entries are removed and permanent
-entries are forced down, up and finally reregistered. Following options can be
-used to limit purging to only matching entries:
+entries are forced down, up and finally reregistered.
+.RE
+
+The following selectors can be used to limit which cache entries will
+be effected:
 
 .BI nbma " nbma-address"
 .RS
-Purge only entries where the remote has NBMA address
+Matches entries where the remote has NBMA address
 .IR nbma-address .
 .RE
 
 .BI protocol " protocol-address" "[/" "prefix-length" "]"
 .RS
-Purge only entries where the remote has protocol address
-.IR protocol-address " with prefix length " prefix-length .
-Both specifiers must exactly for the entry to match.
+Matches entries where the remote has protocol address
+.IR protocol-address " with at least prefix length " prefix-length .
 .RE
 
 .BI local-nbma " nbma-address"
 .RS
-Search entries only from local interface which owns the NBMA address
+Matches entries from local interface which owns the NBMA address
 .IR nbma-address .
 .RE
 
 .BI local-protocol " protocol-address"
 .RS
-Search entries only from local interface which owns the protocol address
+Matches entries only from local interface which owns the protocol address
 .IR protocol-address .
 .RE
 
 .BI interface " interface-name"
 .br
 .BI iface " interface-name"
+.br
+.BI dev " interface-name"
 .RS
 Search entries only from local interface with name
 .IR interface-name .
