@@ -191,7 +191,7 @@ static void admin_purge(void *ctx, const char *cmd)
 		    strcmp(keyword, "iface") == 0) {
 			if (iface != NULL)
 				goto err_conflict;
-			iface = nhrp_interface_get_by_name(tmp);
+			iface = nhrp_interface_get_by_name(tmp, FALSE);
 			if (iface == NULL)
 				goto err_noiface;
 			continue;
