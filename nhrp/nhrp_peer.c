@@ -1037,7 +1037,6 @@ static struct nhrp_peer *nhrp_peer_find_internal(struct nhrp_interface *iface,
 	struct nhrp_peer_list *peer_cache;
 	struct nhrp_peer *found_peer = NULL;
 	struct nhrp_peer *p;
-	struct nhrp_address *addr;
 	int prefix, exact, found_exact = 0;
 
 	if (min_prefix == 0xff)
@@ -1055,11 +1054,7 @@ static struct nhrp_peer *nhrp_peer_find_internal(struct nhrp_interface *iface,
 		    dest->type != p->protocol_address.type)
 			continue;
 
-		if (flags & NHRP_PEER_FIND_NBMA) {
-			prefix = min_prefix;
-			if (p->type == NHRP_PEER_TYPE_CACHED_ROUTE)
-				continue;
-		} else if (flags & NHRP_PEER_FIND_SUBNET) {
+		if (flags & NHRP_PEER_FIND_SUBNET) {
 			if (min_prefix > p->prefix_length)
 				continue;
 			prefix = min_prefix;
@@ -1074,15 +1069,10 @@ static struct nhrp_peer *nhrp_peer_find_internal(struct nhrp_interface *iface,
 		} else
 			return NULL;
 
-		if (flags & NHRP_PEER_FIND_NBMA)
-			addr = &p->next_hop_address;
-		else
-			addr = &p->protocol_address;
-
 		if (dest != NULL &&
 		    p->type == NHRP_PEER_TYPE_STATIC &&
 		    min_prefix == dest->addr_len * 8 &&
-		    memcmp(dest->addr, addr->addr, dest->addr_len) == 0)
+		    memcmp(dest->addr, p->protocol_address.addr, dest->addr_len) == 0)
 			exact = 1;
 		else
 			exact = 0;
@@ -1115,7 +1105,7 @@ static struct nhrp_peer *nhrp_peer_find_internal(struct nhrp_interface *iface,
 						cielist))
 			continue;
 
-		if (dest != NULL && bitcmp(dest->addr, addr->addr, prefix) != 0)
+		if (dest != NULL && bitcmp(dest->addr, p->protocol_address.addr, prefix) != 0)
 			continue;
 
 		if (found_peer != NULL &&

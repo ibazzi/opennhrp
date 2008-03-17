@@ -39,8 +39,7 @@
 #define NHRP_PEER_FIND_NEXTHOP		0x10
 #define NHRP_PEER_FIND_REMOVABLE	0x20
 #define NHRP_PEER_FIND_UP		0x40
-#define NHRP_PEER_FIND_NBMA		0x80
-#define NHRP_PEER_FIND_PURGEABLE	0x100
+#define NHRP_PEER_FIND_PURGEABLE	0x80
 
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
 
@@ -118,14 +117,6 @@ static inline struct nhrp_peer *nhrp_peer_find(
 	int prefix_length, int flags)
 {
 	return nhrp_peer_find_full(iface, dest, prefix_length, flags, NULL);
-}
-
-static inline struct nhrp_peer *nhrp_peer_find_nbma(
-	struct nhrp_interface *iface, struct nhrp_address *dest,
-	int flags)
-{
-	return nhrp_peer_find_full(iface, dest, 0xff,
-				   flags | NHRP_PEER_FIND_NBMA, NULL);
 }
 
 void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
