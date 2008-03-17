@@ -32,6 +32,16 @@
 #define NHRP_PEER_FLAG_REGISTER		0x08	/* For TYPE_STATIC: send registration */
 #define NHRP_PEER_FLAG_REPLACED		0x10	/* Peer has been replaced */
 
+#define NHRP_PEER_FIND_ROUTE		0x01
+#define NHRP_PEER_FIND_EXACT		0x02
+#define NHRP_PEER_FIND_SUBNET		0x04
+#define NHRP_PEER_FIND_COMPLETE		0x08
+#define NHRP_PEER_FIND_NEXTHOP		0x10
+#define NHRP_PEER_FIND_REMOVABLE	0x20
+#define NHRP_PEER_FIND_UP		0x40
+#define NHRP_PEER_FIND_NBMA		0x80
+#define NHRP_PEER_FIND_PURGEABLE	0x100
+
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
 
 struct nhrp_interface;
@@ -65,6 +75,17 @@ struct nhrp_peer {
 	struct nhrp_packet *queued_packet;
 };
 
+struct nhrp_peer_selector {
+	int flags; /* NHRP_PEER_FIND_xxx */
+
+	struct nhrp_interface *iface;
+
+	int prefix_length;
+	struct nhrp_address protocol_address;
+
+	struct nhrp_address nbma_address;
+};
+
 const char * const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
 typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);
 
@@ -82,17 +103,10 @@ void nhrp_peer_set_used(struct nhrp_interface *iface,
 			struct nhrp_address *peer_address,
 			int used);
 
-int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx);
+int nhrp_peer_match(struct nhrp_peer *peer, struct nhrp_peer_selector *sel);
 
-#define NHRP_PEER_FIND_ROUTE		0x01
-#define NHRP_PEER_FIND_EXACT		0x02
-#define NHRP_PEER_FIND_SUBNET		0x04
-#define NHRP_PEER_FIND_COMPLETE		0x08
-#define NHRP_PEER_FIND_NEXTHOP		0x10
-#define NHRP_PEER_FIND_REMOVABLE	0x20
-#define NHRP_PEER_FIND_UP		0x40
-#define NHRP_PEER_FIND_NBMA		0x80
-#define NHRP_PEER_FIND_PURGEABLE	0x100
+int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
+		      struct nhrp_peer_selector *sel);
 
 struct nhrp_peer *nhrp_peer_find_full(struct nhrp_interface *iface,
 				      struct nhrp_address *dest,

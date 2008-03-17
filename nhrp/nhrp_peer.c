@@ -920,43 +920,109 @@ void nhrp_peer_set_used(struct nhrp_interface *iface,
 	}
 }
 
+int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
+{
+	if ((sel->flags & NHRP_PEER_FIND_COMPLETE) &&
+	    p->type == NHRP_PEER_TYPE_INCOMPLETE)
+		return FALSE;
+
+	if ((sel->flags & NHRP_PEER_FIND_UP) &&
+	    !(p->flags & NHRP_PEER_FLAG_UP))
+		return FALSE;
+
+	if ((sel->flags & NHRP_PEER_FIND_REMOVABLE) &&
+	    (p->type == NHRP_PEER_TYPE_LOCAL ||
+	     p->type == NHRP_PEER_TYPE_STATIC))
+		return FALSE;
+
+	if ((sel->flags & NHRP_PEER_FIND_PURGEABLE) &&
+	    (p->type == NHRP_PEER_TYPE_LOCAL ||
+	     (p->type == NHRP_PEER_TYPE_STATIC &&
+	      !(p->flags & NHRP_PEER_FLAG_UP))))
+		return FALSE;
+
+	if (sel->protocol_address.type != AF_UNSPEC) {
+		if (sel->prefix_length == 0)
+			sel->prefix_length = sel->protocol_address.addr_len * 8;
+
+		if (p->prefix_length < sel->prefix_length)
+			return FALSE;
+
+		if (bitcmp(p->protocol_address.addr,
+			   sel->protocol_address.addr,
+			   sel->prefix_length) != 0)
+			return FALSE;
+	}
+
+	if (sel->nbma_address.type != AF_UNSPEC) {
+		if (p->type == NHRP_PEER_TYPE_CACHED_ROUTE)
+			return FALSE;
+
+		if (nhrp_address_cmp(&p->next_hop_address,
+				     &sel->nbma_address) != 0)
+			return FALSE;
+	}
+
+	return TRUE;
+}
+
 struct enum_interface_peers_ctx {
 	nhrp_peer_enumerator enumerator;
 	void *ctx;
+	struct nhrp_peer_selector *sel;
 };
+
+static int enumerate_peer_cache(struct nhrp_peer_list *peer_cache,
+				nhrp_peer_enumerator e, void *ctx,
+				struct nhrp_peer_selector *sel)
+{
+	struct nhrp_peer *p, *pn;
+	int rc;
+
+	for (p = CIRCLEQ_FIRST(peer_cache); (void *) p != (void *) peer_cache;
+	     p = pn) {
+		pn = CIRCLEQ_NEXT(p, peer_list);
+
+		if (sel == NULL || nhrp_peer_match(p, sel)) {
+			rc = e(ctx, p);
+			if (rc != 0)
+				return rc;
+		}
+	}
+
+	return 0;
+}
 
 static int enum_interface_peers(void *ctx, struct nhrp_interface *iface)
 {
 	struct enum_interface_peers_ctx *ectx =
 		(struct enum_interface_peers_ctx *) ctx;
-	struct nhrp_peer *p;
-	int rc;
 
-	CIRCLEQ_FOREACH(p, &iface->peer_cache, peer_list) {
-		rc = ectx->enumerator(ectx->ctx, p);
-		if (rc != 0)
-			return rc;
-	}
-	return 0;
+	return enumerate_peer_cache(&iface->peer_cache,
+				    ectx->enumerator, ectx->ctx,
+				    ectx->sel);
 }
 
-int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx)
+int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
+		      struct nhrp_peer_selector *sel)
 {
-	struct enum_interface_peers_ctx ectx = { e, ctx };
-	struct nhrp_peer *p;
+	struct nhrp_interface *iface = NULL;
+	struct enum_interface_peers_ctx ectx = { e, ctx, sel };
 	int rc;
 
-	CIRCLEQ_FOREACH(p, &local_peer_cache, peer_list) {
-		rc = e(ctx, p);
-		if (rc != 0)
-			return rc;
-	}
+	if (sel != NULL)
+		iface = sel->iface;
 
-	rc = nhrp_interface_foreach(enum_interface_peers, &ectx);
+	rc = enumerate_peer_cache(&local_peer_cache, e, ctx, sel);
 	if (rc != 0)
 		return rc;
 
-	return 0;
+	if (iface == NULL)
+		rc = nhrp_interface_foreach(enum_interface_peers, &ectx);
+	else
+		rc = enumerate_peer_cache(&iface->peer_cache, e, ctx, sel);
+
+	return rc;
 }
 
 static struct nhrp_peer *nhrp_peer_find_internal(struct nhrp_interface *iface,
@@ -1140,7 +1206,7 @@ void nhrp_peer_reap_pid(pid_t pid, int status)
 {
 	struct reap_ctx ctx = { pid, status };
 
-	nhrp_peer_foreach(reap_pid, &ctx);
+	nhrp_peer_foreach(reap_pid, &ctx, NULL);
 }
 
 static int dump_peer(void *ctx, struct nhrp_peer *peer)
@@ -1160,6 +1226,6 @@ void nhrp_peer_dump_cache(void)
 	int num_total = 0;
 
 	nhrp_info("Peer cache dump:");
-	nhrp_peer_foreach(dump_peer, &num_total);
+	nhrp_peer_foreach(dump_peer, &num_total, NULL);
 	nhrp_info("Total %d peer cache entries", num_total);
 }

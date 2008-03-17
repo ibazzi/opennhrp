@@ -66,15 +66,25 @@ static void admin_write(void *ctx, const char *format, ...)
 	write(rmt->fd, msg, len);
 }
 
-static int admin_show_one_peer(void *ctx, struct nhrp_peer *peer)
+struct selector_action_ctx {
+	void *ctx;
+	struct nhrp_peer_selector sel;
+	int (*action)(void *ctx, struct nhrp_peer *peer);
+	int count;
+};
+
+static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 {
+	struct selector_action_ctx *sa = (struct selector_action_ctx *) ctx;
 	char buf[512], tmp[32];
 	size_t len = sizeof(buf);
 	int i = 0;
 
 	i += snprintf(&buf[i], len - i,
+		"Interface: %s\n"
 		"Type: %s\n"
 		"Protocol-Address: %s/%d\n",
+		peer->interface->name,
 		nhrp_peer_type[peer->type],
 		nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp),
 		peer->prefix_length);
@@ -89,9 +99,6 @@ static int admin_show_one_peer(void *ctx, struct nhrp_peer *peer)
 		i += snprintf(&buf[i], len - i, "NBMA-NAT-OA-Address: %s\n",
 			nhrp_address_format(&peer->next_hop_nat_oa, sizeof(tmp), tmp));
 	}
-	i += snprintf(&buf[i], len - i, "Interface: %s\n",
-		      peer->interface->name);
-
 	if (peer->flags & (NHRP_PEER_FLAG_USED | NHRP_PEER_FLAG_UNIQUE |
 			   NHRP_PEER_FLAG_UP)) {
 		i += snprintf(&buf[i], len - i, "Flags:");
@@ -107,79 +114,36 @@ static int admin_show_one_peer(void *ctx, struct nhrp_peer *peer)
 		i += snprintf(&buf[i], len - i, "Expires-At: %s",
 			      ctime(&peer->expire_time));
 
-	admin_write(ctx, "%s\n", buf);
+	admin_write(sa->ctx, "%s\n", buf);
 	return 0;
 }
 
-static void admin_show(void *ctx, const char *cmd)
+static int admin_purge_peer(void *ctx, struct nhrp_peer *peer)
 {
-	nhrp_peer_foreach(admin_show_one_peer, ctx);
-}
-
-static int flush_all(void *ctx, struct nhrp_interface *iface)
-{
-	struct nhrp_peer *peer;
-	int *count = (int *) ctx;
-
-	while ((peer = nhrp_peer_find(iface, NULL, 0,
-				      NHRP_PEER_FIND_SUBNET |
-				      NHRP_PEER_FIND_REMOVABLE)) != NULL) {
-		nhrp_peer_remove(peer);
-		(*count)++;
-	}
-
+	struct selector_action_ctx *sa = (struct selector_action_ctx *) ctx;
+	nhrp_peer_purge(peer);
+	sa->count++;
 	return 0;
 }
 
-static void admin_flush(void *ctx, const char *cmd)
+static int admin_remove_peer(void *ctx, struct nhrp_peer *peer)
 {
-	int count = 0;
-
-	nhrp_info("Admin: flushing entries");
-	nhrp_interface_foreach(flush_all, &count);
-
-	admin_write(ctx,
-		    "Status: ok\n"
-		    "Entries-Affected: %d\n",
-		    count);
-}
-
-struct purge_ctx {
-	int count;
-
-	int flags;
-	struct nhrp_address address;
-	uint8_t prefix_length;
-	void (*purge_action)(struct nhrp_peer *peer);
-};
-
-static int admin_purge_from_iface(void *ctx, struct nhrp_interface *iface)
-{
-	struct nhrp_peer *peer;
-	struct purge_ctx *pp = (struct purge_ctx *) ctx;
-
-	while ((peer = nhrp_peer_find(iface, &pp->address,
-				      pp->prefix_length,
-				      pp->flags)) != NULL) {
-		nhrp_peer_purge(peer);
-		pp->count++;
-	}
-
+	struct selector_action_ctx *sa = (struct selector_action_ctx *) ctx;
+	nhrp_peer_remove(peer);
+	sa->count++;
 	return 0;
 }
 
-static void admin_purge(void *ctx, const char *cmd)
+static void admin_selector_action(struct selector_action_ctx *sa,
+				  const char *cmd)
 {
 	char keyword[64], tmp[64];
-	struct nhrp_interface *iface = NULL;
 	struct nhrp_address address;
-	struct purge_ctx pp;
 	uint8_t prefix_length;
 
-	memset(&pp, 0, sizeof(pp));
 	while (parse_word(&cmd, sizeof(keyword), keyword)) {
 		if (!parse_word(&cmd, sizeof(tmp), tmp)) {
-			admin_write(ctx,
+			admin_write(sa->ctx,
 				    "Status: failed\n"
 				    "Reason: missing-argument\n"
 				    "Near-Keyword: '%s'\n",
@@ -188,17 +152,18 @@ static void admin_purge(void *ctx, const char *cmd)
 		}
 
 		if (strcmp(keyword, "interface") == 0 ||
-		    strcmp(keyword, "iface") == 0) {
-			if (iface != NULL)
+		    strcmp(keyword, "iface") == 0 ||
+		    strcmp(keyword, "dev") == 0) {
+			if (sa->sel.iface != NULL)
 				goto err_conflict;
-			iface = nhrp_interface_get_by_name(tmp, FALSE);
-			if (iface == NULL)
+			sa->sel.iface = nhrp_interface_get_by_name(tmp, FALSE);
+			if (sa->sel.iface == NULL)
 				goto err_noiface;
 			continue;
 		}
 
 		if (!nhrp_address_parse(tmp, &address, &prefix_length)) {
-			admin_write(ctx,
+			admin_write(sa->ctx,
 				    "Status: failed\n"
 				    "Reason: invalid-address\n"
 				    "Near-Keyword: '%s'\n",
@@ -207,33 +172,24 @@ static void admin_purge(void *ctx, const char *cmd)
 		}
 
 		if (strcmp(keyword, "protocol") == 0) {
-			if (pp.flags)
-				goto err_conflict;
-			pp.flags = NHRP_PEER_FIND_EXACT |
-				   NHRP_PEER_FIND_PURGEABLE;
-			pp.address = address;
-			pp.prefix_length = prefix_length;
+			sa->sel.protocol_address = address;
+			sa->sel.prefix_length = prefix_length;
 		} else if (strcmp(keyword, "nbma") == 0) {
-			if (pp.flags)
-				goto err_conflict;
-			pp.flags = NHRP_PEER_FIND_EXACT |
-				   NHRP_PEER_FIND_NBMA |
-				   NHRP_PEER_FIND_PURGEABLE;
-			pp.address = address;
+			sa->sel.nbma_address = address;
 		} else if (strcmp(keyword, "local-protocol") == 0) {
-			if (iface != NULL)
+			if (sa->sel.iface != NULL)
 				goto err_conflict;
-			iface = nhrp_interface_get_by_protocol(&address);
-			if (iface == NULL)
+			sa->sel.iface = nhrp_interface_get_by_protocol(&address);
+			if (sa->sel.iface == NULL)
 				goto err_noiface;
 		} else if (strcmp(keyword, "local-nbma") == 0) {
-			if (iface != NULL)
+			if (sa->sel.iface != NULL)
 				goto err_conflict;
-			iface = nhrp_interface_get_by_nbma(&address);
-			if (iface == NULL)
+			sa->sel.iface = nhrp_interface_get_by_nbma(&address);
+			if (sa->sel.iface == NULL)
 				goto err_noiface;
 		} else {
-			admin_write(ctx,
+			admin_write(sa->ctx,
 				    "Status: failed\n"
 				    "Reason: syntax-error\n"
 				    "Near-Keyword: '%s'\n",
@@ -241,33 +197,64 @@ static void admin_purge(void *ctx, const char *cmd)
 			return;
 		}
 	}
+	nhrp_peer_foreach(sa->action, sa, &sa->sel);
 
-	if (iface == NULL)
-		nhrp_interface_foreach(admin_purge_from_iface, &pp);
-	else
-		admin_purge_from_iface(&pp, iface);
-
-        admin_write(ctx,
+	admin_write(sa->ctx,
 		    "Status: ok\n"
 		    "Entries-Affected: %d\n",
-		    pp.count);
+		    sa->count);
 	return;
 
 err_conflict:
-	admin_write(ctx,
+	admin_write(sa->ctx,
 		    "Status: failed\n"
 		    "Reason: conflicting-keyword\n"
 		    "Near-Keyword: '%s'\n",
 		    keyword);
 	return;
 err_noiface:
-	admin_write(ctx,
+	admin_write(sa->ctx,
 		    "Status: failed\n"
 		    "Reason: interface-not-found\n"
 		    "Near-Keyword: '%s'\n"
 		    "Argument: '%s'\n",
 		    keyword, tmp);
 	return;
+}
+
+static void admin_show(void *ctx, const char *cmd)
+{
+	struct selector_action_ctx sa;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.ctx = ctx;
+	sa.action = admin_show_peer;
+
+	admin_selector_action(&sa, cmd);
+}
+
+static void admin_purge(void *ctx, const char *cmd)
+{
+	struct selector_action_ctx sa;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.ctx = ctx;
+	sa.sel.flags = NHRP_PEER_FIND_PURGEABLE;
+	sa.action = admin_purge_peer;
+
+	admin_selector_action(&sa, cmd);
+}
+
+static void admin_flush(void *ctx, const char *cmd)
+{
+	struct selector_action_ctx sa;
+
+	memset(&sa, 0, sizeof(sa));
+	sa.ctx = ctx;
+	sa.sel.flags = NHRP_PEER_FIND_REMOVABLE;
+	sa.action = admin_remove_peer;
+
+	admin_selector_action(&sa, cmd);
 }
 
 static struct {
