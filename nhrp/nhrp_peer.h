@@ -78,7 +78,7 @@ struct nhrp_peer {
 struct nhrp_peer_selector {
 	int flags; /* NHRP_PEER_FIND_xxx */
 
-	struct nhrp_interface *iface;
+	struct nhrp_interface *interface;
 
 	int prefix_length;
 	struct nhrp_address protocol_address;

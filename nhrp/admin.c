@@ -154,10 +154,10 @@ static void admin_selector_action(struct selector_action_ctx *sa,
 		if (strcmp(keyword, "interface") == 0 ||
 		    strcmp(keyword, "iface") == 0 ||
 		    strcmp(keyword, "dev") == 0) {
-			if (sa->sel.iface != NULL)
+			if (sa->sel.interface != NULL)
 				goto err_conflict;
-			sa->sel.iface = nhrp_interface_get_by_name(tmp, FALSE);
-			if (sa->sel.iface == NULL)
+			sa->sel.interface = nhrp_interface_get_by_name(tmp, FALSE);
+			if (sa->sel.interface == NULL)
 				goto err_noiface;
 			continue;
 		}
@@ -177,16 +177,16 @@ static void admin_selector_action(struct selector_action_ctx *sa,
 		} else if (strcmp(keyword, "nbma") == 0) {
 			sa->sel.nbma_address = address;
 		} else if (strcmp(keyword, "local-protocol") == 0) {
-			if (sa->sel.iface != NULL)
+			if (sa->sel.interface != NULL)
 				goto err_conflict;
-			sa->sel.iface = nhrp_interface_get_by_protocol(&address);
-			if (sa->sel.iface == NULL)
+			sa->sel.interface = nhrp_interface_get_by_protocol(&address);
+			if (sa->sel.interface == NULL)
 				goto err_noiface;
 		} else if (strcmp(keyword, "local-nbma") == 0) {
-			if (sa->sel.iface != NULL)
+			if (sa->sel.interface != NULL)
 				goto err_conflict;
-			sa->sel.iface = nhrp_interface_get_by_nbma(&address);
-			if (sa->sel.iface == NULL)
+			sa->sel.interface = nhrp_interface_get_by_nbma(&address);
+			if (sa->sel.interface == NULL)
 				goto err_noiface;
 		} else {
 			admin_write(sa->ctx,

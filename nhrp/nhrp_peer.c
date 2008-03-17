@@ -941,6 +941,10 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 	      !(p->flags & NHRP_PEER_FLAG_UP))))
 		return FALSE;
 
+	if (sel->interface != NULL &&
+	    p->interface != sel->interface)
+		return FALSE;
+
 	if (sel->protocol_address.type != AF_UNSPEC) {
 		if (sel->prefix_length == 0)
 			sel->prefix_length = sel->protocol_address.addr_len * 8;
@@ -1011,7 +1015,7 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 	int rc;
 
 	if (sel != NULL)
-		iface = sel->iface;
+		iface = sel->interface;
 
 	rc = enumerate_peer_cache(&local_peer_cache, e, ctx, sel);
 	if (rc != 0)
