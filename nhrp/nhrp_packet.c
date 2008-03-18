@@ -607,14 +607,25 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet)
 				       NULL, &dst))
 		return FALSE;
 
-	nhrp_info("Traffic Indication from proto src %s; about packet to %s",
-		nhrp_address_format(&packet->src_protocol_address,
-				    sizeof(tmp), tmp),
-		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
+	/* Shortcuts enabled? */
+	if (packet->src_iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT) {
+		nhrp_info("Traffic Indication from proto src %s; "
+			  "about packet to %s",
+			  nhrp_address_format(&packet->src_protocol_address,
+					      sizeof(tmp), tmp),
+			  nhrp_address_format(&dst, sizeof(tmp2), tmp2));
 
-	nhrp_peer_traffic_indication(packet->src_iface,
-				     packet->hdr.afnum,
-				     &dst);
+		nhrp_peer_traffic_indication(packet->src_iface,
+					     packet->hdr.afnum,
+					     &dst);
+	} else {
+		nhrp_info("Traffic Indication ignored from proto src %s; "
+			  "about packet to %s",
+			  nhrp_address_format(&packet->src_protocol_address,
+					      sizeof(tmp), tmp),
+			  nhrp_address_format(&dst, sizeof(tmp2), tmp2));
+	}
+
 	return TRUE;
 }
 
