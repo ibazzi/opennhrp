@@ -6,6 +6,19 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
+ opennhrp 0.6 - released ??/Mar/2008
+-----------------------------------------------------------------------------
+ - accept hostname (domain name) as an NBMA address in config file
+ - sanitize admin interface: accept cache entry selectors on
+   flush, purge and show commands; slight changes to unix socket protocol
+ - multiple gre interfaces do not share nhrp cache anymore
+ - opennhrp-script: NHRP_SRCADDR and NHRP_SRCNBMA added
+ - do not let opennhrp-script inherit sockets file descriptors
+ - run peer-down script when peer was purged via admin interface
+ - add option -V to show version
+ - performance improvements
+
+-----------------------------------------------------------------------------
  opennhrp 0.5 - released 05/Mar/2008
 -----------------------------------------------------------------------------
  - opennhrpctl command line tool
