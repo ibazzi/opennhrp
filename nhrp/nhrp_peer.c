@@ -1118,7 +1118,7 @@ void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 	struct nhrp_peer *peer;
 
 	/* Shortcuts enabled? */
-	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT)
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT))
 		return;
 
 	/* Have we done something for this destination already? */
