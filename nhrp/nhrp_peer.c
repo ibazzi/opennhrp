@@ -844,6 +844,12 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 	}
 }
 
+static int peer_remove(void *ctx, struct nhrp_peer *peer)
+{
+	nhrp_peer_remove(peer);
+	return 0;
+}
+
 void nhrp_peer_insert(struct nhrp_peer *ins)
 {
 	struct nhrp_interface *iface = ins->interface;
@@ -851,12 +857,12 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 	char tmp[NHRP_PEER_FORMAT_LEN];
 
 	/* First, prune all duplicates */
-	while ((peer = nhrp_peer_find(iface,
-				      &ins->protocol_address,
-				      ins->prefix_length,
-				      NHRP_PEER_FIND_SUBNET |
-				      NHRP_PEER_FIND_REMOVABLE)) != NULL)
-		nhrp_peer_remove(peer);
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_REMOVABLE;
+	sel.interface = iface;
+	sel.protocol_address = ins->protocol_address;
+	sel.prefix_length = ins->prefix_length;
+	nhrp_peer_foreach(remove_peer, NULL, &sel);
 
 	peer = nhrp_peer_dup(ins);
 	if (peer->type == NHRP_PEER_TYPE_LOCAL)
