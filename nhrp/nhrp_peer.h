@@ -35,10 +35,9 @@
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02
 #define NHRP_PEER_FIND_SUBNET		0x04
-#define NHRP_PEER_FIND_COMPLETE		0x08
-#define NHRP_PEER_FIND_NEXTHOP		0x10
-#define NHRP_PEER_FIND_REMOVABLE	0x20
-#define NHRP_PEER_FIND_UP		0x40
+#define NHRP_PEER_FIND_COMPLETE		0x10
+#define NHRP_PEER_FIND_UP		0x20
+#define NHRP_PEER_FIND_REMOVABLE	0x40
 #define NHRP_PEER_FIND_PURGEABLE	0x80
 
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
@@ -107,17 +106,10 @@ int nhrp_peer_match(struct nhrp_peer *peer, struct nhrp_peer_selector *sel);
 int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 		      struct nhrp_peer_selector *sel);
 
-struct nhrp_peer *nhrp_peer_find_full(struct nhrp_interface *iface,
-				      struct nhrp_address *dest,
-				      int prefix_length, int flags,
-				      struct nhrp_cie_list_head *cielist);
-
-static inline struct nhrp_peer *nhrp_peer_find(
-	struct nhrp_interface *iface, struct nhrp_address *dest,
-	int prefix_length, int flags)
-{
-	return nhrp_peer_find_full(iface, dest, prefix_length, flags, NULL);
-}
+struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *iface,
+				  struct nhrp_address *dest,
+				  int flags,
+				  struct nhrp_cie_list_head *exclude);
 
 void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 				  uint16_t afnum, struct nhrp_address *dst);

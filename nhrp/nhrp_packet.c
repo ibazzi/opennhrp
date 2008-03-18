@@ -477,10 +477,8 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		sel.prefix_length = peer->prefix_length;
 		nhrp_peer_foreach(remove_old_registrations, peer, &sel);
 
-		p = nhrp_peer_find(packet->src_iface,
-				   &peer->protocol_address,
-				   peer->prefix_length,
-				   NHRP_PEER_FIND_ROUTE);
+		p = nhrp_peer_route(packet->src_iface, &peer->protocol_address,
+				    0, NULL);
 		if (p == NULL ||
 		    nhrp_address_cmp(&peer->protocol_address, &p->protocol_address)) {
 			cie->hdr.code = NHRP_CODE_SUCCESS;
@@ -994,8 +992,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	else
 		dest = &packet->dst_protocol_address;
 
-	peer = nhrp_peer_find(iface, dest, 0xff,
-			      NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_COMPLETE);
+	peer = nhrp_peer_route(iface, dest, NHRP_PEER_FIND_COMPLETE, NULL);
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
 	packet->dst_peer = peer;
@@ -1193,13 +1190,10 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 			return FALSE;
 		}
 
-		packet->dst_peer = nhrp_peer_find_full(packet->dst_iface,
-						       &proto_nexthop, 0xff,
-						       NHRP_PEER_FIND_ROUTE |
-						       NHRP_PEER_FIND_COMPLETE |
-						       NHRP_PEER_FIND_NEXTHOP |
-						       up,
-						       cielist);
+		packet->dst_peer = nhrp_peer_route(packet->dst_iface,
+						   &proto_nexthop,
+						   NHRP_PEER_FIND_COMPLETE | up,
+						   cielist);
 		if (packet->dst_peer == NULL ||
 		    packet->dst_peer->type == NHRP_PEER_TYPE_NEGATIVE) {
 			nhrp_error("No peer entry for protocol address %s",

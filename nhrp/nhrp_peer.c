@@ -530,11 +530,10 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 
 	/* Update the received NBMA address to nexthop */
 	iface = peer->interface;
-	np = nhrp_peer_find(iface,
-			    &cie->protocol_address,
-			    cie->protocol_address.addr_len * 8,
-			    NHRP_PEER_FIND_SUBNET);
-	if (np == NULL) {
+	np = nhrp_peer_route(iface, &cie->protocol_address, 0, NULL);
+	if (np == NULL ||
+	    nhrp_address_cmp(&cie->protocol_address,
+			     &np->protocol_address) != 0) {
 		np = nhrp_peer_alloc(iface);
 		np->type = NHRP_PEER_TYPE_CACHED;
 		np->afnum = reply->hdr.afnum;
@@ -545,11 +544,6 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 		nhrp_peer_insert(np);
 		nhrp_peer_free(np);
-	} else {
-		np->next_hop_address = natcie->nbma_address;
-		np->prefix_length = cie->protocol_address.addr_len * 8;
-		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
-		nhrp_peer_reinsert(np, NHRP_PEER_TYPE_CACHED);
 	}
 
 	/* Off NBMA destination; a shortcut route */
@@ -668,24 +662,34 @@ static void nhrp_peer_renew(struct nhrp_peer *peer)
 	}
 }
 
+static int is_used(void *ctx, struct nhrp_peer *peer)
+{
+	if (peer->flags & NHRP_PEER_FLAG_USED)
+		return 1;
+
+	return 0;
+}
+
 static void nhrp_peer_check_renew_task(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
-	struct nhrp_peer *nexthop;
-
-	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE)
-		nexthop = nhrp_peer_find(peer->interface,
-					 &peer->next_hop_address, 0xff,
-					 NHRP_PEER_FIND_ROUTE);
-	else
-		nexthop = peer;
+	struct nhrp_peer_selector sel;
+	int used;
 
 	peer->flags |= NHRP_PEER_FLAG_PRUNE_PENDING;
 	nhrp_task_schedule(&peer->task,
 			   (peer->expire_time - time(NULL)) * 1000,
 			   nhrp_peer_prune_task);
 
-	if (nexthop->flags & NHRP_PEER_FLAG_USED)
+	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
+		memset(&sel, 0, sizeof(sel));
+		sel.interface = peer->interface;
+		sel.protocol_address = peer->next_hop_address;
+		used = nhrp_peer_foreach(is_used, NULL, &sel);
+	} else
+		used = peer->flags & NHRP_PEER_FLAG_USED;
+
+	if (used)
 		nhrp_peer_renew(peer);
 }
 
@@ -821,11 +825,10 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 			nhrp_peer_run_script(peer, "peer-up", nhrp_peer_dynamic_up);
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
-		nexthop = nhrp_peer_find(peer->interface,
-					 &peer->next_hop_address, 0xff,
-					 NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_NEXTHOP);
-		if ((nexthop->flags & NHRP_PEER_FLAG_UP) &&
-		    !(peer->flags & NHRP_PEER_FLAG_UP))
+		nexthop = nhrp_peer_route(peer->interface,
+					  &peer->next_hop_address,
+					  NHRP_PEER_FIND_UP, NULL);
+		if (nexthop != NULL && !(peer->flags & NHRP_PEER_FLAG_UP))
 			nhrp_peer_run_script(peer, "route-up",
 					     nhrp_peer_route_up);
 		nhrp_task_schedule(&peer->task,
@@ -844,7 +847,7 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 	}
 }
 
-static int peer_remove(void *ctx, struct nhrp_peer *peer)
+static int remove_peer(void *ctx, struct nhrp_peer *peer)
 {
 	nhrp_peer_remove(peer);
 	return 0;
@@ -853,6 +856,7 @@ static int peer_remove(void *ctx, struct nhrp_peer *peer)
 void nhrp_peer_insert(struct nhrp_peer *ins)
 {
 	struct nhrp_interface *iface = ins->interface;
+	struct nhrp_peer_selector sel;
 	struct nhrp_peer *peer;
 	char tmp[NHRP_PEER_FORMAT_LEN];
 
@@ -962,6 +966,11 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 
 			if (p->prefix_length != sel->prefix_length)
 				return FALSE;
+		} else  if (sel->flags & NHRP_PEER_FIND_ROUTE) {
+			if (bitcmp(p->protocol_address.addr,
+				   sel->protocol_address.addr,
+				   p->prefix_length) != 0)
+				return FALSE;
 		} else {
 			if (p->prefix_length < sel->prefix_length)
 				return FALSE;
@@ -1044,117 +1053,63 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 	return rc;
 }
 
-static struct nhrp_peer *nhrp_peer_find_internal(struct nhrp_interface *iface,
-						 struct nhrp_address *dest,
-						 int min_prefix, int flags,
-						 struct nhrp_cie_list_head *cielist)
+struct route_decision {
+	struct nhrp_peer_selector sel;
+	struct nhrp_cie_list_head *exclude;
+	struct nhrp_peer *best_found;
+	int found_exact;
+};
+
+static int decide_route(void *ctx, struct nhrp_peer *peer)
 {
-	struct nhrp_peer_list *peer_cache;
-	struct nhrp_peer *found_peer = NULL;
-	struct nhrp_peer *p;
-	int prefix, exact, found_exact = 0;
+	struct route_decision *rd = (struct route_decision *) ctx;
+	int exact;
 
-	if (min_prefix == 0xff)
-		min_prefix = dest->addr_len * 8;
-	if (min_prefix == 0 && (flags & NHRP_PEER_FIND_EXACT))
-		min_prefix = dest->addr_len * 8;
+	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE &&
+	    rd->exclude != NULL &&
+	    nhrp_address_match_cie_list(&peer->next_hop_address,
+					&peer->protocol_address,
+					rd->exclude))
+		return 0;
 
-	if (iface == NULL)
-		peer_cache = &local_peer_cache;
-	else
-		peer_cache = &iface->peer_cache;
+	exact = nhrp_address_cmp(&peer->protocol_address,
+				 &rd->sel.protocol_address) == 0;
+	if (rd->found_exact > exact)
+		return 0;
 
-	CIRCLEQ_FOREACH(p, peer_cache, peer_list) {
-		if (dest != NULL &&
-		    dest->type != p->protocol_address.type)
-			continue;
+	if (rd->best_found != NULL &&
+	    rd->best_found->prefix_length > peer->prefix_length)
+		return 0;
 
-		if (flags & NHRP_PEER_FIND_SUBNET) {
-			if (min_prefix > p->prefix_length)
-				continue;
-			prefix = min_prefix;
-		} else if (flags & NHRP_PEER_FIND_ROUTE) {
-			if (min_prefix < p->prefix_length)
-				continue;
-			prefix = p->prefix_length;
-		} else if (flags & NHRP_PEER_FIND_EXACT) {
-			if (min_prefix != p->prefix_length)
-				continue;
-			prefix = min_prefix;
-		} else
-			return NULL;
+	if (rd->best_found != NULL &&
+	    rd->found_exact == exact &&
+	    rd->best_found->prefix_length == peer->prefix_length &&
+	    rd->best_found->last_used < peer->last_used)
+		return 0;
 
-		if (dest != NULL &&
-		    p->type == NHRP_PEER_TYPE_STATIC &&
-		    min_prefix == dest->addr_len * 8 &&
-		    memcmp(dest->addr, p->protocol_address.addr, dest->addr_len) == 0)
-			exact = 1;
-		else
-			exact = 0;
-
-		if (found_exact > exact)
-			continue;
-
-		if ((flags & NHRP_PEER_FIND_COMPLETE) &&
-		    p->type == NHRP_PEER_TYPE_INCOMPLETE)
-			continue;
-		if ((flags & NHRP_PEER_FIND_UP) &&
-		    !(p->flags & NHRP_PEER_FLAG_UP) && !exact)
-			continue;
-
-		if ((flags & NHRP_PEER_FIND_REMOVABLE) &&
-		    (p->type == NHRP_PEER_TYPE_LOCAL ||
-		     p->type == NHRP_PEER_TYPE_STATIC))
-			continue;
-
-		if ((flags & NHRP_PEER_FIND_PURGEABLE) &&
-		    (p->type == NHRP_PEER_TYPE_LOCAL ||
-		     (p->type == NHRP_PEER_TYPE_STATIC &&
-		      !(p->flags & NHRP_PEER_FLAG_UP))))
-			continue;
-
-		if (p->type != NHRP_PEER_TYPE_CACHED_ROUTE &&
-		    cielist != NULL &&
-		    nhrp_address_match_cie_list(&p->next_hop_address,
-						&p->protocol_address,
-						cielist))
-			continue;
-
-		if (dest != NULL && bitcmp(dest->addr, p->protocol_address.addr, prefix) != 0)
-			continue;
-
-		if (found_peer != NULL &&
-		    found_peer->prefix_length > p->prefix_length)
-			continue;
-
-		if (found_peer != NULL && found_exact == exact &&
-		    found_peer->prefix_length == p->prefix_length &&
-		    found_peer->last_used < p->last_used)
-			continue;
-
-		/* Best match so far */
-		found_peer = p;
-		found_exact = exact;
-	}
-
-	if (found_peer != NULL)
-		time(&found_peer->last_used);
-
-	return found_peer;
+	rd->best_found = peer;
+	rd->found_exact = exact;
+	return 0;
 }
 
-struct nhrp_peer *nhrp_peer_find_full(struct nhrp_interface *iface,
-				      struct nhrp_address *dest,
-				      int min_prefix, int flags,
-				      struct nhrp_cie_list_head *cielist)
+struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *interface,
+				  struct nhrp_address *dest, int flags,
+				  struct nhrp_cie_list_head *exclude)
 {
-	struct nhrp_peer *p;
+	struct route_decision rd;
 
-	p = nhrp_peer_find_internal(NULL, dest, min_prefix, flags, cielist);
-	if (p != NULL)
-		return p;
+	memset(&rd, 0, sizeof(rd));
+	rd.sel.flags = flags | NHRP_PEER_FIND_ROUTE;
+	rd.sel.interface = interface;
+	rd.sel.protocol_address = *dest;
+	rd.exclude = exclude;
 
-	return nhrp_peer_find_internal(iface, dest, min_prefix, flags, cielist);
+	nhrp_peer_foreach(decide_route, &rd, &rd.sel);
+
+	if (rd.best_found != NULL)
+		time(&rd.best_found->last_used);
+
+	return rd.best_found;
 }
 
 void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
@@ -1162,23 +1117,16 @@ void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 {
 	struct nhrp_peer *peer;
 
-	/* Are we already doing something for this destination? */
-	peer = nhrp_peer_find(iface, dst, 0xff, NHRP_PEER_FIND_EXACT);
-	if (peer != NULL)
+	/* Shortcuts enabled? */
+	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT)
 		return;
 
-	/* Get the route */
-	peer = nhrp_peer_find(iface, dst, 0xff, NHRP_PEER_FIND_ROUTE);
-	if (peer != NULL) {
-		/* Is this routed to somewhere already? */
-		if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE)
-			return;
+	/* Have we done something for this destination already? */
+	peer = nhrp_peer_route(iface, dst, 0, NULL);
+	if (peer != NULL && peer->type <= NHRP_PEER_TYPE_CACHED_ROUTE)
+		return;
 
-		/* Are shortcuts allowed? */
-		if (!(peer->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT))
-			return;
-	}
-
+	/* Initiate resolution */
 	peer = nhrp_peer_alloc(iface);
 	peer->type = NHRP_PEER_TYPE_INCOMPLETE;
 	peer->afnum = afnum;

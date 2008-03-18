@@ -351,8 +351,7 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 	nhrp_info("NL-ARP(%s) who-has %s",
 		iface->name, nhrp_address_format(&addr, sizeof(tmp), tmp));
 
-	peer = nhrp_peer_find(iface, &addr, 0xff,
-			      NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_UP);
+	peer = nhrp_peer_route(iface, &addr, NHRP_PEER_FIND_UP, NULL);
 	if (peer == NULL || !(peer->flags & NHRP_PEER_FLAG_UP))
 		return;
 
