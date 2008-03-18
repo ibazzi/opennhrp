@@ -66,16 +66,8 @@ static void admin_write(void *ctx, const char *format, ...)
 	write(rmt->fd, msg, len);
 }
 
-struct selector_action_ctx {
-	void *ctx;
-	struct nhrp_peer_selector sel;
-	int (*action)(void *ctx, struct nhrp_peer *peer);
-	int count;
-};
-
 static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 {
-	struct selector_action_ctx *sa = (struct selector_action_ctx *) ctx;
 	char buf[512], tmp[32];
 	size_t len = sizeof(buf);
 	int i = 0;
@@ -114,28 +106,32 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 		i += snprintf(&buf[i], len - i, "Expires-At: %s",
 			      ctime(&peer->expire_time));
 
-	admin_write(sa->ctx, "%s\n", buf);
+	admin_write(ctx, "%s\n", buf);
 	return 0;
 }
 
 static int admin_purge_peer(void *ctx, struct nhrp_peer *peer)
 {
-	struct selector_action_ctx *sa = (struct selector_action_ctx *) ctx;
+	int *count = (int *) ctx;
+
 	nhrp_peer_purge(peer);
-	sa->count++;
+	(*count)++;
+
 	return 0;
 }
 
 static int admin_remove_peer(void *ctx, struct nhrp_peer *peer)
 {
-	struct selector_action_ctx *sa = (struct selector_action_ctx *) ctx;
+	int *count = (int *) ctx;
+
 	nhrp_peer_remove(peer);
-	sa->count++;
+	(*count)++;
+
 	return 0;
 }
 
-static void admin_selector_action(struct selector_action_ctx *sa,
-				  const char *cmd)
+static int admin_parse_selector(void *ctx, const char *cmd,
+				struct nhrp_peer_selector *sel)
 {
 	char keyword[64], tmp[64];
 	struct nhrp_address address;
@@ -143,122 +139,131 @@ static void admin_selector_action(struct selector_action_ctx *sa,
 
 	while (parse_word(&cmd, sizeof(keyword), keyword)) {
 		if (!parse_word(&cmd, sizeof(tmp), tmp)) {
-			admin_write(sa->ctx,
+			admin_write(ctx,
 				    "Status: failed\n"
 				    "Reason: missing-argument\n"
 				    "Near-Keyword: '%s'\n",
 				    keyword);
-			return;
+			return FALSE;
 		}
 
 		if (strcmp(keyword, "interface") == 0 ||
 		    strcmp(keyword, "iface") == 0 ||
 		    strcmp(keyword, "dev") == 0) {
-			if (sa->sel.interface != NULL)
+			if (sel->interface != NULL)
 				goto err_conflict;
-			sa->sel.interface = nhrp_interface_get_by_name(tmp, FALSE);
-			if (sa->sel.interface == NULL)
+			sel->interface = nhrp_interface_get_by_name(tmp, FALSE);
+			if (sel->interface == NULL)
 				goto err_noiface;
 			continue;
 		}
 
 		if (!nhrp_address_parse(tmp, &address, &prefix_length)) {
-			admin_write(sa->ctx,
+			admin_write(ctx,
 				    "Status: failed\n"
 				    "Reason: invalid-address\n"
 				    "Near-Keyword: '%s'\n",
 				   keyword);
-			return;
+			return FALSE;
 		}
 
 		if (strcmp(keyword, "protocol") == 0) {
-			if (sa->sel.protocol_address.type != AF_UNSPEC)
+			if (sel->protocol_address.type != AF_UNSPEC)
 				goto err_conflict;
-			sa->sel.protocol_address = address;
-			sa->sel.prefix_length = prefix_length;
+			sel->protocol_address = address;
+			sel->prefix_length = prefix_length;
 		} else if (strcmp(keyword, "nbma") == 0) {
-			if (sa->sel.nbma_address.type != AF_UNSPEC)
+			if (sel->nbma_address.type != AF_UNSPEC)
 				goto err_conflict;
-			sa->sel.nbma_address = address;
+			sel->nbma_address = address;
 		} else if (strcmp(keyword, "local-protocol") == 0) {
-			if (sa->sel.interface != NULL)
+			if (sel->interface != NULL)
 				goto err_conflict;
-			sa->sel.interface = nhrp_interface_get_by_protocol(&address);
-			if (sa->sel.interface == NULL)
+			sel->interface = nhrp_interface_get_by_protocol(&address);
+			if (sel->interface == NULL)
 				goto err_noiface;
 		} else if (strcmp(keyword, "local-nbma") == 0) {
-			if (sa->sel.interface != NULL)
+			if (sel->interface != NULL)
 				goto err_conflict;
-			sa->sel.interface = nhrp_interface_get_by_nbma(&address);
-			if (sa->sel.interface == NULL)
+			sel->interface = nhrp_interface_get_by_nbma(&address);
+			if (sel->interface == NULL)
 				goto err_noiface;
 		} else {
-			admin_write(sa->ctx,
+			admin_write(ctx,
 				    "Status: failed\n"
 				    "Reason: syntax-error\n"
 				    "Near-Keyword: '%s'\n",
 				    keyword);
-			return;
+			return FALSE;
 		}
 	}
-	nhrp_peer_foreach(sa->action, sa, &sa->sel);
-
-	admin_write(sa->ctx,
-		    "Status: ok\n"
-		    "Entries-Affected: %d\n",
-		    sa->count);
-	return;
+	return TRUE;
 
 err_conflict:
-	admin_write(sa->ctx,
+	admin_write(ctx,
 		    "Status: failed\n"
 		    "Reason: conflicting-keyword\n"
 		    "Near-Keyword: '%s'\n",
 		    keyword);
-	return;
+	return FALSE;
 err_noiface:
-	admin_write(sa->ctx,
+	admin_write(ctx,
 		    "Status: failed\n"
 		    "Reason: interface-not-found\n"
 		    "Near-Keyword: '%s'\n"
 		    "Argument: '%s'\n",
 		    keyword, tmp);
-	return;
+	return FALSE;
 }
 
 static void admin_show(void *ctx, const char *cmd)
 {
-	struct selector_action_ctx sa;
+	struct nhrp_peer_selector sel;
 
-	memset(&sa, 0, sizeof(sa));
-	sa.ctx = ctx;
-	sa.action = admin_show_peer;
+	memset(&sel, 0, sizeof(sel));
+	if (!admin_parse_selector(ctx, cmd, &sel))
+		return;
 
-	admin_selector_action(&sa, cmd);
+	admin_write(ctx, "Status: ok\n\n");
+	nhrp_peer_foreach(admin_show_peer, ctx, &sel);
 }
 
 static void admin_purge(void *ctx, const char *cmd)
 {
-	struct selector_action_ctx sa;
+	struct nhrp_peer_selector sel;
+	int count = 0;
 
-	memset(&sa, 0, sizeof(sa));
-	sa.ctx = ctx;
-	sa.sel.flags = NHRP_PEER_FIND_PURGEABLE;
-	sa.action = admin_purge_peer;
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_PURGEABLE;
 
-	admin_selector_action(&sa, cmd);
+	if (!admin_parse_selector(ctx, cmd, &sel))
+		return;
+
+	nhrp_peer_foreach(admin_purge_peer, &count, &sel);
+
+	admin_write(ctx,
+		    "Status: ok\n"
+		    "Entries-Affected: %d\n",
+		    &count);
 }
 
 static void admin_flush(void *ctx, const char *cmd)
 {
-	struct selector_action_ctx sa;
+	struct nhrp_peer_selector sel;
+	int count = 0;
 
-	memset(&sa, 0, sizeof(sa));
-	sa.ctx = ctx;
-	sa.sel.flags = NHRP_PEER_FIND_REMOVABLE;
-	sa.action = admin_remove_peer;
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_REMOVABLE;
 
-	admin_selector_action(&sa, cmd);
+	if (!admin_parse_selector(ctx, cmd, &sel))
+		return;
+
+	nhrp_peer_foreach(admin_remove_peer, &count, &sel);
+
+	admin_write(ctx,
+		    "Status: ok\n"
+		    "Entries-Affected: %d\n",
+		    &count);
 }
 
 static struct {
