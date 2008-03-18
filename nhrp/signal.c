@@ -8,6 +8,7 @@
  * by the Free Software Foundation. See http://www.gnu.org/ for details.
  */
 
+#include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
@@ -22,20 +23,15 @@ static void signal_handler(int sig)
 	send(signal_pipe[1], &sig, sizeof(sig), MSG_DONTWAIT);
 }
 
-static int prune_all(void *ctx, struct nhrp_interface *iface)
+static int do_remove(void *ctx, struct nhrp_peer *peer)
 {
-	struct nhrp_peer *peer;
-
-	while ((peer = nhrp_peer_find(iface, NULL, 0,
-				      NHRP_PEER_FIND_SUBNET |
-				      NHRP_PEER_FIND_REMOVABLE)) != NULL)
-		nhrp_peer_remove(peer);
-
+	nhrp_peer_remove(peer);
 	return 0;
 }
 
 static int reap_children(void *ctx, int fd, short events)
 {
+	struct nhrp_peer_selector sel;
 	pid_t pid;
 	int status, sig;
 
@@ -56,7 +52,9 @@ static int reap_children(void *ctx, int fd, short events)
 		nhrp_task_stop();
 		break;
 	case SIGHUP:
-		nhrp_interface_foreach(prune_all, NULL);
+		memset(&sel, 0, sizeof(sel));
+		sel.flags = NHRP_PEER_FIND_REMOVABLE;
+		nhrp_peer_foreach(do_remove, NULL, &sel);
 		break;
 	}
 	return 0;
