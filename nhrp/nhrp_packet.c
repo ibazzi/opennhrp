@@ -369,12 +369,35 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	return nhrp_packet_send(packet);
 }
 
+static int remove_peer(void *ctx, struct nhrp_peer *p)
+{
+	nhrp_peer_remove(p);
+	return 0;
+}
+
+static int remove_old_registrations(void *ctx, struct nhrp_peer *p)
+{
+	struct nhrp_peer *peer = (struct nhrp_peer *) ctx;
+
+	/* If re-registration, mark the new connection up */
+	if ((p->flags & NHRP_PEER_FLAG_UP) &&
+	    nhrp_address_cmp(&peer->protocol_address, &p->protocol_address) == 0 &&
+	    nhrp_address_cmp(&peer->next_hop_address, &p->next_hop_address) == 0 &&
+	    peer->prefix_length == p->prefix_length)
+		peer->flags |= NHRP_PEER_FLAG_UP;
+
+	p->flags |= NHRP_PEER_FLAG_REPLACED;
+	nhrp_peer_remove(p);
+	return 0;
+}
+
 static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64];
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
 	struct nhrp_peer *peer, *p;
+	struct nhrp_peer_selector sel;
 	int natted = 0;
 
 	nhrp_info("Received Registration Request from proto src %s to %s",
@@ -447,20 +470,12 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		if (peer->prefix_length == 0xff)
 			peer->prefix_length = peer->protocol_address.addr_len * 8;
 
-		while ((p = nhrp_peer_find(packet->src_iface,
-					   &peer->protocol_address,
-					   peer->prefix_length,
-					   NHRP_PEER_FIND_EXACT |
-					   NHRP_PEER_FIND_REMOVABLE)) != NULL) {
-			/* If re-registration, mark the new connection up */
-			if ((p->flags & NHRP_PEER_FLAG_UP) &&
-			    nhrp_address_cmp(&peer->protocol_address, &p->protocol_address) == 0 &&
-			    nhrp_address_cmp(&peer->next_hop_address, &p->next_hop_address) == 0 &&
-			    peer->prefix_length == p->prefix_length)
-				peer->flags |= NHRP_PEER_FLAG_UP;
-			p->flags |= NHRP_PEER_FLAG_REPLACED;
-			nhrp_peer_remove(p);
-		}
+		memset(&sel, 0, sizeof(sel));
+		sel.flags = NHRP_PEER_FIND_REMOVABLE;
+		sel.interface = packet->src_iface;
+		sel.protocol_address = peer->protocol_address;
+		sel.prefix_length = peer->prefix_length;
+		nhrp_peer_foreach(remove_old_registrations, peer, &sel);
 
 		p = nhrp_peer_find(packet->src_iface,
 				   &peer->protocol_address,
@@ -489,9 +504,9 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64];
+	struct nhrp_peer_selector sel;
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
-	struct nhrp_peer *p;
 	int ret = TRUE;
 
 	nhrp_info("Received Purge Request from proto src %s to %s",
@@ -516,12 +531,12 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 			nhrp_address_format(&cie->nbma_address,
 					    sizeof(tmp), tmp));
 
-		while ((p = nhrp_peer_find(packet->src_iface,
-					   &cie->protocol_address,
-					   cie->hdr.prefix_length,
-					   NHRP_PEER_FIND_EXACT |
-					   NHRP_PEER_FIND_REMOVABLE)) != NULL)
-			nhrp_peer_remove(p);
+		memset(&sel, 0, sizeof(sel));
+		sel.flags = NHRP_PEER_FIND_REMOVABLE | NHRP_PEER_FIND_EXACT;
+		sel.interface = packet->src_iface;
+		sel.protocol_address = cie->protocol_address;
+		sel.prefix_length = cie->hdr.prefix_length;
+		nhrp_peer_foreach(remove_peer, NULL, &sel);
 	}
 
 	return ret;

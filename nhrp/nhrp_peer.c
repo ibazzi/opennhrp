@@ -949,13 +949,22 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 		if (sel->prefix_length == 0)
 			sel->prefix_length = sel->protocol_address.addr_len * 8;
 
-		if (p->prefix_length < sel->prefix_length)
-			return FALSE;
+		if (sel->flags & NHRP_PEER_FIND_EXACT) {
+			if (nhrp_address_cmp(&p->protocol_address,
+					     &sel->protocol_address) != 0)
+				return FALSE;
 
-		if (bitcmp(p->protocol_address.addr,
-			   sel->protocol_address.addr,
-			   sel->prefix_length) != 0)
-			return FALSE;
+			if (p->prefix_length != sel->prefix_length)
+				return FALSE;
+		} else {
+			if (p->prefix_length < sel->prefix_length)
+				return FALSE;
+
+			if (bitcmp(p->protocol_address.addr,
+				   sel->protocol_address.addr,
+				   sel->prefix_length) != 0)
+				return FALSE;
+		}
 	}
 
 	if (sel->nbma_address.type != AF_UNSPEC) {
