@@ -262,7 +262,7 @@ int usage(const char *prog)
 		"\t-s script-file\tuse specified script-file for event handling\n"
 		"\t-p pid-file\tspecify pid-file\n"
 		"\t-d\t\tfork to background after startup\n"
-		"\t-v\t\tverbose logging\n
+		"\t-v\t\tverbose logging\n"
 		"\t-V\t\tshow version number and exit\n"
 		"\n");
 	return 1;
