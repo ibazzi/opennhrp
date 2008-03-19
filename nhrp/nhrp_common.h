@@ -23,7 +23,7 @@ struct nhrp_address;
 struct nhrp_peer;
 
 extern const char *nhrp_config_file, *nhrp_script_file;
-extern int nhrp_running;
+extern int nhrp_running, nhrp_verbose;
 
 /* Mainloop and timed tasks */
 struct nhrp_task {
@@ -41,6 +41,7 @@ void nhrp_task_schedule(struct nhrp_task *task, int timeout, void (*callback)(st
 void nhrp_task_cancel(struct nhrp_task *task);
 
 /* Logging */
+void nhrp_debug(const char *format, ...);
 void nhrp_info(const char *format, ...);
 void nhrp_error(const char *format, ...);
 void nhrp_perror(const char *message);

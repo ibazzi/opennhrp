@@ -24,6 +24,17 @@ int log_init(void)
 	return TRUE;
 }
 
+void nhrp_debug(const char *format, ...)
+{
+	va_list va;
+
+	if (nhrp_verbose) {
+		va_start(va, format);
+		vsyslog(LOG_DEBUG, format, va);
+		va_end(va);
+	}
+}
+
 void nhrp_perror(const char *message)
 {
 	nhrp_error("%s: %s", message, strerror(errno));

@@ -348,8 +348,8 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 			 RTA_PAYLOAD(rta[NDA_DST]),
 			 RTA_DATA(rta[NDA_DST]));
 
-	nhrp_info("NL-ARP(%s) who-has %s",
-		iface->name, nhrp_address_format(&addr, sizeof(tmp), tmp));
+	nhrp_debug("NL-ARP(%s) who-has %s",
+		   iface->name, nhrp_address_format(&addr, sizeof(tmp), tmp));
 
 	peer = nhrp_peer_route(iface, &addr, NHRP_PEER_FIND_UP, NULL);
 	if (peer == NULL || !(peer->flags & NHRP_PEER_FLAG_UP))
@@ -767,16 +767,16 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor,
 		netlink_add_rtattr_l(&req.n, sizeof(req), NDA_LLADDR,
 				     hwaddr->addr, hwaddr->addr_len);
 
-		nhrp_info("NL-ARP(%s) %s is-at %s",
-			dev->name,
-			nhrp_address_format(neighbor, sizeof(neigh), neigh),
-			nhrp_address_format(hwaddr, sizeof(nbma), nbma));
+		nhrp_debug("NL-ARP(%s) %s is-at %s",
+			   dev->name,
+			   nhrp_address_format(neighbor, sizeof(neigh), neigh),
+			   nhrp_address_format(hwaddr, sizeof(nbma), nbma));
 	} else {
 		req.ndm.ndm_state = NUD_FAILED;
 
-		nhrp_info("NL-ARP(%s) %s not-reachable",
-			dev->name,
-			nhrp_address_format(neighbor, sizeof(neigh), neigh));
+		nhrp_debug("NL-ARP(%s) %s not-reachable",
+			   dev->name,
+			   nhrp_address_format(neighbor, sizeof(neigh), neigh));
 	}
 
 	return netlink_send(&netlink_fd, &req.n);

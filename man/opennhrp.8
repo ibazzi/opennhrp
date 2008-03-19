@@ -4,15 +4,7 @@
 opennhrp \- daemon to resolve next hop address in NBMA network
 
 .SH SYNOPSIS
-.B opennhrp
-.BI "[\-a " admin\-socket "]"
-.BI "[\-c " config\-file "]"
-.BI "[\-s " script\-file "]"
-.BI "[\-p " pid\-file "]"
-.BI "[\-d]"
-
-.PP
-.B "opennhrp \-V"
+.BI "opennhrp [" "option" "]..."
 
 .SH DESCRIPTION
 .B opennhrp
@@ -32,6 +24,8 @@ Modifications have been made for authentication extension, Cisco NAT
 address extension and shortcut switching enhancements support.
 
 .SH OPTIONS
+The following options are recognized:
+
 .IP "\fB\-a \fIadmin\-socket"
 Specify management interface socket as
 .IR admin\-socket .
@@ -64,6 +58,9 @@ is specified too.
 
 .IP "\fB-d"
 Run in daemon mode, forking to background after initialization.
+
+.IP "\fB-v"
+Verbose. Print more log messages.
 
 .IP "\fB-V"
 Print version and exit.

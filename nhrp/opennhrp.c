@@ -27,6 +27,7 @@ const char *nhrp_admin_socket = OPENNHRP_ADMIN_SOCKET;
 const char *nhrp_pid_file     = "/var/run/opennhrp.pid";
 const char *nhrp_config_file  = "/etc/opennhrp/opennhrp.conf";
 const char *nhrp_script_file  = "/etc/opennhrp/opennhrp-script";
+int nhrp_verbose = 0;
 
 static int pid_file_fd;
 
@@ -253,7 +254,7 @@ int usage(const char *prog)
 {
 	fprintf(stderr,
 		"usage: opennhrp [-a admin-socket] [-c config-file] [-s script-file]\n"
-		"                [-p pid-file] [-d]\n"
+		"                [-p pid-file] [-d] [-v]\n"
 		"       opennhrp -V\n"
 		"\n"
 		"\t-a admin-socket\tspecify management interface socket\n"
@@ -261,6 +262,7 @@ int usage(const char *prog)
 		"\t-s script-file\tuse specified script-file for event handling\n"
 		"\t-p pid-file\tspecify pid-file\n"
 		"\t-d\t\tfork to background after startup\n"
+		"\t-v\t\tverbose logging\n
 		"\t-V\t\tshow version number and exit\n"
 		"\n");
 	return 1;
@@ -297,6 +299,9 @@ int main(int argc, char **argv)
 			break;
 		case 'd':
 			daemonmode = 1;
+			break;
+		case 'v':
+			nhrp_verbose = 1;
 			break;
 		case 'V':
 			puts("OpenNHRP " OPENNHRP_VERSION);
