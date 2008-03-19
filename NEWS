@@ -6,7 +6,7 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
- opennhrp 0.6 - released ??/Mar/2008
+ opennhrp 0.6 - released 19/Mar/2008
 -----------------------------------------------------------------------------
  - accept hostname (domain name) as an NBMA address in config file
  - sanitize admin interface: accept cache entry selectors on
@@ -16,6 +16,7 @@ svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
  - do not let opennhrp-script inherit sockets file descriptors
  - run peer-down script when peer was purged via admin interface
  - add option -V to show version
+ - add option -v to show debug log messages (to see nl-arp messages)
  - performance improvements
 
 -----------------------------------------------------------------------------
