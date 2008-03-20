@@ -109,6 +109,7 @@ int nhrp_packet_send_request(struct nhrp_packet *packet,
 			     void *ctx);
 int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 			   uint16_t indication_code, uint16_t offset);
-int nhrp_packet_send_traffic(int protocol_type, uint8_t *pdu, size_t pdulen);
+int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
+			     uint8_t *pdu, size_t pdulen);
 
 #endif

@@ -191,6 +191,7 @@ int forward_local_addresses_changed(void)
 
 static int pfp_read(void *ctx, int fd, short events)
 {
+	struct nhrp_interface *iface;
 	struct sockaddr_ll lladdr;
 	struct iovec iov;
 	struct msghdr msg = {
@@ -226,7 +227,12 @@ static int pfp_read(void *ctx, int fd, short events)
 		if (lladdr.sll_pkttype != PACKET_OUTGOING)
 			continue;
 
-		nhrp_packet_send_traffic(lladdr.sll_protocol, buf, status);
+		iface = nhrp_interface_get_by_index(lladdr.sll_ifindex, FALSE);
+		if (iface == NULL)
+			continue;
+
+		nhrp_packet_send_traffic(iface, lladdr.sll_protocol,
+					 buf, status);
 	}
 
 	return 0;

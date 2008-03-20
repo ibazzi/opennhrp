@@ -885,7 +885,10 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 	}
 	packet->hdr.hop_count--;
 
-	nhrp_packet_reroute(packet, FALSE);
+	if (!nhrp_packet_reroute(packet, FALSE)) {
+		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
+		return FALSE;
+	}
 
 	switch (packet_types[packet->hdr.type].type) {
 	case NHRP_TYPE_REQUEST:
@@ -1408,7 +1411,8 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 	return r;
 }
 
-int nhrp_packet_send_traffic(int protocol_type, uint8_t *pdu, size_t pdulen)
+int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
+			     uint8_t *pdu, size_t pdulen)
 {
 	struct nhrp_rate_limit *rl;
 	struct nhrp_packet *p;
@@ -1465,6 +1469,7 @@ int nhrp_packet_send_traffic(int protocol_type, uint8_t *pdu, size_t pdulen)
 		nhrp_address_format(&src, sizeof(tmp1), tmp1),
 		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
 
+	p->dst_iface = iface;
 	r = nhrp_packet_send(p);
 	nhrp_packet_free(p);
 
