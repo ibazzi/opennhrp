@@ -6,6 +6,12 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
+ opennhrp 0.6.1 - released 20/Mar/2008
+-----------------------------------------------------------------------------
+ - fix a crash in error path of packet forwarding
+ - fix routing of locally generated traffic indications
+
+-----------------------------------------------------------------------------
  opennhrp 0.6 - released 19/Mar/2008
 -----------------------------------------------------------------------------
  - accept hostname (domain name) as an NBMA address in config file
