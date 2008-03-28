@@ -83,7 +83,7 @@ static int read_word(FILE *in, int *lineno, size_t len, char *word)
 		word[i] = ch;
 		ch = fgetc(in);
 		if (ch == EOF)
-			return FALSE;
+			break;
 		if (ch == '\n')
 			(*lineno)++;
 	}
