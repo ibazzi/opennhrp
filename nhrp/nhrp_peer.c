@@ -952,6 +952,7 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 		return FALSE;
 
 	if (sel->interface != NULL &&
+	    p->type != NHRP_PEER_TYPE_LOCAL &&
 	    p->interface != sel->interface)
 		return FALSE;
 
@@ -1077,15 +1078,15 @@ static int decide_route(void *ctx, struct nhrp_peer *peer)
 	if (rd->found_exact > exact)
 		return 0;
 
-	if (rd->best_found != NULL &&
-	    rd->best_found->prefix_length > peer->prefix_length)
-		return 0;
+	if (rd->best_found != NULL) {
+		if (rd->best_found->prefix_length > peer->prefix_length)
+			return 0;
 
-	if (rd->best_found != NULL &&
-	    rd->found_exact == exact &&
-	    rd->best_found->prefix_length == peer->prefix_length &&
-	    rd->best_found->last_used < peer->last_used)
-		return 0;
+		if (rd->found_exact == exact &&
+		    rd->best_found->prefix_length == peer->prefix_length &&
+		    rd->best_found->last_used < peer->last_used)
+			return 0;
+	}
 
 	rd->best_found = peer;
 	rd->found_exact = exact;
