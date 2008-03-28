@@ -244,7 +244,7 @@ static void admin_purge(void *ctx, const char *cmd)
 	admin_write(ctx,
 		    "Status: ok\n"
 		    "Entries-Affected: %d\n",
-		    &count);
+		    count);
 }
 
 static void admin_flush(void *ctx, const char *cmd)
@@ -263,7 +263,7 @@ static void admin_flush(void *ctx, const char *cmd)
 	admin_write(ctx,
 		    "Status: ok\n"
 		    "Entries-Affected: %d\n",
-		    &count);
+		    count);
 }
 
 static struct {
