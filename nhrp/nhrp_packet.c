@@ -18,6 +18,8 @@
 #include "nhrp_interface.h"
 #include "nhrp_common.h"
 
+#define PACKET_RETRIES			6
+#define PACKET_RETRY_INTERVAL		5000
 #define RATE_LIMIT_HASH_SIZE		256
 #define RATE_LIMIT_MAX_TOKENS		4
 #define RATE_LIMIT_SEND_INTERVAL	5
@@ -1342,11 +1344,13 @@ static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
 
 	TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
 
-	if (++packet->retry < 3) {
+	if (++packet->retry < PACKET_RETRIES) {
 		nhrp_packet_marshall_and_send(packet);
 
-		TAILQ_INSERT_TAIL(&pending_requests, packet, request_list_entry);
-		nhrp_task_schedule(&packet->timeout, 5000, nhrp_packet_xmit_timeout);
+		TAILQ_INSERT_TAIL(&pending_requests, packet,
+				  request_list_entry);
+		nhrp_task_schedule(&packet->timeout, PACKET_RETRY_INTERVAL,
+				   nhrp_packet_xmit_timeout);
 	} else {
 		packet->handler(packet->handler_ctx, NULL);
 		nhrp_packet_dequeue(packet);
