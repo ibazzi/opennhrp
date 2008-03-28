@@ -466,6 +466,11 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 	if (iface == NULL || rta[IFA_LOCAL] == NULL)
 		return;
 
+	/* Shortcut destination stuff is extracted from routes;
+	 * not from local address information. */
+	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)
+		return;
+
 	nhrp_address_set(&iface->protocol_address, ifa->ifa_family,
 			 RTA_PAYLOAD(rta[IFA_LOCAL]),
 			 RTA_DATA(rta[IFA_LOCAL]));
@@ -479,15 +484,49 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 	switch (ifa->ifa_family) {
 	case PF_INET:
 		peer->protocol_type = ETHPROTO_IP;
-		if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)
-			peer->prefix_length = ifa->ifa_prefixlen;
-		else
-			peer->prefix_length = peer->protocol_address.addr_len * 8;
+		peer->prefix_length = peer->protocol_address.addr_len * 8;
 		nhrp_peer_insert(peer);
 		break;
 	default:
 		break;
 	}
+	nhrp_peer_free(peer);
+}
+
+static void netlink_route_update(struct nlmsghdr *msg)
+{
+	struct nhrp_interface *iface;
+	struct nhrp_peer *peer;
+	struct rtmsg *rtm = NLMSG_DATA(msg);
+	struct rtattr *rta[IFA_MAX+1];
+
+	netlink_parse_rtattr(rta, IFA_MAX, RTM_RTA(rtm), RTM_PAYLOAD(msg));
+	if (rta[RTA_OIF] == NULL || rta[RTA_DST] == NULL)
+		return;
+
+	/* Consider only routes from main table */
+	if (rtm->rtm_table != RT_TABLE_MAIN || rtm->rtm_family != PF_INET)
+		return;
+
+	/* Only consider routes for local interfaces that accept
+	 * shortcut connections */
+	iface = nhrp_interface_get_by_index(*(int*)RTA_DATA(rta[RTA_OIF]),
+					    FALSE);
+	if (iface == NULL)
+		return;
+
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST))
+		return;
+
+	peer = nhrp_peer_alloc(iface);
+	peer->type = NHRP_PEER_TYPE_LOCAL;
+	peer->afnum = AFNUM_RESERVED;
+	nhrp_address_set(&peer->protocol_address, rtm->rtm_family,
+			 RTA_PAYLOAD(rta[RTA_DST]),
+			 RTA_DATA(rta[RTA_DST]));
+	peer->protocol_type = nhrp_protocol_from_pf(rtm->rtm_family);
+	peer->prefix_length = rtm->rtm_dst_len;
+	nhrp_peer_insert(peer);
 	nhrp_peer_free(peer);
 }
 
@@ -498,6 +537,8 @@ static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
 	[RTM_DELLINK] = netlink_link_update,
 	[RTM_NEWADDR] = netlink_addr_update,
 	[RTM_DELADDR] = netlink_addr_update,
+	[RTM_NEWROUTE] = netlink_route_update,
+	[RTM_DELROUTE] = netlink_route_update,
 };
 
 static int netlink_read(void *ctx, int fd, short events)
@@ -606,7 +647,9 @@ static int pfpacket_read(void *ctx, int fd, short events)
 
 int kernel_init(void)
 {
-	const int groups = RTMGRP_NEIGH | RTMGRP_LINK | RTMGRP_IPV4_IFADDR;
+	const int groups =
+		RTMGRP_NEIGH | RTMGRP_LINK |
+		RTMGRP_IPV4_IFADDR | RTMGRP_IPV4_ROUTE;
 
 	packet_fd = socket(PF_PACKET, SOCK_DGRAM, ETHPROTO_NHRP);
 	if (packet_fd < 0) {
@@ -631,6 +674,9 @@ int kernel_init(void)
 	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
 
 	netlink_enumerate(&netlink_fd, AF_UNSPEC, RTM_GETADDR);
+	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
+
+	netlink_enumerate(&netlink_fd, AF_UNSPEC, RTM_GETROUTE);
 	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
 
 	return TRUE;
