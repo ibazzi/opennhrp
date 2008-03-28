@@ -66,12 +66,12 @@ static int read_word(FILE *in, int *lineno, size_t len, char *word)
 
 	ch = fgetc(in);
 	while (1) {
+		if (ch == EOF)
+			return FALSE;
 		if (ch == '#')
 			comment = 1;
 		if (!comment && !isspace(ch))
 			break;
-		if (ch == EOF)
-			return FALSE;
 		if (ch == '\n') {
 			(*lineno)++;
 			comment = 0;
