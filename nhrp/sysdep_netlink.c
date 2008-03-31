@@ -498,9 +498,9 @@ static void netlink_route_update(struct nlmsghdr *msg)
 	struct nhrp_interface *iface;
 	struct nhrp_peer *peer;
 	struct rtmsg *rtm = NLMSG_DATA(msg);
-	struct rtattr *rta[RTM_MAX+1];
+	struct rtattr *rta[RTA_MAX+1];
 
-	netlink_parse_rtattr(rta, RTM_MAX, RTM_RTA(rtm), RTM_PAYLOAD(msg));
+	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(rtm), RTM_PAYLOAD(msg));
 	if (rta[RTA_OIF] == NULL || rta[RTA_DST] == NULL)
 		return;
 
