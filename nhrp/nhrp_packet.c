@@ -1344,7 +1344,8 @@ static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
 
 	TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
 
-	if (++packet->retry < PACKET_RETRIES) {
+	if (packet->dst_peer != NULL &&
+	    ++packet->retry < PACKET_RETRIES) {
 		nhrp_packet_marshall_and_send(packet);
 
 		TAILQ_INSERT_TAIL(&pending_requests, packet,
@@ -1352,6 +1353,8 @@ static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
 		nhrp_task_schedule(&packet->timeout, PACKET_RETRY_INTERVAL,
 				   nhrp_packet_xmit_timeout);
 	} else {
+		if (packet->dst_peer == NULL)
+			nhrp_error("nhrp_packet_xmit_timeout: no destination peer!");
 		packet->handler(packet->handler_ctx, NULL);
 		nhrp_packet_dequeue(packet);
 	}

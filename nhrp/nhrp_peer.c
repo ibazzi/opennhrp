@@ -1078,12 +1078,12 @@ static int decide_route(void *ctx, struct nhrp_peer *peer)
 	if (rd->found_exact > exact)
 		return 0;
 
-	if (rd->best_found != NULL) {
+	if (rd->best_found != NULL &&
+	    rd->found_exact == exact) {
 		if (rd->best_found->prefix_length > peer->prefix_length)
 			return 0;
 
-		if (rd->found_exact == exact &&
-		    rd->best_found->prefix_length == peer->prefix_length &&
+		if (rd->best_found->prefix_length == peer->prefix_length &&
 		    rd->best_found->last_used < peer->last_used)
 			return 0;
 	}
