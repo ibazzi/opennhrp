@@ -425,7 +425,7 @@ static void netlink_link_update(struct nlmsghdr *msg)
 			/* Mark the interface as owning all NBMA addresses
 			 * this works when there's only one GRE interface */
 			iface->link_index = -1;
-			nhrp_address_set_type(&iface->nbma_address, PF_UNKNOWN);
+			nhrp_address_set_type(&iface->nbma_address, PF_UNSPEC);
 			nhrp_error("Cannot figure out NBMA address for "
 				   "interface '%s'", ifname);
 		}

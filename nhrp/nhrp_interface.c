@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <malloc.h>
+#include <sys/socket.h>
 #include "nhrp_interface.h"
 
 #define INDEX_HASH_SIZE (1 << 4)
@@ -88,7 +89,7 @@ struct nhrp_interface *nhrp_interface_get_by_nbma(struct nhrp_address *addr)
 			return iface;
 
 		if (iface->link_index == -1 &&
-		    iface->nbma_address.type == PF_UNKNOWN)
+		    iface->nbma_address.type == PF_UNSPEC)
 			return iface;
 	}
 
