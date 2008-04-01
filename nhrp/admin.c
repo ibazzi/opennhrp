@@ -92,14 +92,17 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 			nhrp_address_format(&peer->next_hop_nat_oa, sizeof(tmp), tmp));
 	}
 	if (peer->flags & (NHRP_PEER_FLAG_USED | NHRP_PEER_FLAG_UNIQUE |
-			   NHRP_PEER_FLAG_UP)) {
+			   NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP)) {
 		i += snprintf(&buf[i], len - i, "Flags:");
-		if (peer->flags & NHRP_PEER_FLAG_USED)
-			i += snprintf(&buf[i], len - i, " used");
 		if (peer->flags & NHRP_PEER_FLAG_UNIQUE)
 			i += snprintf(&buf[i], len - i, " unique");
+
+		if (peer->flags & NHRP_PEER_FLAG_USED)
+			i += snprintf(&buf[i], len - i, " used");
 		if (peer->flags & NHRP_PEER_FLAG_UP)
 			i += snprintf(&buf[i], len - i, " up");
+		else if (peer->flags & NHRP_PEER_FLAG_LOWER_UP)
+			i += snprintf(&buf[i], len - i, " lower-up");
 		i += snprintf(&buf[i], len - i, "\n");
 	}
 	if (peer->expire_time)

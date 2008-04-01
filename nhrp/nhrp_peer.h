@@ -26,11 +26,12 @@
 #define NHRP_PEER_TYPE_LOCAL		0x06	/* Learned from interface config */
 #define NHRP_PEER_TYPE_MAX		0x07
 
-#define NHRP_PEER_FLAG_USED		0x01	/* Peer is in kernel ARP table */
-#define NHRP_PEER_FLAG_UNIQUE		0x02	/* Peer is unique; see RFC2332 */
-#define NHRP_PEER_FLAG_UP		0x04	/* Peer up script has been run */
-#define NHRP_PEER_FLAG_REGISTER		0x08	/* For TYPE_STATIC: send registration */
-#define NHRP_PEER_FLAG_REPLACED		0x10	/* Peer has been replaced */
+#define NHRP_PEER_FLAG_UNIQUE		0x01	/* Peer is unique; see RFC2332 */
+#define NHRP_PEER_FLAG_REGISTER		0x02	/* For TYPE_STATIC: send registration */
+#define NHRP_PEER_FLAG_USED		0x10	/* Peer is in kernel ARP table */
+#define NHRP_PEER_FLAG_LOWER_UP		0x20	/* Script executed succesfully */
+#define NHRP_PEER_FLAG_UP		0x40	/* Can send all packets (registration ok) */
+#define NHRP_PEER_FLAG_REPLACED		0x80	/* Peer has been replaced */
 
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02

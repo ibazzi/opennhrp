@@ -130,6 +130,8 @@ static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 		i += snprintf(&buf[i], len - i, " unique");
 	if (peer->flags & NHRP_PEER_FLAG_UP)
 		i += snprintf(&buf[i], len - i, " up");
+	else if (peer->flags & NHRP_PEER_FLAG_LOWER_UP)
+		i += snprintf(&buf[i], len - i, " lower-up");
 	if (peer->expire_time) {
 		int rel = peer->expire_time - time(NULL);
 		if (rel >= 0) {
@@ -228,7 +230,7 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 	exit(1);
 }
 
-static void nhrp_peer_static_up(struct nhrp_peer *peer, int status)
+static void nhrp_peer_script_peer_up_done(struct nhrp_peer *peer, int status)
 {
 	char tmp[64];
 
@@ -237,50 +239,34 @@ static void nhrp_peer_static_up(struct nhrp_peer *peer, int status)
 			   nhrp_address_format(&peer->protocol_address,
 					       sizeof(tmp), tmp));
 
-		nhrp_peer_up(peer);
+		kernel_inject_neighbor(&peer->protocol_address,
+				       &peer->next_hop_address,
+				       peer->interface);
 
+		peer->flags |= NHRP_PEER_FLAG_LOWER_UP;
 		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
 			nhrp_peer_register(peer);
+		else
+			nhrp_peer_up(peer);
 	} else {
 		nhrp_error("[%s] Peer up script failed with status %x",
 			   nhrp_address_format(&peer->protocol_address,
 					       sizeof(tmp), tmp),
 			   status);
 
-		nhrp_task_schedule(&peer->task, 10000, nhrp_run_up_script_task);
+		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
+			nhrp_task_schedule(&peer->task, 10000, nhrp_run_up_script_task);
+		else
+			nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 	}
 }
 
-static void nhrp_peer_static_down(struct nhrp_peer *peer, int status)
+static void nhrp_peer_script_peer_down_done(struct nhrp_peer *peer, int status)
 {
 	nhrp_task_schedule(&peer->task, 5000, nhrp_run_up_script_task);
 }
 
-static void nhrp_peer_dynamic_up(struct nhrp_peer *peer, int status)
-{
-	char tmp[64];
-
-	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-		nhrp_debug("[%s] Peer up script succesfully executed",
-			   nhrp_address_format(&peer->protocol_address,
-					       sizeof(tmp), tmp));
-
-		nhrp_peer_up(peer);
-		kernel_inject_neighbor(&peer->protocol_address,
-				       &peer->next_hop_address,
-				       peer->interface);
-	} else {
-		nhrp_info("[%s] Peer up script failed with status %x;"
-			  "adding negative cached entry",
-			  nhrp_address_format(&peer->protocol_address,
-					      sizeof(tmp), tmp),
-			  status);
-
-		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
-	}
-}
-
-static void nhrp_peer_route_up(struct nhrp_peer *peer, int status)
+static void nhrp_peer_script_route_up_done(struct nhrp_peer *peer, int status)
 {
 	char tmp[64];
 
@@ -319,7 +305,7 @@ static void nhrp_run_up_script_task(struct nhrp_task *task)
 					    sizeof(host), host));
 	}
 
-	nhrp_peer_run_script(peer, "peer-up", nhrp_peer_static_up);
+	nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
 }
 
 static void nhrp_peer_up(struct nhrp_peer *peer)
@@ -327,7 +313,7 @@ static void nhrp_peer_up(struct nhrp_peer *peer)
 	struct nhrp_interface *iface = peer->interface;
 	struct nhrp_peer *p;
 
-	peer->flags |= NHRP_PEER_FLAG_UP;
+	peer->flags |= NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP;
 
 	/* Check if there are routes using this peer as next-hop*/
 	CIRCLEQ_FOREACH(p, &iface->peer_cache, peer_list) {
@@ -341,7 +327,7 @@ static void nhrp_peer_up(struct nhrp_peer *peer)
 				     &peer->protocol_address) != 0)
 			continue;
 
-		nhrp_peer_run_script(p, "route-up", nhrp_peer_route_up);
+		nhrp_peer_run_script(p, "route-up", nhrp_peer_script_route_up_done);
 	}
 
 	if (peer->queued_packet != NULL) {
@@ -393,6 +379,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	}
 
 	/* Re-register after holding time expires */
+	nhrp_peer_up(peer);
 	nhrp_task_schedule(&peer->task,
 			   (NHRP_HOLDING_TIME - NHRP_RENEW_TIME) * 1000,
 			   nhrp_peer_register_task);
@@ -856,8 +843,8 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 		/* Fallthrough to bring peer up */
 	case NHRP_PEER_TYPE_DYNAMIC:
 		nhrp_peer_resolve_nbma(peer);
-		if (!(peer->flags & NHRP_PEER_FLAG_UP))
-			nhrp_peer_run_script(peer, "peer-up", nhrp_peer_dynamic_up);
+		if (!(peer->flags & NHRP_PEER_FLAG_LOWER_UP))
+			nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
 		nexthop = nhrp_peer_route(peer->interface,
@@ -865,7 +852,7 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 					  NHRP_PEER_FIND_UP, NULL);
 		if (nexthop != NULL && !(peer->flags & NHRP_PEER_FLAG_UP))
 			nhrp_peer_run_script(peer, "route-up",
-					     nhrp_peer_route_up);
+					     nhrp_peer_script_route_up_done);
 		nhrp_task_schedule(&peer->task,
 				   (peer->expire_time - time(NULL) - NHRP_RENEW_TIME - 1) * 1000,
 				   nhrp_peer_check_renew_task);
@@ -923,9 +910,9 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 {
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
-		peer->flags &= ~NHRP_PEER_FLAG_UP;
+		peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
 		nhrp_task_cancel(&peer->task);
-		nhrp_peer_run_script(peer, "peer-down", nhrp_peer_static_down);
+		nhrp_peer_run_script(peer, "peer-down", nhrp_peer_script_peer_down_done);
 		break;
 	default:
 		nhrp_peer_remove(peer);
@@ -981,9 +968,7 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 		return FALSE;
 
 	if ((sel->flags & NHRP_PEER_FIND_PURGEABLE) &&
-	    (p->type == NHRP_PEER_TYPE_LOCAL ||
-	     (p->type == NHRP_PEER_TYPE_STATIC &&
-	      !(p->flags & NHRP_PEER_FLAG_UP))))
+	    (p->type == NHRP_PEER_TYPE_LOCAL))
 		return FALSE;
 
 	if (sel->interface != NULL &&

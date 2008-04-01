@@ -382,11 +382,11 @@ static int remove_old_registrations(void *ctx, struct nhrp_peer *p)
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx;
 
 	/* If re-registration, mark the new connection up */
-	if ((p->flags & NHRP_PEER_FLAG_UP) &&
-	    nhrp_address_cmp(&peer->protocol_address, &p->protocol_address) == 0 &&
+	if (nhrp_address_cmp(&peer->protocol_address, &p->protocol_address) == 0 &&
 	    nhrp_address_cmp(&peer->next_hop_address, &p->next_hop_address) == 0 &&
 	    peer->prefix_length == p->prefix_length)
-		peer->flags |= NHRP_PEER_FLAG_UP;
+		peer->flags |= p->flags & (NHRP_PEER_FLAG_UP |
+					   NHRP_PEER_FLAG_LOWER_UP);
 
 	p->flags |= NHRP_PEER_FLAG_REPLACED;
 	nhrp_peer_remove(p);
@@ -1296,7 +1296,8 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
         if (packet->dst_peer->type == NHRP_PEER_TYPE_LOCAL)
 		return nhrp_packet_receive_local(packet);
 
-	if (packet->dst_peer->flags & NHRP_PEER_FLAG_UP)
+	if (packet->dst_peer->flags & (NHRP_PEER_FLAG_UP |
+				       NHRP_PEER_FLAG_LOWER_UP))
 		return nhrp_packet_marshall_and_send(packet);
 
 	if (packet->dst_peer->queued_packet != NULL)
