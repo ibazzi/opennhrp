@@ -230,12 +230,23 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 
 static void nhrp_peer_static_up(struct nhrp_peer *peer, int status)
 {
+	char tmp[64];
+
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+		nhrp_debug("[%s] Peer up script succesfully executed",
+			   nhrp_address_format(&peer->protocol_address,
+					       sizeof(tmp), tmp));
+
 		nhrp_peer_up(peer);
 
 		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
 			nhrp_peer_register(peer);
 	} else {
+		nhrp_error("[%s] Peer up script failed with status %x",
+			   nhrp_address_format(&peer->protocol_address,
+					       sizeof(tmp), tmp),
+			   status);
+
 		nhrp_task_schedule(&peer->task, 10000, nhrp_run_up_script_task);
 	}
 }
@@ -247,21 +258,45 @@ static void nhrp_peer_static_down(struct nhrp_peer *peer, int status)
 
 static void nhrp_peer_dynamic_up(struct nhrp_peer *peer, int status)
 {
+	char tmp[64];
+
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+		nhrp_debug("[%s] Peer up script succesfully executed",
+			   nhrp_address_format(&peer->protocol_address,
+					       sizeof(tmp), tmp));
+
 		nhrp_peer_up(peer);
 		kernel_inject_neighbor(&peer->protocol_address,
 				       &peer->next_hop_address,
 				       peer->interface);
 	} else {
+		nhrp_info("[%s] Peer up script failed with status %x;"
+			  "adding negative cached entry",
+			  nhrp_address_format(&peer->protocol_address,
+					      sizeof(tmp), tmp),
+			  status);
+
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 	}
 }
 
 static void nhrp_peer_route_up(struct nhrp_peer *peer, int status)
 {
+	char tmp[64];
+
 	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+		nhrp_debug("[%s] Route up script succesfully executed",
+			   nhrp_address_format(&peer->protocol_address,
+					       sizeof(tmp), tmp));
+
 		peer->flags |= NHRP_PEER_FLAG_UP;
 	} else {
+		nhrp_info("[%s] Route up script failed with status %x;"
+			  "adding negative cached entry",
+			  nhrp_address_format(&peer->protocol_address,
+					      sizeof(tmp), tmp),
+			  status);
+
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 	}
 }
