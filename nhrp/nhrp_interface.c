@@ -86,6 +86,10 @@ struct nhrp_interface *nhrp_interface_get_by_nbma(struct nhrp_address *addr)
 	LIST_FOREACH(iface, &name_list, name_list) {
 		if (nhrp_address_cmp(addr, &iface->nbma_address) == 0)
 			return iface;
+
+		if (iface->link_index == -1 &&
+		    iface->nbma_address.type == PF_UNKNOWN)
+			return iface;
 	}
 
 	return NULL;
