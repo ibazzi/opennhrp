@@ -929,7 +929,10 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 {
 	struct nhrp_interface *iface = peer->interface;
 
-	CIRCLEQ_REMOVE(&iface->peer_cache, peer, peer_list);
+	if (peer->type == NHRP_PEER_TYPE_LOCAL)
+		CIRCLEQ_REMOVE(&local_peer_cache, peer, peer_list);
+	else
+		CIRCLEQ_REMOVE(&iface->peer_cache, peer, peer_list);
 	nhrp_peer_free(peer);
 }
 
