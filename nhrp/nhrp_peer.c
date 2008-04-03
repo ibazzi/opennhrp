@@ -928,6 +928,11 @@ int nhrp_peer_purge_matching(void *ctx, struct nhrp_peer *peer)
 void nhrp_peer_remove(struct nhrp_peer *peer)
 {
 	struct nhrp_interface *iface = peer->interface;
+	char tmp[NHRP_PEER_FORMAT_LEN];
+
+	nhrp_info("Removing %s %s",
+		  nhrp_peer_type[peer->type],
+		  nhrp_peer_format(peer, sizeof(tmp), tmp));
 
 	if (peer->type == NHRP_PEER_TYPE_LOCAL)
 		CIRCLEQ_REMOVE(&local_peer_cache, peer, peer_list);
