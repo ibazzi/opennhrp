@@ -389,7 +389,7 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 		nhrp_peer_set_used(iface, &addr, FALSE);
 }
 
-static void netlink_link_update(struct nlmsghdr *msg)
+static void netlink_link_new(struct nlmsghdr *msg)
 {
 	struct nhrp_interface *iface;
 	struct ifinfomsg *ifi = NLMSG_DATA(msg);
@@ -440,6 +440,31 @@ static void netlink_link_update(struct nlmsghdr *msg)
 	}
 }
 
+static void netlink_link_del(struct nlmsghdr *msg)
+{
+	struct nhrp_interface *iface;
+	struct ifinfomsg *ifi = NLMSG_DATA(msg);
+	struct rtattr *rta[IFLA_MAX+1];
+	const char *ifname;
+
+	netlink_parse_rtattr(rta, IFLA_MAX, IFLA_RTA(ifi), IFLA_PAYLOAD(msg));
+	if (rta[IFLA_IFNAME] == NULL)
+		return;
+
+	ifname = RTA_DATA(rta[IFLA_IFNAME]);
+	iface = nhrp_interface_get_by_name(ifname, FALSE);
+	if (iface == NULL)
+		return;
+
+	nhrp_info("Interface '%s' deleted", ifname);
+	iface->index = 0;
+	iface->link_index = 0;
+	nhrp_interface_hash(iface);
+
+	nhrp_address_set_type(&iface->nbma_address, PF_UNSPEC);
+	nhrp_address_set_type(&iface->protocol_address, PF_UNSPEC);
+}
+
 static int netlink_addr_update_nbma(void *ctx, struct nhrp_interface *iface)
 {
 	struct nlmsghdr *msg = (struct nlmsghdr *) ctx;
@@ -456,7 +481,7 @@ static int netlink_addr_update_nbma(void *ctx, struct nhrp_interface *iface)
 	return 0;
 }
 
-static void netlink_addr_update(struct nlmsghdr *msg)
+static void netlink_addr_new(struct nlmsghdr *msg)
 {
 	struct nhrp_interface *iface;
 	struct nhrp_peer *peer;
@@ -497,7 +522,35 @@ static void netlink_addr_update(struct nlmsghdr *msg)
 	nhrp_peer_free(peer);
 }
 
-static void netlink_route_update(struct nlmsghdr *msg)
+static void netlink_addr_del(struct nlmsghdr *msg)
+{
+	struct nhrp_interface *iface;
+	struct ifaddrmsg *ifa = NLMSG_DATA(msg);
+	struct rtattr *rta[IFA_MAX+1];
+	struct nhrp_peer_selector sel;
+
+	nhrp_interface_foreach(netlink_addr_update_nbma, msg);
+
+	netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(msg));
+	iface = nhrp_interface_get_by_index(ifa->ifa_index, FALSE);
+	if (iface == NULL)
+		return;
+
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_EXACT;
+	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL);
+	sel.interface = iface;
+	nhrp_address_set(&sel.protocol_address, ifa->ifa_family,
+			 RTA_PAYLOAD(rta[IFA_LOCAL]),
+			 RTA_DATA(rta[IFA_LOCAL]));
+	sel.prefix_length = sel.protocol_address.addr_len * 8;
+
+	if (nhrp_address_cmp(&sel.protocol_address, &iface->protocol_address) == 0)
+		nhrp_address_set_type(&iface->protocol_address, PF_UNSPEC);
+	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+}
+
+static void netlink_route_new(struct nlmsghdr *msg)
 {
 	struct nhrp_interface *iface;
 	struct nhrp_peer *peer;
@@ -534,15 +587,51 @@ static void netlink_route_update(struct nlmsghdr *msg)
 	nhrp_peer_free(peer);
 }
 
+static void netlink_route_del(struct nlmsghdr *msg)
+{
+	struct nhrp_interface *iface;
+	struct rtmsg *rtm = NLMSG_DATA(msg);
+	struct rtattr *rta[RTA_MAX+1];
+	struct nhrp_peer_selector sel;
+
+	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(rtm), RTM_PAYLOAD(msg));
+	if (rta[RTA_OIF] == NULL || rta[RTA_DST] == NULL)
+		return;
+
+	/* Consider only routes from main table */
+	if (rtm->rtm_table != RT_TABLE_MAIN || rtm->rtm_family != PF_INET)
+		return;
+
+	/* Only consider routes for local interfaces that accept
+	 * shortcut connections */
+	iface = nhrp_interface_get_by_index(*(int*)RTA_DATA(rta[RTA_OIF]),
+					    FALSE);
+	if (iface == NULL)
+		return;
+
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST))
+		return;
+
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_EXACT;
+	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL);
+	sel.interface = iface;
+	nhrp_address_set(&sel.protocol_address, rtm->rtm_family,
+			 RTA_PAYLOAD(rta[RTA_DST]),
+			 RTA_DATA(rta[RTA_DST]));
+	sel.prefix_length = rtm->rtm_dst_len;
+	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+}
+
 static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
 	[RTM_GETNEIGH] = netlink_neigh_request,
 	[RTM_NEWNEIGH] = netlink_neigh_update,
-	[RTM_NEWLINK] = netlink_link_update,
-	[RTM_DELLINK] = netlink_link_update,
-	[RTM_NEWADDR] = netlink_addr_update,
-	[RTM_DELADDR] = netlink_addr_update,
-	[RTM_NEWROUTE] = netlink_route_update,
-	[RTM_DELROUTE] = netlink_route_update,
+	[RTM_NEWLINK] = netlink_link_new,
+	[RTM_DELLINK] = netlink_link_del,
+	[RTM_NEWADDR] = netlink_addr_new,
+	[RTM_DELADDR] = netlink_addr_del,
+	[RTM_NEWROUTE] = netlink_route_new,
+	[RTM_DELROUTE] = netlink_route_del,
 };
 
 static int netlink_read(void *ctx, int fd, short events)
