@@ -6,6 +6,22 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
+ opennhrp 0.6.2 - released ??/Apr/2008
+-----------------------------------------------------------------------------
+ - accept shortcuts when a route to shortcut-destination interface exists
+   (in addition to local addresses in that interface)
+ - handle netlink link, address and route deleted notifications properly
+ - print error if opennhrp-script fails for some reason
+ - change peer flags: 'lower-up' means opennhrps-script was ran succesfully,
+   'up' means registration has been also done (if it was required)
+ - fix matching of local-nbma selector when gre interface has no remote
+   address and is not explicitely bound to other interface
+ - fix admin interface to give 'Affected-Entries' result correctly
+ - fix config file reading bug; handle last keyword even if there is no
+   final new line
+ - code cleanups and optimizations
+
+-----------------------------------------------------------------------------
  opennhrp 0.6.1 - released 20/Mar/2008
 -----------------------------------------------------------------------------
  - fix a crash in error path of packet forwarding
