@@ -371,12 +371,6 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	return nhrp_packet_send(packet);
 }
 
-static int remove_peer(void *ctx, struct nhrp_peer *p)
-{
-	nhrp_peer_remove(p);
-	return 0;
-}
-
 static int remove_old_registrations(void *ctx, struct nhrp_peer *p)
 {
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx;
@@ -473,7 +467,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 			peer->prefix_length = peer->protocol_address.addr_len * 8;
 
 		memset(&sel, 0, sizeof(sel));
-		sel.flags = NHRP_PEER_FIND_REMOVABLE;
+		sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
 		sel.interface = packet->src_iface;
 		sel.protocol_address = peer->protocol_address;
 		sel.prefix_length = peer->prefix_length;
@@ -532,11 +526,12 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 					    sizeof(tmp), tmp));
 
 		memset(&sel, 0, sizeof(sel));
-		sel.flags = NHRP_PEER_FIND_REMOVABLE | NHRP_PEER_FIND_EXACT;
+		sel.flags = NHRP_PEER_FIND_EXACT;
+		sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
 		sel.interface = packet->src_iface;
 		sel.protocol_address = cie->protocol_address;
 		sel.prefix_length = cie->hdr.prefix_length;
-		nhrp_peer_foreach(remove_peer, NULL, &sel);
+		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 	}
 
 	return ret;

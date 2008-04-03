@@ -113,26 +113,6 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-static int admin_purge_peer(void *ctx, struct nhrp_peer *peer)
-{
-	int *count = (int *) ctx;
-
-	nhrp_peer_purge(peer);
-	(*count)++;
-
-	return 0;
-}
-
-static int admin_remove_peer(void *ctx, struct nhrp_peer *peer)
-{
-	int *count = (int *) ctx;
-
-	nhrp_peer_remove(peer);
-	(*count)++;
-
-	return 0;
-}
-
 static int admin_parse_selector(void *ctx, const char *cmd,
 				struct nhrp_peer_selector *sel)
 {
@@ -237,12 +217,12 @@ static void admin_purge(void *ctx, const char *cmd)
 	int count = 0;
 
 	memset(&sel, 0, sizeof(sel));
-	sel.flags = NHRP_PEER_FIND_PURGEABLE;
+	sel.type_mask = NHRP_PEER_TYPEMASK_PURGEABLE;
 
 	if (!admin_parse_selector(ctx, cmd, &sel))
 		return;
 
-	nhrp_peer_foreach(admin_purge_peer, &count, &sel);
+	nhrp_peer_foreach(nhrp_peer_purge_matching, &count, &sel);
 
 	admin_write(ctx,
 		    "Status: ok\n"
@@ -256,12 +236,12 @@ static void admin_flush(void *ctx, const char *cmd)
 	int count = 0;
 
 	memset(&sel, 0, sizeof(sel));
-	sel.flags = NHRP_PEER_FIND_REMOVABLE;
+	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
 
 	if (!admin_parse_selector(ctx, cmd, &sel))
 		return;
 
-	nhrp_peer_foreach(admin_remove_peer, &count, &sel);
+	nhrp_peer_foreach(nhrp_peer_remove_matching, &count, &sel);
 
 	admin_write(ctx,
 		    "Status: ok\n"

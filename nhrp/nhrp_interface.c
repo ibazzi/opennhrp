@@ -13,6 +13,7 @@
 #include <malloc.h>
 #include <sys/socket.h>
 #include "nhrp_interface.h"
+#include "nhrp_address.h"
 
 #define INDEX_HASH_SIZE (1 << 4)
 

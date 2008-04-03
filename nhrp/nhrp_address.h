@@ -12,6 +12,7 @@
 #define NHRP_ADDRESS_H
 
 #include <stdint.h>
+#include <sys/socket.h>
 
 #define NHRP_MAX_ADDRESS_LEN            6
 

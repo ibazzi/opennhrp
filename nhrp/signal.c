@@ -23,12 +23,6 @@ static void signal_handler(int sig)
 	send(signal_pipe[1], &sig, sizeof(sig), MSG_DONTWAIT);
 }
 
-static int do_remove(void *ctx, struct nhrp_peer *peer)
-{
-	nhrp_peer_remove(peer);
-	return 0;
-}
-
 static int reap_children(void *ctx, int fd, short events)
 {
 	struct nhrp_peer_selector sel;
@@ -53,8 +47,8 @@ static int reap_children(void *ctx, int fd, short events)
 		break;
 	case SIGHUP:
 		memset(&sel, 0, sizeof(sel));
-		sel.flags = NHRP_PEER_FIND_REMOVABLE;
-		nhrp_peer_foreach(do_remove, NULL, &sel);
+		sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
+		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 		break;
 	}
 	return 0;

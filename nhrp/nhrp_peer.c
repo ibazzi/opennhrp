@@ -869,12 +869,6 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 	}
 }
 
-static int remove_peer(void *ctx, struct nhrp_peer *peer)
-{
-	nhrp_peer_remove(peer);
-	return 0;
-}
-
 void nhrp_peer_insert(struct nhrp_peer *ins)
 {
 	struct nhrp_interface *iface = ins->interface;
@@ -884,11 +878,11 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 
 	/* First, prune all duplicates */
 	memset(&sel, 0, sizeof(sel));
-	sel.flags = NHRP_PEER_FIND_REMOVABLE;
+	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
 	sel.interface = iface;
 	sel.protocol_address = ins->protocol_address;
 	sel.prefix_length = ins->prefix_length;
-	nhrp_peer_foreach(remove_peer, NULL, &sel);
+	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 
 	peer = nhrp_peer_dup(ins);
 	if (peer->type == NHRP_PEER_TYPE_LOCAL)
@@ -920,12 +914,34 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 	}
 }
 
+int nhrp_peer_purge_matching(void *ctx, struct nhrp_peer *peer)
+{
+	int *count = (int *) ctx;
+
+	nhrp_peer_purge(peer);
+	if (count != NULL)
+		(*count)++;
+
+	return 0;
+}
+
 void nhrp_peer_remove(struct nhrp_peer *peer)
 {
 	struct nhrp_interface *iface = peer->interface;
 
 	CIRCLEQ_REMOVE(&iface->peer_cache, peer, peer_list);
 	nhrp_peer_free(peer);
+}
+
+int nhrp_peer_remove_matching(void *ctx, struct nhrp_peer *peer)
+{
+	int *count = (int *) ctx;
+
+	nhrp_peer_remove(peer);
+	if (count != NULL)
+		(*count)++;
+
+	return 0;
 }
 
 void nhrp_peer_set_used(struct nhrp_interface *iface,
@@ -954,21 +970,15 @@ void nhrp_peer_set_used(struct nhrp_interface *iface,
 
 int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 {
+	if (sel->type_mask && !(sel->type_mask & BIT(p->type)))
+		return FALSE;
+
 	if ((sel->flags & NHRP_PEER_FIND_COMPLETE) &&
 	    p->type == NHRP_PEER_TYPE_INCOMPLETE)
 		return FALSE;
 
 	if ((sel->flags & NHRP_PEER_FIND_UP) &&
 	    !(p->flags & NHRP_PEER_FLAG_UP))
-		return FALSE;
-
-	if ((sel->flags & NHRP_PEER_FIND_REMOVABLE) &&
-	    (p->type == NHRP_PEER_TYPE_LOCAL ||
-	     p->type == NHRP_PEER_TYPE_STATIC))
-		return FALSE;
-
-	if ((sel->flags & NHRP_PEER_FIND_PURGEABLE) &&
-	    (p->type == NHRP_PEER_TYPE_LOCAL))
 		return FALSE;
 
 	if (sel->interface != NULL &&
