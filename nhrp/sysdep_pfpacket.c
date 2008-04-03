@@ -102,8 +102,6 @@ static int check_ipv4(void *ctx, struct nhrp_peer *peer)
 	struct filter *f = (struct filter *) ctx;
 	unsigned long addr, mask;
 
-	if (peer->type != NHRP_PEER_TYPE_LOCAL)
-		return 0;
 	if (peer->protocol_type != ETHPROTO_IP)
 		return 0;
 
@@ -122,6 +120,7 @@ static struct nhrp_task install_filter_task;
 
 void install_filter(struct nhrp_task *task)
 {
+	struct nhrp_peer_selector sel;
 	struct sock_fprog prog;
 	struct filter f;
 	int i;
@@ -144,7 +143,10 @@ void install_filter(struct nhrp_task *task)
 	emit_jump(&f, BPF_JMP|BPF_JEQ|BPF_K,   ETH_P_IP, LABEL_NEXT, LABEL_NOT_IPV4);
 
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, saddr));
-	nhrp_peer_foreach(check_ipv4, &f, NULL);
+
+	memset(&sel, 0, sizeof(sel));
+	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL);
+	nhrp_peer_foreach(check_ipv4, &f, &sel);
 	emit_stmt(&f, BPF_RET|BPF_K, 65535);
 
 	mark(&f, LABEL_NOT_IPV4);

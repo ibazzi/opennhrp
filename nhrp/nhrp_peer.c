@@ -1087,6 +1087,11 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 	if (rc != 0)
 		return rc;
 
+	/* Speed optimization: TYPE_LOCAL peers cannot be found from
+	 * other places */
+	if (sel.type_mask == BIT(NHRP_PEER_TYPE_LOCAL))
+		return 0;
+
 	if (iface == NULL)
 		rc = nhrp_interface_foreach(enum_interface_peers, &ectx);
 	else
