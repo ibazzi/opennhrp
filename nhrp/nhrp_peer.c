@@ -939,6 +939,9 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 	else
 		CIRCLEQ_REMOVE(&iface->peer_cache, peer, peer_list);
 	nhrp_peer_free(peer);
+
+	if (peer->type == NHRP_PEER_TYPE_LOCAL)
+		forward_local_addresses_changed();
 }
 
 int nhrp_peer_remove_matching(void *ctx, struct nhrp_peer *peer)
