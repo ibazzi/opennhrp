@@ -483,7 +483,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 {
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx, *np;
 	struct nhrp_payload *payload;
-	struct nhrp_cie *cie, *natcie = NULL;
+	struct nhrp_cie *cie, *natcie = NULL, *natoacie = NULL;
 	struct nhrp_interface *iface;
 	char dst[64], tmp[64], nbma[64];
 	int ec;
@@ -530,6 +530,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	    (payload != NULL)) {
 		natcie = TAILQ_FIRST(&payload->u.cie_list_head);
 		if (natcie != NULL) {
+			natoacie = cie;
 			nhrp_info("NAT detected: really at proto %s nbma %s",
 				nhrp_address_format(&natcie->protocol_address,
 					sizeof(tmp), tmp),
@@ -544,6 +545,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		/* Destination is within NBMA network; update cache */
 		peer->prefix_length = cie->hdr.prefix_length;
 		peer->next_hop_address = natcie->nbma_address;
+		if (natoacie != NULL)
+			peer->next_hop_nat_oa = natoacie->nbma_address;
 		peer->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 		nhrp_address_mask(&peer->protocol_address, peer->prefix_length);
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED);
@@ -562,6 +565,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		np->protocol_type = reply->hdr.protocol_type;
 		np->protocol_address = cie->protocol_address;
 		np->next_hop_address = natcie->nbma_address;
+		if (natoacie != NULL)
+			np->next_hop_nat_oa = natoacie->nbma_address;
 		np->prefix_length = cie->protocol_address.addr_len * 8;
 		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
 		nhrp_peer_insert(np);
