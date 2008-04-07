@@ -138,10 +138,16 @@ void install_filter(struct nhrp_task *task)
 		return;
 	mark(&f, LABEL_IF_OK);
 
-	/* Check for non-local IPv4 source */
+	/* Check for IPv4 */
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_PROTOCOL);
 	emit_jump(&f, BPF_JMP|BPF_JEQ|BPF_K,   ETH_P_IP, LABEL_NEXT, LABEL_NOT_IPV4);
 
+	/* Check for multicast IPv4 destination */
+	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, daddr));
+	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xe0000000, LABEL_NEXT, LABEL_SKIP1);
+	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xf0000000, LABEL_NEXT, LABEL_ACCEPT);
+
+	/* Check for non-local IPv4 source */
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, saddr));
 
 	memset(&sel, 0, sizeof(sel));
@@ -191,9 +197,34 @@ int forward_local_addresses_changed(void)
 	return TRUE;
 }
 
+static int pfp_send_mcast(void *ctx, struct nhrp_peer *peer)
+{
+	struct msghdr *msg = (struct msghdr *) ctx;
+	struct sockaddr_ll *lladdr = (struct sockaddr_ll *) msg->msg_name;
+	char to[32];
+
+	nhrp_debug("Sending multicast to nbma %s",
+		   nhrp_address_format(&peer->next_hop_address,
+				       sizeof(to), to));
+
+	lladdr->sll_halen = peer->next_hop_address.addr_len;
+	memcpy(lladdr->sll_addr, peer->next_hop_address.addr,
+	       lladdr->sll_halen);
+
+	if (sendmsg(packet_fd, msg, 0) < 0) {
+		nhrp_error("Failed to forward multicast packet to %s",
+			   nhrp_address_format(&peer->next_hop_address,
+					       sizeof(to), to));
+	}
+
+	return 0;
+}
+
 static int pfp_read(void *ctx, int fd, short events)
 {
 	struct nhrp_interface *iface;
+	struct nhrp_peer_selector sel;
+	struct nhrp_address src, dst;
 	struct sockaddr_ll lladdr;
 	struct iovec iov;
 	struct msghdr msg = {
@@ -202,16 +233,21 @@ static int pfp_read(void *ctx, int fd, short events)
 		.msg_iov = &iov,
 		.msg_iovlen = 1,
 	};
-	uint8_t buf[2048];
-	int status;
+	union {
+		uint8_t buf[2048];
+		struct iphdr iphdr;
+	} u;
+	char fr[32], to[32];
+	int status, i, nbmaset;
 
 	if (!(events & POLLIN))
 		return 0;
 
-	iov.iov_base = buf;
+	iov.iov_base = u.buf;
 	while (TRUE) {
-		iov.iov_len = sizeof(buf);
-		status = recvmsg(fd, &msg, MSG_DONTWAIT);
+		iov.iov_len = sizeof(u.buf);
+		iov.iov_len = status = recvmsg(fd, &msg, MSG_DONTWAIT);
+		msg.msg_namelen = sizeof(lladdr);
 		if (status < 0) {
 			if (errno == EINTR)
 				continue;
@@ -221,7 +257,7 @@ static int pfp_read(void *ctx, int fd, short events)
 			continue;
 		}
 
-		if (status == 0) {
+		if (iov.iov_len == 0) {
 			nhrp_error("PF_PACKET returned EOF");
 			return 0;
 		}
@@ -233,8 +269,37 @@ static int pfp_read(void *ctx, int fd, short events)
 		if (iface == NULL)
 			continue;
 
-		nhrp_packet_send_traffic(iface, lladdr.sll_protocol,
-					 buf, status);
+		if (!nhrp_address_parse_packet(lladdr.sll_protocol,
+					       iov.iov_len, u.buf,
+					       &src, &dst))
+			return FALSE;
+
+		nbmaset = 0;
+		for (i = 0; i < lladdr.sll_halen; i++)
+			if (lladdr.sll_addr[i] != 0)
+				nbmaset = 1;
+
+		if (nhrp_address_is_multicast(&dst)) {
+			if (nbmaset)
+				continue;
+
+			nhrp_debug("Multicast from %s to %s",
+				   nhrp_address_format(&src, sizeof(fr), fr),
+				   nhrp_address_format(&dst, sizeof(to), to));
+
+
+			memset(&sel, 0, sizeof(sel));
+			sel.interface = iface;
+			sel.type_mask =
+				BIT(NHRP_PEER_TYPE_STATIC) |
+				BIT(NHRP_PEER_TYPE_DYNAMIC) |
+				BIT(NHRP_PEER_TYPE_CACHED);
+			sel.flags = NHRP_PEER_FLAG_UP;
+			nhrp_peer_foreach(pfp_send_mcast, &msg, &sel);
+		} else {
+			nhrp_packet_send_traffic(iface, lladdr.sll_protocol,
+						 u.buf, iov.iov_len);
+		}
 	}
 
 	return 0;

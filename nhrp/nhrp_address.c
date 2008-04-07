@@ -165,6 +165,17 @@ int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b)
 	return memcmp(a->addr, b->addr, a->addr_len + a->subaddr_len);
 }
 
+int nhrp_address_is_multicast(struct nhrp_address *addr)
+{
+	switch (addr->type) {
+	case PF_INET:
+		if ((addr->addr[0] & 0xf0) == 0xe0)
+			return TRUE;
+		break;
+	}
+	return FALSE;
+}
+
 unsigned int nhrp_address_hash(struct nhrp_address *addr)
 {
 	unsigned int hash = 0;
