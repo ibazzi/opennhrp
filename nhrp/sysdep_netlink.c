@@ -474,6 +474,10 @@ static int netlink_addr_new_nbma(void *ctx, struct nhrp_interface *iface)
 	if (iface->link_index == ifa->ifa_index) {
 		netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa),
 				     IFA_PAYLOAD(msg));
+
+		if (rta[IFA_LOCAL] == NULL)
+			return 0;
+
 		nhrp_address_set(&iface->nbma_address, ifa->ifa_family,
 				 RTA_PAYLOAD(rta[IFA_LOCAL]),
 				 RTA_DATA(rta[IFA_LOCAL]));
@@ -532,6 +536,10 @@ static int netlink_addr_del_nbma(void *ctx, struct nhrp_interface *iface)
 	if (iface->link_index == ifa->ifa_index) {
 		netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa),
 				     IFA_PAYLOAD(msg));
+
+		if (rta[IFA_LOCAL] == NULL)
+			return 0;
+
 		nhrp_address_set(&nbma_address, ifa->ifa_family,
 				 RTA_PAYLOAD(rta[IFA_LOCAL]),
 				 RTA_DATA(rta[IFA_LOCAL]));
@@ -553,7 +561,7 @@ static void netlink_addr_del(struct nlmsghdr *msg)
 
 	netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(msg));
 	iface = nhrp_interface_get_by_index(ifa->ifa_index, FALSE);
-	if (iface == NULL)
+	if (iface == NULL || rta[IFA_LOCAL] == NULL)
 		return;
 
 	memset(&sel, 0, sizeof(sel));
