@@ -371,6 +371,11 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	return nhrp_packet_send(packet);
 }
 
+static int find_one(void *ctx, struct nhrp_peer *p)
+{
+	return 1;
+}
+
 static int remove_old_registrations(void *ctx, struct nhrp_peer *p)
 {
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx;
@@ -467,20 +472,24 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 			peer->prefix_length = peer->protocol_address.addr_len * 8;
 
 		memset(&sel, 0, sizeof(sel));
-		sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
+		sel.flags = NHRP_PEER_FIND
+		sel.type_mask = ~NHRP_PEER_TYPEMASK_REMOVABLE;
 		sel.interface = packet->src_iface;
 		sel.protocol_address = peer->protocol_address;
 		sel.prefix_length = peer->prefix_length;
-		nhrp_peer_foreach(remove_old_registrations, peer, &sel);
+		if (nhrp_peer_foreach(find_one, peer, &sel) == 0) {
+			/* Remove all old stuff and accept registration */
+			memset(&sel, 0, sizeof(sel));
+			sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
+			sel.interface = packet->src_iface;
+			sel.protocol_address = peer->protocol_address;
+			sel.prefix_length = peer->prefix_length;
+			nhrp_peer_foreach(remove_old_registrations, peer, &sel);
 
-		p = nhrp_peer_route(packet->src_iface, &peer->protocol_address,
-				    0, NULL);
-		if (p == NULL ||
-		    nhrp_address_cmp(&peer->protocol_address, &p->protocol_address)) {
 			cie->hdr.code = NHRP_CODE_SUCCESS;
 			nhrp_peer_insert(peer);
 		} else {
-			/* Static binding already exists */
+			/* Non-removable binding already exists */
 			cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
 			peer->flags |= NHRP_PEER_FLAG_REPLACED;
 		}
@@ -1167,15 +1176,15 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 	struct nhrp_cie_list_head *cielist = NULL;
 	struct nhrp_payload *payload;
 	char tmp[64];
-	int r, up = 0;
+	int r, exact = 0;
 
 	if (packet->dst_iface == NULL) {
 		nhrp_error("nhrp_packet_route called without destination interface");
 		return FALSE;
 	}
 
-	if (!need_direct)
-		up = NHRP_PEER_FIND_UP;
+	if (need_direct)
+		exact = NHRP_PEER_FIND_EXACT;
 
 	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY) {
 		dest = &packet->src_protocol_address;
@@ -1184,7 +1193,8 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 		dest = &packet->dst_protocol_address;
 		r = NHRP_EXTENSION_FORWARD_TRANSIT_NHS;
 	}
-	payload = nhrp_packet_extension(packet, r | NHRP_EXTENSION_FLAG_NOCREATE,
+	payload = nhrp_packet_extension(packet,
+					r | NHRP_EXTENSION_FLAG_NOCREATE,
 					NHRP_PAYLOAD_TYPE_CIE_LIST);
 	if (payload != NULL)
 		cielist = &payload->u.cie_list_head;
@@ -1203,12 +1213,14 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 
 		packet->dst_peer = nhrp_peer_route(packet->dst_iface,
 						   &proto_nexthop,
-						   NHRP_PEER_FIND_COMPLETE | up,
+						   NHRP_PEER_FIND_COMPLETE |
+						   exact,
 						   cielist);
 		if (packet->dst_peer == NULL ||
 		    packet->dst_peer->type == NHRP_PEER_TYPE_NEGATIVE) {
 			nhrp_error("No peer entry for protocol address %s",
-				nhrp_address_format(&proto_nexthop, sizeof(tmp), tmp));
+				   nhrp_address_format(&proto_nexthop,
+						       sizeof(tmp), tmp));
 			return FALSE;
 		}
 	}

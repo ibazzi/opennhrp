@@ -555,10 +555,9 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 
 	/* Update the received NBMA address to nexthop */
 	iface = peer->interface;
-	np = nhrp_peer_route(iface, &cie->protocol_address, 0, NULL);
-	if (np == NULL ||
-	    nhrp_address_cmp(&cie->protocol_address,
-			     &np->protocol_address) != 0) {
+	np = nhrp_peer_route(iface, &cie->protocol_address,
+			     NHRP_PEER_FIND_EXACT, NULL);
+	if (np == NULL) {
 		np = nhrp_peer_alloc(iface);
 		np->type = NHRP_PEER_TYPE_CACHED;
 		np->afnum = reply->hdr.afnum;
@@ -817,7 +816,6 @@ static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer)
 static void nhrp_peer_insert_task(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
-	struct nhrp_peer *nexthop;
 
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
@@ -842,12 +840,13 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 			nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
-		nexthop = nhrp_peer_route(peer->interface,
-					  &peer->next_hop_address,
-					  NHRP_PEER_FIND_UP, NULL);
-		if (nexthop != NULL && !(peer->flags & NHRP_PEER_FLAG_UP))
+		if (nhrp_peer_route(peer->interface,
+				    &peer->next_hop_address,
+				    NHRP_PEER_FIND_UP | NHRP_PEER_FIND_EXACT,
+				    NULL) != NULL)
 			nhrp_peer_run_script(peer, "route-up",
 					     nhrp_peer_script_route_up_done);
+
 		nhrp_task_schedule(&peer->task,
 				   (peer->expire_time - time(NULL) - NHRP_RENEW_TIME - 1) * 1000,
 				   nhrp_peer_check_renew_task);
@@ -990,7 +989,8 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 					     &sel->protocol_address) != 0)
 				return FALSE;
 
-			if (p->prefix_length != sel->prefix_length)
+			if (p->prefix_length != sel->prefix_length &&
+			    p->type != NHRP_PEER_TYPE_STATIC)
 				return FALSE;
 		} else  if (sel->flags & NHRP_PEER_FIND_ROUTE) {
 			if (bitcmp(p->protocol_address.addr,
@@ -1085,7 +1085,7 @@ struct route_decision {
 	struct nhrp_peer_selector sel;
 	struct nhrp_cie_list_head *exclude;
 	struct nhrp_peer *best_found;
-	int found_exact;
+	int found_exact, found_up;
 };
 
 static int decide_route(void *ctx, struct nhrp_peer *peer)
@@ -1100,13 +1100,18 @@ static int decide_route(void *ctx, struct nhrp_peer *peer)
 					rd->exclude))
 		return 0;
 
-	exact = nhrp_address_cmp(&peer->protocol_address,
-				 &rd->sel.protocol_address) == 0;
+	exact = (peer->type >= NHRP_PEER_TYPE_STATIC) &&
+		(nhrp_address_cmp(&peer->protocol_address,
+				  &rd->sel.protocol_address) == 0);
 	if (rd->found_exact > exact)
 		return 0;
 
+	if (rd->found_up && !(peer->flags & NHRP_PEER_FLAG_UP))
+		return 0;
+
 	if (rd->best_found != NULL &&
-	    rd->found_exact == exact) {
+	    rd->found_exact == exact &&
+	    rd->found_up == (peer->flags & NHRP_PEER_FLAG_UP)) {
 		if (rd->best_found->prefix_length > peer->prefix_length)
 			return 0;
 
@@ -1117,6 +1122,7 @@ static int decide_route(void *ctx, struct nhrp_peer *peer)
 
 	rd->best_found = peer;
 	rd->found_exact = exact;
+	rd->found_up = peer->flags & NHRP_PEER_FLAG_UP;
 	return 0;
 }
 
@@ -1127,12 +1133,18 @@ struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *interface,
 	struct route_decision rd;
 
 	memset(&rd, 0, sizeof(rd));
-	rd.sel.flags = flags | NHRP_PEER_FIND_ROUTE;
+	rd.sel.flags = flags & ~NHRP_PEER_FIND_UP;
+	if (flags & (NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_EXACT |
+		     NHRP_PEER_FIND_SUBNET) == 0)
+		rd.sel.flags |= NHRP_PEER_FIND_ROUTE
 	rd.sel.interface = interface;
 	rd.sel.protocol_address = *dest;
 	rd.exclude = exclude;
-
 	nhrp_peer_foreach(decide_route, &rd, &rd.sel);
+
+	if ((flags & NHRP_PEER_FIND_UP) &&
+	    !(rd.best_found->flags & NHRP_PEER_FLAG_UP))
+		return NULL;
 
 	if (rd.best_found != NULL)
 		time(&rd.best_found->last_used);
@@ -1146,8 +1158,8 @@ void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 	struct nhrp_peer *peer;
 
 	/* Have we done something for this destination already? */
-	peer = nhrp_peer_route(iface, dst, 0, NULL);
-	if (peer != NULL && peer->type <= NHRP_PEER_TYPE_CACHED_ROUTE)
+	peer = nhrp_peer_route(iface, dst, NHRP_PEER_FIND_EXACT, NULL);
+	if (peer != NULL)
 		return;
 
 	/* Initiate resolution */
