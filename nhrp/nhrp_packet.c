@@ -397,7 +397,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	char tmp[64], tmp2[64];
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
-	struct nhrp_peer *peer, *p;
+	struct nhrp_peer *peer;
 	struct nhrp_peer_selector sel;
 	int natted = 0;
 
@@ -472,7 +472,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 			peer->prefix_length = peer->protocol_address.addr_len * 8;
 
 		memset(&sel, 0, sizeof(sel));
-		sel.flags = NHRP_PEER_FIND
+		sel.flags = NHRP_PEER_FIND_EXACT;
 		sel.type_mask = ~NHRP_PEER_TYPEMASK_REMOVABLE;
 		sel.interface = packet->src_iface;
 		sel.protocol_address = peer->protocol_address;
@@ -480,6 +480,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		if (nhrp_peer_foreach(find_one, peer, &sel) == 0) {
 			/* Remove all old stuff and accept registration */
 			memset(&sel, 0, sizeof(sel));
+			sel.flags = NHRP_PEER_FIND_EXACT;
 			sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
 			sel.interface = packet->src_iface;
 			sel.protocol_address = peer->protocol_address;

@@ -872,6 +872,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 
 	/* First, prune all duplicates */
 	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_EXACT;
 	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
 	sel.interface = iface;
 	sel.protocol_address = ins->protocol_address;
@@ -992,7 +993,7 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 			if (p->prefix_length != sel->prefix_length &&
 			    p->type != NHRP_PEER_TYPE_STATIC)
 				return FALSE;
-		} else  if (sel->flags & NHRP_PEER_FIND_ROUTE) {
+		} else if (sel->flags & NHRP_PEER_FIND_ROUTE) {
 			if (bitcmp(p->protocol_address.addr,
 				   sel->protocol_address.addr,
 				   p->prefix_length) != 0)
@@ -1134,9 +1135,9 @@ struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *interface,
 
 	memset(&rd, 0, sizeof(rd));
 	rd.sel.flags = flags & ~NHRP_PEER_FIND_UP;
-	if (flags & (NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_EXACT |
-		     NHRP_PEER_FIND_SUBNET) == 0)
-		rd.sel.flags |= NHRP_PEER_FIND_ROUTE
+	if ((flags & (NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_EXACT |
+		      NHRP_PEER_FIND_SUBNET)) == 0)
+		rd.sel.flags |= NHRP_PEER_FIND_ROUTE;
 	rd.sel.interface = interface;
 	rd.sel.protocol_address = *dest;
 	rd.exclude = exclude;
