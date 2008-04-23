@@ -156,9 +156,10 @@ static int admin_parse_selector(void *ctx, const char *cmd,
 			sel->protocol_address = address;
 			sel->prefix_length = prefix_length;
 		} else if (strcmp(keyword, "nbma") == 0) {
-			if (sel->nbma_address.type != AF_UNSPEC)
+			if (sel->next_hop_address.type != AF_UNSPEC)
 				goto err_conflict;
-			sel->nbma_address = address;
+			sel->type_mask = ~BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+			sel->next_hop_address = address;
 		} else if (strcmp(keyword, "local-protocol") == 0) {
 			if (sel->interface != NULL)
 				goto err_conflict;

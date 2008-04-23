@@ -91,8 +91,7 @@ struct nhrp_peer_selector {
 
 	int prefix_length;
 	struct nhrp_address protocol_address;
-
-	struct nhrp_address nbma_address;
+	struct nhrp_address next_hop_address;
 };
 
 const char * const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
@@ -108,16 +107,13 @@ void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
 void nhrp_peer_purge(struct nhrp_peer *peer);
 
-void nhrp_peer_set_used(struct nhrp_interface *iface,
-			struct nhrp_address *peer_address,
-			int used);
-
 int nhrp_peer_match(struct nhrp_peer *peer, struct nhrp_peer_selector *sel);
 
 int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 		      struct nhrp_peer_selector *sel);
 int nhrp_peer_remove_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_purge_matching(void *count, struct nhrp_peer *peer);
+int nhrp_peer_set_used_matching(void *ctx, struct nhrp_peer *peer);
 
 struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *iface,
 				  struct nhrp_address *dest,

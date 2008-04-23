@@ -365,8 +365,8 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 {
 	struct ndmsg *ndm = NLMSG_DATA(msg);
 	struct rtattr *rta[NDA_MAX+1];
-	struct nhrp_address addr;
 	struct nhrp_interface *iface;
+	struct nhrp_peer_selector sel;
 
 	netlink_parse_rtattr(rta, NDA_MAX, NDA_RTA(ndm), NDA_PAYLOAD(msg));
 	if (rta[NDA_DST] == NULL)
@@ -379,14 +379,16 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 	if (iface == NULL)
 		return;
 
-	nhrp_address_set(&addr, ndm->ndm_family,
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_EXACT;
+	sel.interface = iface;
+	nhrp_address_set(&sel.protocol_address, ndm->ndm_family,
 			 RTA_PAYLOAD(rta[NDA_DST]),
 			 RTA_DATA(rta[NDA_DST]));
 
-	if (ndm->ndm_state & NUD_REACHABLE)
-		nhrp_peer_set_used(iface, &addr, TRUE);
-	else
-		nhrp_peer_set_used(iface, &addr, FALSE);
+	nhrp_peer_foreach(nhrp_peer_set_used_matching,
+			  (void*) ((ndm->ndm_state & NUD_REACHABLE) ? TRUE : FALSE),
+			  &sel);
 }
 
 static void netlink_link_new(struct nlmsghdr *msg)
