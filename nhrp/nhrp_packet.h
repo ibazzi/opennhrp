@@ -100,7 +100,7 @@ void nhrp_packet_free(struct nhrp_packet *packet);
 int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,
 			struct nhrp_address *from);
-int nhrp_packet_route(struct nhrp_packet *packet, int need_direct);
+int nhrp_packet_route(struct nhrp_packet *packet);
 int nhrp_packet_marshall_and_send(struct nhrp_packet *packet);
 int nhrp_packet_route_and_send(struct nhrp_packet *packet);
 int nhrp_packet_send(struct nhrp_packet *packet);

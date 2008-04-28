@@ -291,16 +291,19 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 	if (packet->ref > 0)
 		return;
 
+	if (packet->dst_peer != NULL)
+		nhrp_peer_free(packet->dst_peer);
 	for (i = 0; i < packet->num_extensions; i++)
 		nhrp_payload_free(&packet->extension_by_order[i]);
 	free(packet);
 }
 
-static int nhrp_packet_reroute(struct nhrp_packet *packet, int need_direct)
+static int nhrp_packet_reroute(struct nhrp_packet *packet,
+			       struct nhrp_peer *dst_peer)
 {
 	packet->dst_iface = packet->src_iface;
-	packet->dst_peer = NULL;
-	return nhrp_packet_route(packet, need_direct);
+	packet->dst_peer = nhrp_peer_dup(dst_peer);
+	return nhrp_packet_route(packet);
 }
 
 static void nhrp_packet_dequeue(struct nhrp_packet *packet)
@@ -397,7 +400,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	char tmp[64], tmp2[64];
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
-	struct nhrp_peer *peer;
+	struct nhrp_peer *peer, *rpeer = NULL;
 	struct nhrp_peer_selector sel;
 	int natted = 0;
 
@@ -477,7 +480,11 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		sel.interface = packet->src_iface;
 		sel.protocol_address = peer->protocol_address;
 		sel.prefix_length = peer->prefix_length;
-		if (nhrp_peer_foreach(find_one, peer, &sel) == 0) {
+
+		/* Check that there is no conflicting peers and
+		 * that the script allows this registration. */
+		if (nhrp_peer_foreach(find_one, peer, &sel) == 0 &&
+		    nhrp_peer_authorize_registration(peer)) {
 			/* Remove all old stuff and accept registration */
 			memset(&sel, 0, sizeof(sel));
 			sel.flags = NHRP_PEER_FIND_EXACT;
@@ -489,6 +496,9 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 
 			cie->hdr.code = NHRP_CODE_SUCCESS;
 			nhrp_peer_insert(peer);
+
+			if (rpeer == NULL)
+				rpeer = nhrp_peer_dup(peer);
 		} else {
 			/* Non-removable binding already exists */
 			cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
@@ -497,10 +507,12 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		nhrp_peer_free(peer);
 	}
 
-	if (!nhrp_packet_reroute(packet, TRUE)) {
+	if (!nhrp_packet_reroute(packet, rpeer)) {
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
 	}
+	if (rpeer != NULL)
+		nhrp_peer_free(rpeer);
 
 	return nhrp_packet_send(packet);
 }
@@ -1016,7 +1028,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	peer = nhrp_peer_route(iface, dest, NHRP_PEER_FIND_COMPLETE, NULL);
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
-	packet->dst_peer = peer;
+	packet->dst_peer = nhrp_peer_dup(peer);
 
 	/* RFC2332 5.3.4 - Authentication is always done pairwise on an NHRP
 	 * hop-by-hop basis; i.e. regenerated at each hop. */
@@ -1171,21 +1183,19 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	return size;
 }
 
-int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
+int nhrp_packet_route(struct nhrp_packet *packet)
 {
 	struct nhrp_address proto_nexthop, *dest;
 	struct nhrp_cie_list_head *cielist = NULL;
 	struct nhrp_payload *payload;
+	struct nhrp_peer *peer;
 	char tmp[64];
-	int r, exact = 0;
+	int r;
 
 	if (packet->dst_iface == NULL) {
 		nhrp_error("nhrp_packet_route called without destination interface");
 		return FALSE;
 	}
-
-	if (need_direct)
-		exact = NHRP_PEER_FIND_EXACT;
 
 	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY) {
 		dest = &packet->src_protocol_address;
@@ -1212,18 +1222,17 @@ int nhrp_packet_route(struct nhrp_packet *packet, int need_direct)
 			return FALSE;
 		}
 
-		packet->dst_peer = nhrp_peer_route(packet->dst_iface,
-						   &proto_nexthop,
-						   NHRP_PEER_FIND_COMPLETE |
-						   exact,
-						   cielist);
-		if (packet->dst_peer == NULL ||
-		    packet->dst_peer->type == NHRP_PEER_TYPE_NEGATIVE) {
+                peer = nhrp_peer_route(packet->dst_iface,
+				       &proto_nexthop,
+				       NHRP_PEER_FIND_COMPLETE,
+				       cielist);
+		if (peer == NULL || peer->type == NHRP_PEER_TYPE_NEGATIVE) {
 			nhrp_error("No peer entry for protocol address %s",
 				   nhrp_address_format(&proto_nexthop,
 						       sizeof(tmp), tmp));
 			return FALSE;
 		}
+		packet->dst_peer = nhrp_peer_dup(peer);
 	}
 
 	return TRUE;
@@ -1236,8 +1245,9 @@ int nhrp_packet_marshall_and_send(struct nhrp_packet *packet)
 	int size;
 
 	nhrp_info("Sending packet %d to nbma %s",
-		packet->hdr.type,
-		nhrp_address_format(&packet->dst_peer->next_hop_address, sizeof(tmp), tmp));
+		  packet->hdr.type,
+		  nhrp_address_format(&packet->dst_peer->next_hop_address,
+				      sizeof(tmp), tmp));
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0)
@@ -1255,7 +1265,7 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 	struct nhrp_payload *payload;
 
 	if (packet->dst_peer == NULL || packet->dst_iface == NULL) {
-		if (!nhrp_packet_route(packet, FALSE)) {
+		if (!nhrp_packet_route(packet)) {
 			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 			return TRUE;
 		}
@@ -1321,7 +1331,7 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	struct nhrp_cie *cie;
 
 	if (packet->dst_iface == NULL) {
-		if (!nhrp_packet_route(packet, FALSE)) {
+		if (!nhrp_packet_route(packet)) {
 			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 			return TRUE;
 		}

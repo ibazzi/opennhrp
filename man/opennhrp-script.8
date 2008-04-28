@@ -21,11 +21,20 @@ needs to invoke the peer configuration script, it defines a set of variables
 in the environment and then executes the script with exactly one argument.
 The argument is set to the name of the reason why the script has been invoked.
 The following reasons are currently defined:
-.BR "interface-up" , " peer-up" , " peer-down" , " route-up" " and " route-down .
+.BR "interface-up" , " peer-register" , " peer-up" , " peer-down" , 
+.BR " route-up" " and " route-down .
 
 .SH INTERFACE-UP
 Interface has been just discovered, or it is has changed state from down
 to up. This is the place to clean up old routes if needed.
+
+.SH PEER-REGISTER
+A peer registration request has been received. The script is run before the
+internal peer cache is altered and this allows the script to reject
+registration without it deleting old peers. This could be used to check that
+IPsec connection is up or one might encode allowed protocol-addresses in the
+certificate and it could be enforced here. This hook is executed synchronously
+so it should be fast.
 
 .SH PEER-UP
 A peer has been discovered (either by means of static configuration, dynamic

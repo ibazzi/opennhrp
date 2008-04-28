@@ -4,6 +4,8 @@ case $1 in
 interface-up)
 	ip route flush proto 42 dev $NHRP_INTERFACE
 	;;
+peer-register)
+	;;
 peer-up)
 	echo "Create link from $NHRP_SRCADDR ($NHRP_SRCNBMA) to $NHRP_DESTADDR ($NHRP_DESTNBMA)"
 	racoonctl establish-sa -w isakmp inet $NHRP_SRCNBMA $NHRP_DESTNBMA || exit 1
@@ -25,3 +27,4 @@ route-down)
 	;;
 esac
 
+exit 0

@@ -172,7 +172,7 @@ static char *env(const char *key, const char *value)
 	return buf;
 }
 
-static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)(struct nhrp_peer *, int))
+static pid_t nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)(struct nhrp_peer *, int))
 {
 	struct nhrp_interface *iface = peer->interface;
 	const char *argv[] = { nhrp_script_file, action, NULL };
@@ -183,11 +183,11 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 
 	pid = fork();
 	if (pid == -1)
-		return FALSE;
+		return -1;
 	if (pid > 0) {
 		peer->script_pid = pid;
 		peer->script_callback = cb;
-		return TRUE;
+		return pid;
 	}
 
 	envp[i++] = env("NHRP_TYPE", nhrp_peer_type[peer->type]);
@@ -463,7 +463,7 @@ static void nhrp_peer_register(struct nhrp_peer *peer)
 		  nhrp_address_format(&peer->protocol_address,
 				      sizeof(dst), dst));
 
-	packet->dst_peer = peer;
+	packet->dst_peer = nhrp_peer_dup(peer);
 	packet->dst_iface = peer->interface;
 	sent = nhrp_packet_send_request(packet,
 					nhrp_peer_handle_registration_reply,
@@ -731,7 +731,9 @@ struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface)
 
 struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer)
 {
-	peer->ref_count++;
+	if (peer != NULL)
+		peer->ref_count++;
+
 	return peer;
 }
 
@@ -793,6 +795,31 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 
 	return TRUE;
 }
+
+int nhrp_peer_authorize_registration(struct nhrp_peer *peer)
+{
+	char tmp[64];
+	pid_t pid;
+	int status;
+
+	pid = nhrp_peer_run_script(peer, "peer-register", NULL);
+	if (pid < 0)
+		return FALSE;
+
+	if (waitpid(pid, &status, 0) < 0)
+		return FALSE;
+
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+		return TRUE;
+
+	nhrp_error("[%s] Peer registration script failed with status %x",
+		   nhrp_address_format(&peer->protocol_address,
+				       sizeof(tmp), tmp),
+		   status);
+
+	return FALSE;
+}
+
 
 static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer)
 {
