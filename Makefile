@@ -9,7 +9,7 @@
 
 VERSION := 0.6.2
 
-SVN_REV := $(shell svn info | grep ^Revision | cut -d ' ' -f 2)
+SVN_REV := $(shell svnversion)
 ifneq ($(SVN_REV),)
 FULL_VERSION := $(VERSION)-r$(SVN_REV)
 else
