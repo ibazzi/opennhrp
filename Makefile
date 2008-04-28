@@ -9,8 +9,8 @@
 
 VERSION := 0.6.2
 
-SVN_REV := $(shell svnversion)
-ifneq ($(SVN_REV),)
+SVN_REV := $(shell svnversion || echo exported)
+ifneq ($(SVN_REV), exported)
 FULL_VERSION := $(VERSION)-r$(SVN_REV)
 else
 FULL_VERSION := $(VERSION)
