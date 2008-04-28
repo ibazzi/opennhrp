@@ -3,6 +3,7 @@
 case $1 in
 interface-up)
 	ip route flush proto 42 dev $NHRP_INTERFACE
+	ip neigh flush dev $NHRP_INTERFACE
 	;;
 peer-register)
 	;;
