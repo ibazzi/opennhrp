@@ -1183,13 +1183,14 @@ struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *interface,
 	rd.exclude = exclude;
 	nhrp_peer_foreach(decide_route, &rd, &rd.sel);
 
+	if (rd.best_found == NULL)
+		return NULL;
+
 	if ((flags & NHRP_PEER_FIND_UP) &&
 	    !(rd.best_found->flags & NHRP_PEER_FLAG_UP))
 		return NULL;
 
-	if (rd.best_found != NULL)
-		time(&rd.best_found->last_used);
-
+	time(&rd.best_found->last_used);
 	return rd.best_found;
 }
 
