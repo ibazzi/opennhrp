@@ -57,14 +57,15 @@ struct nhrp_packet;
 struct nhrp_cie_list_head;
 
 struct nhrp_peer {
-	int ref_count;
+	unsigned short ref_count;
+	unsigned short list_count;
 	CIRCLEQ_ENTRY(nhrp_peer) peer_list;
 	struct nhrp_task task;
 	struct nhrp_interface *interface;
 	pid_t script_pid;
 	void (*script_callback)(struct nhrp_peer *peer, int status);
 
-	int flags;
+	unsigned int flags;
 	uint8_t type;
 	uint8_t prefix_length;
 	uint16_t afnum;

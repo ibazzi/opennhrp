@@ -740,8 +740,7 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 	struct nhrp_interface *iface = peer->interface;
 	struct nhrp_peer_selector sel;
 
-	peer->ref_count--;
-	if (peer->ref_count > 0)
+	if (--peer->ref_count > 0)
 		return FALSE;
 
 	switch (peer->type) {
@@ -884,6 +883,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
 	else
 		CIRCLEQ_INSERT_HEAD(&iface->peer_cache, peer, peer_list);
+	peer->list_count = 1;
 
 	nhrp_info("Adding %s %s",
 		  nhrp_peer_type[peer->type],
@@ -920,10 +920,19 @@ int nhrp_peer_purge_matching(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
+struct nhrp_peer *nhrp_peer_keep(struct nhrp_peer *peer)
+{
+	peer->list_count++;
+	return peer;
+}
+
 void nhrp_peer_remove(struct nhrp_peer *peer)
 {
 	struct nhrp_interface *iface = peer->interface;
 	char tmp[NHRP_PEER_FORMAT_LEN];
+
+	if (--peer->list_count > 0)
+		return;
 
 	nhrp_info("Removing %s %s",
 		  nhrp_peer_type[peer->type],
@@ -1028,21 +1037,26 @@ static int enumerate_peer_cache(struct nhrp_peer_list *peer_cache,
 				nhrp_peer_enumerator e, void *ctx,
 				struct nhrp_peer_selector *sel)
 {
-	struct nhrp_peer *p, *pn;
-	int rc;
+	struct nhrp_peer *p, *kept = NULL;
+	int rc = 0;
 
-	for (p = CIRCLEQ_FIRST(peer_cache); (void *) p != (void *) peer_cache;
-	     p = pn) {
-		pn = CIRCLEQ_NEXT(p, peer_list);
+	CIRCLEQ_FOREACH(p, peer_cache, peer_list) {
+		if (kept != NULL) {
+			nhrp_peer_remove(kept);
+			kept = NULL;
+		}
 
 		if (sel == NULL || nhrp_peer_match(p, sel)) {
-			rc = e(ctx, p);
+			kept = nhrp_peer_keep(p);
+			rc = e(ctx, kept);
 			if (rc != 0)
-				return rc;
+				break;
 		}
 	}
+	if (kept != NULL)
+		nhrp_peer_remove(kept);
 
-	return 0;
+	return rc;
 }
 
 static int enum_interface_peers(void *ctx, struct nhrp_interface *iface)
