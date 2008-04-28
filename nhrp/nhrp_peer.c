@@ -310,8 +310,10 @@ static void nhrp_run_up_script_task(struct nhrp_task *task)
 
 static int nhrp_peer_routes_up(void *ctx, struct nhrp_peer *peer)
 {
-	nhrp_peer_run_script(peer, "route-up",
-			     nhrp_peer_script_route_up_done);
+	if (!(peer->flags & NHRP_PEER_FLAG_UP))
+		nhrp_peer_run_script(peer, "route-up",
+				     nhrp_peer_script_route_up_done);
+
 	return 0;
 }
 
@@ -324,7 +326,6 @@ static void nhrp_peer_up(struct nhrp_peer *peer)
 
 	/* Check if there are routes using this peer as next-hop*/
 	memset(&sel, 0, sizeof(sel));
-	sel.flags = NHRP_PEER_FIND_UP;
 	sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
 	sel.interface = iface;
 	sel.next_hop_address = peer->protocol_address;
