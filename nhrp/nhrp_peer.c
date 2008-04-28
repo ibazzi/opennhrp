@@ -223,7 +223,7 @@ static int nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*cb)
 			nhrp_address_format(&peer->next_hop_address, sizeof(tmp), tmp));
 		break;
 	}
-	envp[i++] = env("NHRP_DESTIFACE", peer->interface->name);
+	envp[i++] = env("NHRP_INTERFACE", peer->interface->name);
 	envp[i++] = NULL;
 
 	execve(nhrp_script_file, (char **) argv, envp);

@@ -309,24 +309,6 @@ static int proc_icmp_redirect_off(struct nhrp_interface *iface)
 	return TRUE;
 }
 
-static int neigh_flush_cache(struct nhrp_interface *iface)
-{
-	pid_t pid;
-	int status;
-
-	pid = fork();
-	if (pid == 0) {
-		execl("/sbin/ip", "ip", "neigh", "flush", "dev",
-		      iface->name, NULL);
-		exit(EXIT_FAILURE);
-	}
-	if (pid < 0)
-		return FALSE;
-
-	waitpid(pid, &status, 0);
-	return TRUE;
-}
-
 static void netlink_neigh_request(struct nlmsghdr *msg)
 {
 	struct ndmsg *ndm = NLMSG_DATA(msg);
@@ -368,6 +350,7 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 	struct rtattr *rta[NDA_MAX+1];
 	struct nhrp_interface *iface;
 	struct nhrp_peer_selector sel;
+	int used = FALSE;
 
 	netlink_parse_rtattr(rta, NDA_MAX, NDA_RTA(ndm), NDA_PAYLOAD(msg));
 	if (rta[NDA_DST] == NULL)
@@ -387,9 +370,10 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 			 RTA_PAYLOAD(rta[NDA_DST]),
 			 RTA_DATA(rta[NDA_DST]));
 
-	nhrp_peer_foreach(nhrp_peer_set_used_matching,
-			  (void*) ((ndm->ndm_state & NUD_REACHABLE) ? TRUE : FALSE),
-			  &sel);
+	if (msg->nlmsg_type == RTM_NEWNEIGH && (ndm->ndm_state & NUD_REACHABLE))
+		used = TRUE;
+
+	nhrp_peer_foreach(nhrp_peer_set_used_matching, (void*) used, &sel);
 }
 
 static void netlink_link_new(struct nlmsghdr *msg)
@@ -409,7 +393,13 @@ static void netlink_link_new(struct nlmsghdr *msg)
 	if (iface == NULL)
 		return;
 
-	nhrp_info("Interface '%s' configuration changed", ifname);
+	if (iface->index == 0 || (ifi->ifi_flags & ifi->ifi_change & IFF_UP)) {
+		nhrp_info("Interface '%s' is now up", ifname);
+		nhrp_interface_run_script(iface, "interface-up");
+	} else {
+		nhrp_info("Interface '%s' configuration changed", ifname);
+	}
+
 	iface->index = ifi->ifi_index;
 	nhrp_interface_hash(iface);
 
@@ -439,7 +429,6 @@ static void netlink_link_new(struct nlmsghdr *msg)
 		netlink_configure_arp(iface, PF_INET);
 		netlink_link_arp_on(iface);
 		proc_icmp_redirect_off(iface);
-		neigh_flush_cache(iface);
 	}
 }
 
@@ -657,6 +646,7 @@ static void netlink_route_del(struct nlmsghdr *msg)
 static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
 	[RTM_GETNEIGH] = netlink_neigh_request,
 	[RTM_NEWNEIGH] = netlink_neigh_update,
+	[RTM_DELNEIGH] = netlink_neigh_update,
 	[RTM_NEWLINK] = netlink_link_new,
 	[RTM_DELLINK] = netlink_link_del,
 	[RTM_NEWADDR] = netlink_addr_new,

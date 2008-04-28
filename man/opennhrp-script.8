@@ -21,7 +21,11 @@ needs to invoke the peer configuration script, it defines a set of variables
 in the environment and then executes the script with exactly one argument.
 The argument is set to the name of the reason why the script has been invoked.
 The following reasons are currently defined:
-.BR peer-up , " peer-down" , " route-up" " and " route-down .
+.BR "interface-up" , " peer-up" , " peer-down" , " route-up" " and " route-down .
+
+.SH INTERFACE-UP
+Interface has been just discovered, or it is has changed state from down
+to up. This is the place to clean up old routes if needed.
 
 .SH PEER-UP
 A peer has been discovered (either by means of static configuration, dynamic
@@ -56,6 +60,14 @@ information), \fBdynamic\fR (client told us where he is) or \fBcached\fR
 (resolved since we had packets going there).
 
 For route-up and route-down reasons this is always defined as \fBroute\fR.
+
+For interface-up reason this is irrelevant, but always defined as
+\fBinterface\fR.
+.RE
+
+.B NHRP_INTERFACE
+.RS
+The network interface to which this event is related to.
 .RE
 
 .B NHRP_DESTADDR
@@ -80,12 +92,6 @@ of the peer.
 .RS
 Defined only for \fBroute-up\fR and \fBroute-down\fR reasons. This is the
 protocol address of the next hop to be used in routing.
-.RE
-
-.B NHRP_DESTIFACE
-.RS
-Name of the interface which belongs to the same subnet as destination
-protocol address.
 .RE
 
 .SH "SEE ALSO"

@@ -51,6 +51,7 @@ struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create);
 struct nhrp_interface *nhrp_interface_get_by_index(unsigned int index, int create);
 struct nhrp_interface *nhrp_interface_get_by_nbma(struct nhrp_address *addr);
 struct nhrp_interface *nhrp_interface_get_by_protocol(struct nhrp_address *addr);
+int nhrp_interface_run_script(struct nhrp_interface *iface, char *action);
 
 void nhrp_interface_resolve_nbma(struct nhrp_interface *iface,
 				 struct nhrp_address *nbmadest,

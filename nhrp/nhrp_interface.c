@@ -8,9 +8,12 @@
  * by the Free Software Foundation. See http://www.gnu.org/ for details.
  */
 
+#include <stdio.h>
 #include <stddef.h>
 #include <string.h>
 #include <malloc.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include "nhrp_interface.h"
 #include "nhrp_address.h"
@@ -21,6 +24,16 @@ LIST_HEAD(nhrp_interface_list, nhrp_interface);
 
 static struct nhrp_interface_list name_list;
 static struct nhrp_interface_list index_hash[INDEX_HASH_SIZE];
+
+static char *env(const char *key, const char *value)
+{
+	char *buf;
+	buf = malloc(strlen(key)+strlen(value)+2);
+	if (buf == NULL)
+		return NULL;
+	sprintf(buf, "%s=%s", key, value);
+	return buf;
+}
 
 void nhrp_interface_hash(struct nhrp_interface *iface)
 {
@@ -107,4 +120,25 @@ struct nhrp_interface *nhrp_interface_get_by_protocol(struct nhrp_address *addr)
 	}
 
 	return NULL;
+}
+
+int nhrp_interface_run_script(struct nhrp_interface *iface, char *action)
+{
+	const char *argv[] = { nhrp_script_file, action, NULL };
+	char *envp[4];
+	pid_t pid;
+	int i = 0;
+
+	pid = fork();
+	if (pid == -1)
+		return FALSE;
+	if (pid > 0)
+		return TRUE;
+
+	envp[i++] = "NHRP_TYPE=INTERFACE";
+	envp[i++] = env("NHRP_INTERFACE", iface->name);
+	envp[i++] = NULL;
+
+	execve(nhrp_script_file, (char **) argv, envp);
+	exit(1);
 }
