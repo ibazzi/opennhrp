@@ -1025,7 +1025,8 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	else
 		dest = &packet->dst_protocol_address;
 
-	peer = nhrp_peer_route(iface, dest, NHRP_PEER_FIND_COMPLETE, NULL);
+	peer = nhrp_peer_route(iface, dest, 0,
+			       BIT(NHRP_PEER_TYPE_LOCAL), NULL);
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
 	packet->dst_peer = nhrp_peer_dup(peer);
@@ -1222,9 +1223,11 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 			return FALSE;
 		}
 
-                peer = nhrp_peer_route(packet->dst_iface,
+		peer = nhrp_peer_route(packet->dst_iface,
 				       &proto_nexthop,
-				       NHRP_PEER_FIND_COMPLETE,
+				       0,
+				       ~(BIT(NHRP_PEER_TYPE_CACHED_ROUTE) |
+					 BIT(NHRP_PEER_TYPE_INCOMPLETE)),
 				       cielist);
 		if (peer == NULL || peer->type == NHRP_PEER_TYPE_NEGATIVE) {
 			nhrp_error("No peer entry for protocol address %s",

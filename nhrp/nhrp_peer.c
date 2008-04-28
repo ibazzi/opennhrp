@@ -556,7 +556,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	/* Update the received NBMA address to nexthop */
 	iface = peer->interface;
 	np = nhrp_peer_route(iface, &cie->protocol_address,
-			     NHRP_PEER_FIND_EXACT, NULL);
+			     NHRP_PEER_FIND_EXACT, 0, NULL);
 	if (np == NULL) {
 		np = nhrp_peer_alloc(iface);
 		np->type = NHRP_PEER_TYPE_CACHED;
@@ -869,6 +869,7 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 		if (nhrp_peer_route(peer->interface,
 				    &peer->next_hop_address,
 				    NHRP_PEER_FIND_UP | NHRP_PEER_FIND_EXACT,
+				    NHRP_PEER_TYPEMASK_ADJACENT,
 				    NULL) != NULL)
 			nhrp_peer_run_script(peer, "route-up",
 					     nhrp_peer_script_route_up_done);
@@ -1002,10 +1003,6 @@ int nhrp_peer_set_used_matching(void *ctx, struct nhrp_peer *peer)
 int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 {
 	if (sel->type_mask && !(sel->type_mask & BIT(p->type)))
-		return FALSE;
-
-	if ((sel->flags & NHRP_PEER_FIND_COMPLETE) &&
-	    p->type == NHRP_PEER_TYPE_INCOMPLETE)
 		return FALSE;
 
 	if ((sel->flags & NHRP_PEER_FIND_UP) &&
@@ -1169,7 +1166,8 @@ static int decide_route(void *ctx, struct nhrp_peer *peer)
 }
 
 struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *interface,
-				  struct nhrp_address *dest, int flags,
+				  struct nhrp_address *dest,
+				  int flags, int type_mask,
 				  struct nhrp_cie_list_head *exclude)
 {
 	struct route_decision rd;
@@ -1179,6 +1177,7 @@ struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *interface,
 	if ((flags & (NHRP_PEER_FIND_ROUTE | NHRP_PEER_FIND_EXACT |
 		      NHRP_PEER_FIND_SUBNET)) == 0)
 		rd.sel.flags |= NHRP_PEER_FIND_ROUTE;
+	rd.sel.type_mask = type_mask;
 	rd.sel.interface = interface;
 	rd.sel.protocol_address = *dest;
 	rd.exclude = exclude;
@@ -1200,7 +1199,7 @@ void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 	struct nhrp_peer *peer;
 
 	/* Have we done something for this destination already? */
-	peer = nhrp_peer_route(iface, dst, NHRP_PEER_FIND_EXACT, NULL);
+	peer = nhrp_peer_route(iface, dst, NHRP_PEER_FIND_EXACT, 0, NULL);
 	if (peer != NULL)
 		return;
 

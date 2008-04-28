@@ -26,16 +26,22 @@
 #define NHRP_PEER_TYPE_LOCAL		0x06	/* Learned from interface config */
 #define NHRP_PEER_TYPE_MAX		0x07
 
+#define NHRP_PEER_TYPEMASK_ADJACENT \
+	(BIT(NHRP_PEER_TYPE_CACHED) | \
+	 BIT(NHRP_PEER_TYPE_DYNAMIC) | \
+	 BIT(NHRP_PEER_TYPE_STATIC) | \
+	 BIT(NHRP_PEER_TYPE_LOCAL))
+
 #define NHRP_PEER_TYPEMASK_REMOVABLE \
-	BIT(NHRP_PEER_TYPE_INCOMPLETE) | \
-	BIT(NHRP_PEER_TYPE_NEGATIVE) | \
-	BIT(NHRP_PEER_TYPE_CACHED) | \
-	BIT(NHRP_PEER_TYPE_CACHED_ROUTE) | \
-	BIT(NHRP_PEER_TYPE_DYNAMIC)
+	(BIT(NHRP_PEER_TYPE_INCOMPLETE) | \
+	 BIT(NHRP_PEER_TYPE_NEGATIVE) | \
+	 BIT(NHRP_PEER_TYPE_CACHED) | \
+	 BIT(NHRP_PEER_TYPE_CACHED_ROUTE) | \
+	 BIT(NHRP_PEER_TYPE_DYNAMIC))
 
 #define NHRP_PEER_TYPEMASK_PURGEABLE \
-	NHRP_PEER_TYPEMASK_REMOVABLE | \
-	BIT(NHRP_PEER_TYPE_STATIC)
+	(NHRP_PEER_TYPEMASK_REMOVABLE | \
+	 BIT(NHRP_PEER_TYPE_STATIC))
 
 #define NHRP_PEER_FLAG_UNIQUE		0x01	/* Peer is unique; see RFC2332 */
 #define NHRP_PEER_FLAG_REGISTER		0x02	/* For TYPE_STATIC: send registration */
@@ -47,8 +53,7 @@
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02
 #define NHRP_PEER_FIND_SUBNET		0x04
-#define NHRP_PEER_FIND_COMPLETE		0x10
-#define NHRP_PEER_FIND_UP		0x20
+#define NHRP_PEER_FIND_UP		0x10
 
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
 
@@ -119,7 +124,7 @@ int nhrp_peer_set_used_matching(void *ctx, struct nhrp_peer *peer);
 
 struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *iface,
 				  struct nhrp_address *dest,
-				  int flags,
+				  int flags, int type_mask,
 				  struct nhrp_cie_list_head *exclude);
 
 void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
