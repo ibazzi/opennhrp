@@ -10,11 +10,18 @@ svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 -----------------------------------------------------------------------------
  - catch multicast packets and send them as multiple unicast packets
    to all known peers
+ - new script events: interface-up (to clear neighbor and route caches
+   on startup) and peer-register (to e.g. validate peer protocol ip address
+   from the ipsec certificate)
  - parse nat-oa for cached entries
  - routing regression fixes (don't try to resolve unreachable statically
    mapped peers)
+ - fix deletion of multiple cache entries from enumeration code
+   (crashed in some rare circumstances) 
  - check for IFA_LOCAL attribute presence before using it (fixes a crash)
- - internal code clean ups
+ - fix bug which caused negative cache entries to prevent registration
+   of the protocol address
+ - code cleanups and some optimizations
 
 -----------------------------------------------------------------------------
  opennhrp 0.6.2 - released 04/Apr/2008
