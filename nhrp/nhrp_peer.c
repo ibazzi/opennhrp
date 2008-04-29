@@ -755,15 +755,15 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 	case NHRP_PEER_TYPE_CACHED:
 	case NHRP_PEER_TYPE_DYNAMIC:
 	case NHRP_PEER_TYPE_STATIC:
-		/* Remove cached routes using this entry as next-hop */
-		memset(&sel, 0, sizeof(sel));
-		sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
-		sel.interface = iface;
-		sel.next_hop_address = peer->protocol_address;
-		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
-
-		/* Execute peer-down */
 		if (!(peer->flags & NHRP_PEER_FLAG_REPLACED)) {
+			/* Remove cached routes using this entry as next-hop */
+			memset(&sel, 0, sizeof(sel));
+			sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+			sel.interface = iface;
+			sel.next_hop_address = peer->protocol_address;
+			nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+
+			/* Execute peer-down */
 			if (peer->flags & NHRP_PEER_FLAG_UP)
 				nhrp_peer_run_script(peer, "peer-down", NULL);
 		}
