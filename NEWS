@@ -6,7 +6,7 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
- opennhrp 0.7 - to be released ??/???/2008
+ opennhrp 0.7 - released 30/Apr/2008
 -----------------------------------------------------------------------------
  - catch multicast packets and send them as multiple unicast packets
    to all known peers
