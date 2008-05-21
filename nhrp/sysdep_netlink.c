@@ -484,7 +484,8 @@ static void netlink_addr_new(struct nlmsghdr *msg)
 	struct ifaddrmsg *ifa = NLMSG_DATA(msg);
 	struct rtattr *rta[IFA_MAX+1];
 
-	nhrp_interface_foreach(netlink_addr_new_nbma, msg);
+	if (!(ifa->ifa_flags & IFA_F_SECONDARY))
+		nhrp_interface_foreach(netlink_addr_new_nbma, msg);
 
 	netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(msg));
 	iface = nhrp_interface_get_by_index(ifa->ifa_index, FALSE);
@@ -549,7 +550,8 @@ static void netlink_addr_del(struct nlmsghdr *msg)
 	struct rtattr *rta[IFA_MAX+1];
 	struct nhrp_peer_selector sel;
 
-	nhrp_interface_foreach(netlink_addr_del_nbma, msg);
+	if (!(ifa->ifa_flags & IFA_F_SECONDARY))
+		nhrp_interface_foreach(netlink_addr_del_nbma, msg);
 
 	netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(msg));
 	iface = nhrp_interface_get_by_index(ifa->ifa_index, FALSE);
