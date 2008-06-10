@@ -1067,23 +1067,23 @@ static int enumerate_peer_cache(struct nhrp_peer_list *peer_cache,
 				nhrp_peer_enumerator e, void *ctx,
 				struct nhrp_peer_selector *sel)
 {
-	struct nhrp_peer *p, *kept_curr, *kept_prev = NULL;
+	struct nhrp_peer *p, *kept_curr = NULL, *kept_prev;
 	int rc = 0;
 
 	CIRCLEQ_FOREACH(p, peer_cache, peer_list) {
+		kept_prev = kept_curr;
 		kept_curr = nhrp_peer_keep(p);
 		if (kept_prev != NULL)
 			nhrp_peer_remove(kept_prev);
-		kept_prev = kept_curr;
 
 		if (sel == NULL || nhrp_peer_match(p, sel)) {
-			rc = e(ctx, kept);
+			rc = e(ctx, kept_curr);
 			if (rc != 0)
 				break;
 		}
 	}
-	if (kept_prev != NULL)
-		nhrp_peer_remove(kept_prev);
+	if (kept_curr != NULL)
+		nhrp_peer_remove(kept_curr);
 
 	return rc;
 }
