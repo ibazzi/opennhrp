@@ -908,7 +908,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 	sel.prefix_length = ins->prefix_length;
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 
-	if (peer->list_count == 0) {
+	if (ins->list_count == 0) {
 		peer = nhrp_peer_dup(ins);
 		if (peer->type == NHRP_PEER_TYPE_LOCAL)
 			CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
