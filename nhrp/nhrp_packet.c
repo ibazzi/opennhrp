@@ -302,6 +302,8 @@ static int nhrp_packet_reroute(struct nhrp_packet *packet,
 			       struct nhrp_peer *dst_peer)
 {
 	packet->dst_iface = packet->src_iface;
+	if (packet->dst_peer != NULL)
+		nhrp_peer_free(packet->dst_peer);
 	packet->dst_peer = nhrp_peer_dup(dst_peer);
 	return nhrp_packet_route(packet);
 }
