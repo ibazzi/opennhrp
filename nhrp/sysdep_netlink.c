@@ -892,7 +892,8 @@ int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 
 	status = sendmsg(packet_fd, &msg, 0);
 	if (status < 0) {
-		nhrp_perror("Cannot send packet");
+		nhrp_error("Cannot send packet to %s(%d): %s",
+			   out->name, out->index, strerror(errno));
 		return FALSE;
 	}
 
