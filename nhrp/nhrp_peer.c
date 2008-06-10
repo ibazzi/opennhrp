@@ -155,10 +155,11 @@ static void nhrp_peer_reinsert(struct nhrp_peer *peer, int type)
 	struct nhrp_peer *dup;
 
 	dup = nhrp_peer_dup(peer);
-	nhrp_peer_remove(peer);
 
+	nhrp_peer_remove(peer);
 	dup->type = type;
 	nhrp_peer_insert(dup);
+
 	nhrp_peer_free(dup);
 }
 
@@ -907,12 +908,16 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 	sel.prefix_length = ins->prefix_length;
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 
-	peer = nhrp_peer_dup(ins);
-	if (peer->type == NHRP_PEER_TYPE_LOCAL)
-		CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
-	else
-		CIRCLEQ_INSERT_HEAD(&iface->peer_cache, peer, peer_list);
-	peer->list_count = 1;
+	if (peer->list_count == 0) {
+		peer = nhrp_peer_dup(ins);
+		if (peer->type == NHRP_PEER_TYPE_LOCAL)
+			CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
+		else
+			CIRCLEQ_INSERT_HEAD(&iface->peer_cache, peer, peer_list);
+		peer->list_count++;
+	} else {
+		peer = ins;
+	}
 
 	nhrp_info("Adding %s %s",
 		  nhrp_peer_type[peer->type],
@@ -1062,24 +1067,23 @@ static int enumerate_peer_cache(struct nhrp_peer_list *peer_cache,
 				nhrp_peer_enumerator e, void *ctx,
 				struct nhrp_peer_selector *sel)
 {
-	struct nhrp_peer *p, *kept = NULL;
+	struct nhrp_peer *p, *kept_curr, *kept_prev = NULL;
 	int rc = 0;
 
 	CIRCLEQ_FOREACH(p, peer_cache, peer_list) {
-		if (kept != NULL) {
-			nhrp_peer_remove(kept);
-			kept = NULL;
-		}
+		kept_curr = nhrp_peer_keep(p);
+		if (kept_prev != NULL)
+			nhrp_peer_remove(kept_prev);
+		kept_prev = kept_curr;
 
 		if (sel == NULL || nhrp_peer_match(p, sel)) {
-			kept = nhrp_peer_keep(p);
 			rc = e(ctx, kept);
 			if (rc != 0)
 				break;
 		}
 	}
-	if (kept != NULL)
-		nhrp_peer_remove(kept);
+	if (kept_prev != NULL)
+		nhrp_peer_remove(kept_prev);
 
 	return rc;
 }
