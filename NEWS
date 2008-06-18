@@ -6,7 +6,7 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
- opennhrp 0.7.1 - will be released ??/Jun/2008
+ opennhrp 0.7.1 - released 18/Jun/2008
 -----------------------------------------------------------------------------
  - use only primary interface addresses as nbma source address
  - fix a access to freed memory in certain special cases of peer cache

@@ -7,7 +7,7 @@
 # under the terms of the GNU General Public License version 3 as published
 # by the Free Software Foundation. See http://www.gnu.org/ for details.
 
-VERSION := 0.7
+VERSION := 0.7.1
 
 SVN_REV := $(shell svnversion || echo exported)
 ifneq ($(SVN_REV), exported)
