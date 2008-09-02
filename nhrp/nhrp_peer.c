@@ -917,9 +917,9 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		peer = ins;
 	}
 
-	nhrp_info("Adding %s %s",
-		  nhrp_peer_type[peer->type],
-		  nhrp_peer_format(peer, sizeof(tmp), tmp));
+	nhrp_debug("Adding %s %s",
+		   nhrp_peer_type[peer->type],
+		   nhrp_peer_format(peer, sizeof(tmp), tmp));
 
 	if (nhrp_running || peer->type == NHRP_PEER_TYPE_LOCAL)
 		nhrp_peer_insert_task(&peer->task);
@@ -966,9 +966,9 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 	if (--peer->list_count > 0)
 		return;
 
-	nhrp_info("Removing %s %s",
-		  nhrp_peer_type[peer->type],
-		  nhrp_peer_format(peer, sizeof(tmp), tmp));
+	nhrp_debug("Removing %s %s",
+		   nhrp_peer_type[peer->type],
+		   nhrp_peer_format(peer, sizeof(tmp), tmp));
 
 	if (peer->type == NHRP_PEER_TYPE_LOCAL)
 		CIRCLEQ_REMOVE(&local_peer_cache, peer, peer_list);

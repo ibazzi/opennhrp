@@ -1249,13 +1249,19 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 int nhrp_packet_marshall_and_send(struct nhrp_packet *packet)
 {
 	uint8_t pdu[MAX_PDU_SIZE];
-	char tmp[64];
+	char tmp[4][64];
 	int size;
 
-	nhrp_info("Sending packet %d to nbma %s",
-		  packet->hdr.type,
-		  nhrp_address_format(&packet->dst_peer->next_hop_address,
-				      sizeof(tmp), tmp));
+	nhrp_debug("Sending packet %d, from: %s (nbma %s), to: %s (nbma %s)",
+		   packet->hdr.type,
+		   nhrp_address_format(&packet->src_protocol_address,
+				       sizeof(tmp[0]), tmp[0]),
+		   nhrp_address_format(&packet->src_nbma_address,
+				       sizeof(tmp[1]), tmp[1]),
+		   nhrp_address_format(&packet->dst_protocol_address,
+				       sizeof(tmp[2]), tmp[2]),
+		   nhrp_address_format(&packet->dst_peer->next_hop_address,
+				       sizeof(tmp[3]), tmp[3]));
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0)
