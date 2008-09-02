@@ -141,6 +141,8 @@ static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 			i += snprintf(&buf[i], len - i, " expired");
 		}
 	}
+	if (peer->flags & NHRP_PEER_FLAG_PRUNE_PENDING)
+		i += snprintf(&buf[i], len - i, " dying");
 
 	return buf;
 }
@@ -588,7 +590,6 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 	struct nhrp_packet *packet;
 	struct nhrp_cie *cie;
 	struct nhrp_payload *payload;
-	int sent = FALSE;
 
 	packet = nhrp_packet_alloc();
 	if (packet == NULL)
@@ -642,14 +643,12 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 			      NHRP_PAYLOAD_TYPE_CIE_LIST);
 
 	packet->dst_iface = peer->interface;
-	sent = nhrp_packet_send_request(packet,
-					nhrp_peer_handle_resolution_reply,
-					nhrp_peer_dup(peer));
+	nhrp_packet_send_request(packet,
+				 nhrp_peer_handle_resolution_reply,
+				 nhrp_peer_dup(peer));
 
 error:
-	if (!sent) {
-		nhrp_packet_free(packet);
-	}
+	nhrp_packet_free(packet);
 }
 
 static int nhrp_peer_routes_renew(void *ctx, struct nhrp_peer *peer)
@@ -686,8 +685,7 @@ static void nhrp_peer_renew(struct nhrp_peer *peer)
 	if (peer->flags & NHRP_PEER_FLAG_PRUNE_PENDING) {
 		peer->flags &= ~NHRP_PEER_FLAG_PRUNE_PENDING;
 		nhrp_task_cancel(&peer->task);
-		if (num_routes == 0)
-			nhrp_peer_resolve(peer);
+		nhrp_peer_resolve(peer);
 	}
 }
 

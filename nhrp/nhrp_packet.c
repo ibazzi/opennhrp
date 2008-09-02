@@ -510,6 +510,9 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	}
 
 	if (!nhrp_packet_reroute(packet, rpeer)) {
+		if (rpeer != NULL)
+			nhrp_peer_free(rpeer);
+
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
 	}
