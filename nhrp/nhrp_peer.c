@@ -866,7 +866,8 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 			nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
-		if (nhrp_peer_route(peer->interface,
+		if (!(peer->flags & NHRP_PEER_FLAG_UP) &&
+		    nhrp_peer_route(peer->interface,
 				    &peer->next_hop_address,
 				    NHRP_PEER_FIND_UP | NHRP_PEER_FIND_EXACT,
 				    NHRP_PEER_TYPEMASK_ADJACENT,
