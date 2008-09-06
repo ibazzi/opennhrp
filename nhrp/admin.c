@@ -277,11 +277,13 @@ static int admin_receive(void *ctx, int fd, short events)
 
 	if (rm->cmd[rm->num_read-1] != '\n')
 		return 0;
+	rm->cmd[--rm->num_read] = 0;
 
 	for (i = 0; i < ARRAY_SIZE(admin_handler); i++) {
 		cmdlen = strlen(admin_handler[i].command);
 		if (rm->num_read >= cmdlen &&
 		    strncasecmp(rm->cmd, admin_handler[i].command, cmdlen) == 0) {
+			nhrp_debug("Admin: %s", rm->cmd);
 			admin_handler[i].handler(ctx, &rm->cmd[cmdlen]);
 			break;
 		}
