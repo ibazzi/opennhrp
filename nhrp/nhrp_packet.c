@@ -48,7 +48,9 @@ static int num_rate_limit_entries = 0;
 
 static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize, struct nhrp_packet *packet);
 
-static void prune_rate_limit_entries(struct nhrp_task *task)
+NHRP_TASK(prune_rate_limit_entries);
+
+static void prune_rate_limit_entries_callback(struct nhrp_task *task)
 {
 	struct nhrp_rate_limit *rl, *next;
 	struct timeval now, tv;
@@ -75,7 +77,13 @@ static void prune_rate_limit_entries(struct nhrp_task *task)
 	if (num_rate_limit_entries)
 		nhrp_task_schedule(&rate_limit_task,
 				   RATE_LIMIT_PURGE_INTERVAL * 1000,
-				   prune_rate_limit_entries);
+				   &prune_rate_limit_entries);
+}
+
+static char *prune_rate_limit_entries_describe(struct nhrp_task *task, size_t buflen, char *buf)
+{
+	snprintf(buf, buflen, "Prune rate limit tokens");
+	return buf;
 }
 
 static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src, struct nhrp_address *dst)
@@ -100,7 +108,7 @@ static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src, struct n
 	if (num_rate_limit_entries == 0)
 		nhrp_task_schedule(&rate_limit_task,
 				   RATE_LIMIT_PURGE_INTERVAL * 1000,
-				   prune_rate_limit_entries);
+				   &prune_rate_limit_entries);
 	num_rate_limit_entries++;
 
 	return e;
@@ -1371,7 +1379,9 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	return nhrp_packet_route_and_send(packet);
 }
 
-static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
+NHRP_TASK(nhrp_packet_xmit_timeout);
+
+static void nhrp_packet_xmit_timeout_callback(struct nhrp_task *task)
 {
 	struct nhrp_packet *packet = container_of(task, struct nhrp_packet, timeout);
 
@@ -1384,13 +1394,24 @@ static void nhrp_packet_xmit_timeout(struct nhrp_task *task)
 		TAILQ_INSERT_TAIL(&pending_requests, packet,
 				  request_list_entry);
 		nhrp_task_schedule(&packet->timeout, PACKET_RETRY_INTERVAL,
-				   nhrp_packet_xmit_timeout);
+				   &nhrp_packet_xmit_timeout);
 	} else {
 		if (packet->dst_peer == NULL)
 			nhrp_error("nhrp_packet_xmit_timeout: no destination peer!");
 		packet->handler(packet->handler_ctx, NULL);
 		nhrp_packet_dequeue(packet);
 	}
+}
+
+static char *nhrp_packet_xmit_timeout_describe(struct nhrp_task *task, size_t buflen, char *buf)
+{
+	struct nhrp_packet *packet = container_of(task, struct nhrp_packet, timeout);
+	char to[64];
+
+	snprintf(buf, buflen, "Timeout handler: packet %d (to %s)",
+		 packet->hdr.type,
+		 nhrp_address_format(&packet->dst_protocol_address, sizeof(to), to));
+	return buf;
 }
 
 int nhrp_packet_send_request(struct nhrp_packet *pkt,
@@ -1408,7 +1429,7 @@ int nhrp_packet_send_request(struct nhrp_packet *pkt,
 	packet->handler = handler;
 	packet->handler_ctx = ctx;
 	TAILQ_INSERT_TAIL(&pending_requests, packet, request_list_entry);
-	nhrp_task_schedule(&packet->timeout, 5000, nhrp_packet_xmit_timeout);
+	nhrp_task_schedule(&packet->timeout, 5000, &nhrp_packet_xmit_timeout);
 
 	return nhrp_packet_send(packet);
 }

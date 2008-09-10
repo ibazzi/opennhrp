@@ -14,18 +14,17 @@
 
 #define MAX_FDS 8
 
-LIST_HEAD(nhrp_task_list, nhrp_task);
-
 struct pollctx {
 	int (*callback)(void *ctx, int fd, short events);
 	void *ctx;
 };
 
 int nhrp_running = 0;
+struct nhrp_task_list nhrp_all_tasks;
+
 static int numfds = 0;
 static struct pollfd gfds[MAX_FDS];
 static struct pollctx gctx[MAX_FDS];
-static struct nhrp_task_list tasks;
 
 int nhrp_task_poll_fd(int fd, short events, int (*callback)(void *ctx, int fd, short events),
 		      void *ctx)
@@ -63,20 +62,20 @@ void nhrp_task_unpoll_fd(int fd)
 		nhrp_task_unpoll_index(i);
 }
 
-void nhrp_task_schedule(struct nhrp_task *task, int timeout, void (*callback)(struct nhrp_task *task))
+void nhrp_task_schedule(struct nhrp_task *task, int timeout, const struct nhrp_task_ops *ops)
 {
 	struct nhrp_task *after = NULL, *next;
 
 	nhrp_task_cancel(task);
 
 	gettimeofday(&task->execute_time, NULL);
-	task->callback = callback;
+	task->ops = ops;
 	task->execute_time.tv_usec += (timeout % 1000) * 1000;
 	task->execute_time.tv_sec += timeout / 1000 +
 		(task->execute_time.tv_usec / 1000000);
 	task->execute_time.tv_usec %= 1000000;
 
-	for (next = LIST_FIRST(&tasks);
+	for (next = LIST_FIRST(&nhrp_all_tasks);
 	     next != NULL && timercmp(&task->execute_time, &next->execute_time, >);
 	     next = LIST_NEXT(next, task_list))
 		after = next;
@@ -84,14 +83,14 @@ void nhrp_task_schedule(struct nhrp_task *task, int timeout, void (*callback)(st
 	if (after != NULL)
 		LIST_INSERT_AFTER(after, task, task_list);
 	else
-		LIST_INSERT_HEAD(&tasks, task, task_list);
+		LIST_INSERT_HEAD(&nhrp_all_tasks, task, task_list);
 }
 
 void nhrp_task_cancel(struct nhrp_task *task)
 {
-	if (task->callback != NULL) {
+	if (task->ops != NULL) {
 		LIST_REMOVE(task, task_list);
-		task->callback = NULL;
+		task->ops = NULL;
 	}
 }
 
@@ -103,22 +102,22 @@ void nhrp_task_run(void)
 
 	nhrp_running = TRUE;
 	do {
-		if (numfds == 0 && LIST_EMPTY(&tasks))
+		if (numfds == 0 && LIST_EMPTY(&nhrp_all_tasks))
 			break;
 
 		gettimeofday(&now, NULL);
-		while (!LIST_EMPTY(&tasks) && timercmp(&LIST_FIRST(&tasks)->execute_time, &now, <=)) {
-			void (*callback)(struct nhrp_task *task);
+		while (!LIST_EMPTY(&nhrp_all_tasks) && timercmp(&LIST_FIRST(&nhrp_all_tasks)->execute_time, &now, <=)) {
+			const struct nhrp_task_ops *ops;
 
-			task = LIST_FIRST(&tasks);
-			callback = task->callback;
+			task = LIST_FIRST(&nhrp_all_tasks);
+			ops = task->ops;
 
 			nhrp_task_cancel(task);
-			callback(task);
+			ops->callback(task);
 		}
 
-		if (!LIST_EMPTY(&tasks)) {
-			task = LIST_FIRST(&tasks);
+		if (!LIST_EMPTY(&nhrp_all_tasks)) {
+			task = LIST_FIRST(&nhrp_all_tasks);
 
 			timeout = task->execute_time.tv_sec - now.tv_sec;
 			timeout *= 1000;

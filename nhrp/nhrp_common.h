@@ -26,18 +26,34 @@ extern const char *nhrp_config_file, *nhrp_script_file;
 extern int nhrp_running, nhrp_verbose;
 
 /* Mainloop and timed tasks */
+struct nhrp_task;
+
+struct nhrp_task_ops {
+	void (*callback)(struct nhrp_task *task);
+	char* (*describe)(struct nhrp_task *task, size_t buflen, char *buffer);
+};
+#define NHRP_TASK(x) \
+	static void x##_callback(struct nhrp_task *); \
+	static char* x##_describe(struct nhrp_task *, size_t, char *); \
+	static struct nhrp_task_ops x = { x##_callback, x##_describe }
+
 struct nhrp_task {
+	const struct nhrp_task_ops *ops;
 	LIST_ENTRY(nhrp_task) task_list;
 	struct timeval execute_time;
-	void (*callback)(struct nhrp_task *task);
 };
 
-int nhrp_task_poll_fd(int fd, short events, int (*callback)(void *ctx, int fd, short events),
+LIST_HEAD(nhrp_task_list, nhrp_task);
+extern struct nhrp_task_list nhrp_all_tasks;
+
+int nhrp_task_poll_fd(int fd, short events,
+		      int (*callback)(void *ctx, int fd, short events),
 		      void *ctx);
 void nhrp_task_unpoll_fd(int fd);
 void nhrp_task_run(void);
 void nhrp_task_stop(void);
-void nhrp_task_schedule(struct nhrp_task *task, int timeout, void (*callback)(struct nhrp_task *task));
+void nhrp_task_schedule(struct nhrp_task *task, int timeout,
+			const struct nhrp_task_ops *ops);
 void nhrp_task_cancel(struct nhrp_task *task);
 
 /* Logging */

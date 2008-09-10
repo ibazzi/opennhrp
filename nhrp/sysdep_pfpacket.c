@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -117,8 +118,9 @@ static int check_ipv4(void *ctx, struct nhrp_peer *peer)
 }
 
 static struct nhrp_task install_filter_task;
+NHRP_TASK(install_filter);
 
-void install_filter(struct nhrp_task *task)
+void install_filter_callback(struct nhrp_task *task)
 {
 	struct nhrp_peer_selector sel;
 	struct sock_fprog prog;
@@ -191,9 +193,15 @@ void install_filter(struct nhrp_task *task)
 	nhrp_task_cancel(&install_filter_task);
 }
 
+char *install_filter_describe(struct nhrp_task *task, size_t buflen, char *buf)
+{
+	snprintf(buf, buflen, "Install PF_PACKET filter code");
+	return buf;
+}
+
 int forward_local_addresses_changed(void)
 {
-	nhrp_task_schedule(&install_filter_task, 0, install_filter);
+	nhrp_task_schedule(&install_filter_task, 0, &install_filter);
 	return TRUE;
 }
 
@@ -314,7 +322,7 @@ int forward_init(void)
 	}
 
 	fcntl(packet_fd, F_SETFD, FD_CLOEXEC);
-	install_filter(&install_filter_task);
+	install_filter_callback(&install_filter_task);
 
 	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfp_read, NULL))
 		goto err_close;

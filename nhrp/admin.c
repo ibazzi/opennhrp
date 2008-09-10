@@ -250,6 +250,22 @@ static void admin_flush(void *ctx, const char *cmd)
 		    count);
 }
 
+static void admin_schedule(void *ctx, const char *cmd)
+{
+	struct nhrp_task *task;
+	struct timeval now;
+	char tmp[256];
+
+	admin_write(ctx, "Status: ok\n\n");
+
+	gettimeofday(&now, NULL);
+	LIST_FOREACH(task, &nhrp_all_tasks, task_list) {
+		admin_write(ctx, "Timeout: %d\nDescription: %s\n\n",
+			    task->execute_time.tv_sec - now.tv_sec,
+			    task->ops->describe(task, sizeof(tmp), tmp));
+	}
+}
+
 static struct {
 	const char *command;
 	void (*handler)(void *ctx, const char *cmd);
@@ -257,6 +273,7 @@ static struct {
 	{ "show",		admin_show },
 	{ "flush",		admin_flush },
 	{ "purge",		admin_purge },
+	{ "schedule",		admin_schedule },
 };
 
 static int admin_receive(void *ctx, int fd, short events)
@@ -303,7 +320,9 @@ err:
 	return -1;
 }
 
-static void admin_timeout(struct nhrp_task *task)
+NHRP_TASK(admin_timeout);
+
+static void admin_timeout_callback(struct nhrp_task *task)
 {
 	struct admin_remote *rm = container_of(task, struct admin_remote, timeout);
 
@@ -311,6 +330,15 @@ static void admin_timeout(struct nhrp_task *task)
 	shutdown(rm->fd, SHUT_RDWR);
 	close(rm->fd);
 	free(rm);
+}
+
+static char *admin_timeout_describe(struct nhrp_task *task, size_t buflen, char *buf)
+{
+	struct admin_remote *rm = container_of(task, struct admin_remote, timeout);
+
+	snprintf(buf, buflen, "Admin connection timeout for fd %d",
+		 rm->fd);
+	return buf;
 }
 
 static int admin_accept(void *ctx, int fd, short events)
@@ -331,7 +359,7 @@ static int admin_accept(void *ctx, int fd, short events)
 	if (!nhrp_task_poll_fd(cnx, POLLIN, admin_receive, rm))
 		close(cnx);
 
-	nhrp_task_schedule(&rm->timeout, 10000, admin_timeout);
+	nhrp_task_schedule(&rm->timeout, 10000, &admin_timeout);
 
 	return 0;
 }

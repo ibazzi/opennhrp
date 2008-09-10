@@ -38,9 +38,12 @@ const char * const nhrp_peer_type[] = {
 static struct nhrp_peer_list local_peer_cache =
 	CIRCLEQ_HEAD_INITIALIZER(local_peer_cache);
 
-static void nhrp_run_up_script_task(struct nhrp_task *task);
-static void nhrp_peer_register_task(struct nhrp_task *task);
-static void nhrp_peer_register(struct nhrp_peer *peer);
+NHRP_TASK(nhrp_peer_run_up_script);
+NHRP_TASK(nhrp_peer_register);
+NHRP_TASK(nhrp_peer_prune);
+NHRP_TASK(nhrp_peer_check_renew);
+NHRP_TASK(nhrp_peer_do_insert);
+
 static void nhrp_peer_up(struct nhrp_peer *peer);
 
 static int bitcmp(uint8_t *a, uint8_t *b, int len)
@@ -89,7 +92,7 @@ static const char *nhrp_error_indication_text(int ei)
 	return "unknown";
 }
 
-static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
+static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len, char *buf, int full)
 {
 	char tmp[NHRP_PEER_FORMAT_LEN];
 	int i = 0;
@@ -124,6 +127,10 @@ static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 	}
 	i += snprintf(&buf[i], len - i, " dev %s",
 		      peer->interface->name);
+
+	if (!full)
+		return buf;
+
 	if (peer->flags & NHRP_PEER_FLAG_USED)
 		i += snprintf(&buf[i], len - i, " used");
 	if (peer->flags & NHRP_PEER_FLAG_UNIQUE)
@@ -147,9 +154,32 @@ static char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 	return buf;
 }
 
-static void nhrp_peer_prune_task(struct nhrp_task *task)
+static inline char *nhrp_peer_format(struct nhrp_peer *peer, size_t len, char *buf)
 {
-	return nhrp_peer_remove(container_of(task, struct nhrp_peer, task));
+	return nhrp_peer_format_full(peer, len, buf, TRUE);
+}
+
+static char *nhrp_peer_describe_task(struct nhrp_task *task, size_t buflen, char *buf,
+				     const char *action)
+{
+	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
+	char tmp[NHRP_PEER_FORMAT_LEN];
+
+	snprintf(buf, buflen, "%s for %s",
+		 action,
+		 nhrp_peer_format_full(peer, sizeof(tmp), tmp, FALSE));
+
+	return buf;
+}
+
+static void nhrp_peer_prune_callback(struct nhrp_task *task)
+{
+	nhrp_peer_remove(container_of(task, struct nhrp_peer, task));
+}
+
+static char *nhrp_peer_prune_describe(struct nhrp_task *task, size_t buflen, char *buf)
+{
+	return nhrp_peer_describe_task(task, buflen, buf, "Prune");
 }
 
 static void nhrp_peer_reinsert(struct nhrp_peer *peer, int type)
@@ -248,7 +278,7 @@ static void nhrp_peer_script_peer_up_done(struct nhrp_peer *peer, int status)
 
 		peer->flags |= NHRP_PEER_FLAG_LOWER_UP;
 		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
-			nhrp_peer_register(peer);
+			nhrp_peer_register_callback(&peer->task);
 		else
 			nhrp_peer_up(peer);
 	} else {
@@ -258,7 +288,8 @@ static void nhrp_peer_script_peer_up_done(struct nhrp_peer *peer, int status)
 			   status);
 
 		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
-			nhrp_task_schedule(&peer->task, 10000, nhrp_run_up_script_task);
+			nhrp_task_schedule(&peer->task, 10000,
+					   &nhrp_peer_run_up_script);
 		else
 			nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 	}
@@ -266,7 +297,7 @@ static void nhrp_peer_script_peer_up_done(struct nhrp_peer *peer, int status)
 
 static void nhrp_peer_script_peer_down_done(struct nhrp_peer *peer, int status)
 {
-	nhrp_task_schedule(&peer->task, 5000, nhrp_run_up_script_task);
+	nhrp_task_schedule(&peer->task, 5000, &nhrp_peer_run_up_script);
 }
 
 static void nhrp_peer_script_route_up_done(struct nhrp_peer *peer, int status)
@@ -290,7 +321,7 @@ static void nhrp_peer_script_route_up_done(struct nhrp_peer *peer, int status)
 	}
 }
 
-static void nhrp_run_up_script_task(struct nhrp_task *task)
+static void nhrp_peer_run_up_script_callback(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
 
@@ -298,7 +329,8 @@ static void nhrp_run_up_script_task(struct nhrp_task *task)
 		char host[64];
 
 		if (!nhrp_address_resolve(peer->nbma_hostname, &peer->next_hop_address)) {
-			nhrp_task_schedule(&peer->task, 5000, nhrp_run_up_script_task);
+			nhrp_task_schedule(&peer->task, 5000,
+					   &nhrp_peer_run_up_script);
 			return;
 		}
 
@@ -309,6 +341,11 @@ static void nhrp_run_up_script_task(struct nhrp_task *task)
 	}
 
 	nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
+}
+
+static char *nhrp_peer_run_up_script_describe(struct nhrp_task *task, size_t buflen, char *buf)
+{
+	return nhrp_peer_describe_task(task, buflen, buf, "Run up script");
 }
 
 static int nhrp_peer_routes_up(void *ctx, struct nhrp_peer *peer)
@@ -360,7 +397,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 					      sizeof(tmp), tmp),
 			  nhrp_error_indication_text(ec), ntohs(ec));
 		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME * 1000,
-				   nhrp_peer_register_task);
+				   &nhrp_peer_register);
 		return;
 	}
 
@@ -386,16 +423,12 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	nhrp_peer_up(peer);
 	nhrp_task_schedule(&peer->task,
 			   (NHRP_HOLDING_TIME - NHRP_RENEW_TIME) * 1000,
-			   nhrp_peer_register_task);
+			   &nhrp_peer_register);
 }
 
-static void nhrp_peer_register_task(struct nhrp_task *task)
+static void nhrp_peer_register_callback(struct nhrp_task *task)
 {
-	nhrp_peer_register(container_of(task, struct nhrp_peer, task));
-}
-
-static void nhrp_peer_register(struct nhrp_peer *peer)
-{
+	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
 	char dst[64];
 	struct nhrp_packet *packet;
 	struct nhrp_cie *cie;
@@ -479,8 +512,18 @@ error:
 	if (!sent) {
 		/* Try again later */
 		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME * 1000,
-				   nhrp_peer_register_task);
+				   &nhrp_peer_register);
 	}
+}
+
+static char *nhrp_peer_register_describe(struct nhrp_task *task, size_t buflen, char *buf)
+{
+	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
+
+	return nhrp_peer_describe_task(
+		task, buflen, buf,
+		(peer->flags & NHRP_PEER_FLAG_UP) ?
+			"Renew registration" : "Register");
 }
 
 static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *reply)
@@ -697,7 +740,7 @@ static int is_used(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-static void nhrp_peer_check_renew_task(struct nhrp_task *task)
+static void nhrp_peer_check_renew_callback(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
 	struct nhrp_peer_selector sel;
@@ -706,7 +749,7 @@ static void nhrp_peer_check_renew_task(struct nhrp_task *task)
 	peer->flags |= NHRP_PEER_FLAG_PRUNE_PENDING;
 	nhrp_task_schedule(&peer->task,
 			   (peer->expire_time - time(NULL)) * 1000,
-			   nhrp_peer_prune_task);
+			   &nhrp_peer_prune);
 
 	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
 		memset(&sel, 0, sizeof(sel));
@@ -718,6 +761,11 @@ static void nhrp_peer_check_renew_task(struct nhrp_task *task)
 
 	if (used)
 		nhrp_peer_renew(peer);
+}
+
+static char *nhrp_peer_check_renew_describe(struct nhrp_task *task, size_t buflen, char *buf)
+{
+	return nhrp_peer_describe_task(task, buflen, buf, "Check renewal");
 }
 
 struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface)
@@ -839,14 +887,14 @@ static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer)
 	}
 }
 
-static void nhrp_peer_insert_task(struct nhrp_task *task)
+static void nhrp_peer_do_insert_callback(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
 
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
 		nhrp_peer_resolve_nbma(peer);
-		nhrp_run_up_script_task(task);
+		nhrp_peer_run_up_script_callback(task);
 		break;
 	case NHRP_PEER_TYPE_LOCAL:
 		peer->flags |= NHRP_PEER_FLAG_UP;
@@ -858,7 +906,7 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 	case NHRP_PEER_TYPE_CACHED:
 		nhrp_task_schedule(&peer->task,
 				   (peer->expire_time - time(NULL) - NHRP_RENEW_TIME) * 1000,
-				   nhrp_peer_check_renew_task);
+				   &nhrp_peer_check_renew);
 		/* Fallthrough to bring peer up */
 	case NHRP_PEER_TYPE_DYNAMIC:
 		nhrp_peer_resolve_nbma(peer);
@@ -877,7 +925,7 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 
 		nhrp_task_schedule(&peer->task,
 				   (peer->expire_time - time(NULL) - NHRP_RENEW_TIME - 1) * 1000,
-				   nhrp_peer_check_renew_task);
+				   &nhrp_peer_check_renew);
 		break;
 	case NHRP_PEER_TYPE_NEGATIVE:
 		peer->expire_time = time(NULL) + NHRP_NEGATIVE_CACHE_TIME;
@@ -886,9 +934,14 @@ static void nhrp_peer_insert_task(struct nhrp_task *task)
 					       NULL, peer->interface);
 		nhrp_task_schedule(&peer->task,
 				   NHRP_NEGATIVE_CACHE_TIME * 1000,
-				   nhrp_peer_prune_task);
+				   &nhrp_peer_prune);
 		break;
 	}
+}
+
+static char *nhrp_peer_do_insert_describe(struct nhrp_task *task, size_t buflen, char *buf)
+{
+	return nhrp_peer_describe_task(task, buflen, buf, "Insert");
 }
 
 void nhrp_peer_insert(struct nhrp_peer *ins)
@@ -923,9 +976,9 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		   nhrp_peer_format(peer, sizeof(tmp), tmp));
 
 	if (nhrp_running || peer->type == NHRP_PEER_TYPE_LOCAL)
-		nhrp_peer_insert_task(&peer->task);
+		nhrp_peer_do_insert_callback(&peer->task);
 	else
-		nhrp_task_schedule(&peer->task, 0, nhrp_peer_insert_task);
+		nhrp_task_schedule(&peer->task, 0, &nhrp_peer_do_insert);
 }
 
 void nhrp_peer_purge(struct nhrp_peer *peer)
