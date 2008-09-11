@@ -257,7 +257,7 @@ static void admin_redirect_purge(void *ctx, const char *cmd)
 	uint8_t prefix;
 	int count;
 
-	nhrp_address_set_type(&addr, AF_UNSPEC);
+	nhrp_address_set_type(&addr, PF_UNSPEC);
 
 	if (parse_word(&cmd, sizeof(keyword), keyword)) {
 		if (!nhrp_address_parse(keyword, &addr, &prefix)) {

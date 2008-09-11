@@ -786,13 +786,13 @@ int kernel_init(void)
 	if (!nhrp_task_poll_fd(netlink_fd.fd, POLLIN, netlink_read, &netlink_fd))
 		goto err_close_netlink;
 
-	netlink_enumerate(&netlink_fd, AF_UNSPEC, RTM_GETLINK);
+	netlink_enumerate(&netlink_fd, PF_UNSPEC, RTM_GETLINK);
 	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
 
-	netlink_enumerate(&netlink_fd, AF_UNSPEC, RTM_GETADDR);
+	netlink_enumerate(&netlink_fd, PF_UNSPEC, RTM_GETADDR);
 	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
 
-	netlink_enumerate(&netlink_fd, AF_UNSPEC, RTM_GETROUTE);
+	netlink_enumerate(&netlink_fd, PF_UNSPEC, RTM_GETROUTE);
 	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
 
 	return TRUE;
@@ -829,7 +829,7 @@ int kernel_route(struct nhrp_interface *out_iface,
 			     dest->addr, dest->addr_len);
 	req.r.rtm_dst_len = dest->addr_len * 8;
 
-	if (default_source != NULL && default_source->type != AF_UNSPEC)
+	if (default_source != NULL && default_source->type != PF_UNSPEC)
 		netlink_add_rtattr_l(&req.n, sizeof(req), RTA_SRC,
 				     default_source->addr,
 				     default_source->addr_len);
@@ -842,7 +842,7 @@ int kernel_route(struct nhrp_interface *out_iface,
 
 	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(r), RTM_PAYLOAD(&req.n));
 
-	if (default_source != NULL && default_source->type == AF_UNSPEC &&
+	if (default_source != NULL && default_source->type == PF_UNSPEC &&
 	    rta[RTA_PREFSRC] != NULL) {
 		nhrp_address_set(default_source, dest->type,
 				 RTA_PAYLOAD(rta[RTA_PREFSRC]),
@@ -924,7 +924,7 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor,
 	netlink_add_rtattr_l(&req.n, sizeof(req), NDA_DST,
 			     neighbor->addr, neighbor->addr_len);
 
-	if (hwaddr != NULL && hwaddr->type != AF_UNSPEC) {
+	if (hwaddr != NULL && hwaddr->type != PF_UNSPEC) {
 		req.ndm.ndm_state = NUD_REACHABLE;
 
 		netlink_add_rtattr_l(&req.n, sizeof(req), NDA_LLADDR,
