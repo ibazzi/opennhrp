@@ -6,6 +6,18 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
+ opennhrp 0.8 - to be released ??/???/2008
+-----------------------------------------------------------------------------
+ - send purge request to shortcut subnets after registration
+ - clear redirection rate limiting cache for purge request addresses
+ - new admin commands: "redirect purge" and "schedule"
+ - rename admin commands: "flush", "purge" and "show" to have "cache" prefix
+   (accepts still old style commands for a while)
+ - make logging a bit less verbose
+ - minor fixes to renewals of peers and shortcut routes
+ - fix a memory leak
+
+-----------------------------------------------------------------------------
  opennhrp 0.7.1 - released 18/Jun/2008
 -----------------------------------------------------------------------------
  - use only primary interface addresses as nbma source address
