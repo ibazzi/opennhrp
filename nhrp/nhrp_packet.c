@@ -590,7 +590,7 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 					    sizeof(tmp), tmp),
 			cie->hdr.prefix_length,
 			nhrp_address_format(&cie->nbma_address,
-					    sizeof(tmp), tmp));
+					    sizeof(tmp2), tmp2));
 
 		memset(&sel, 0, sizeof(sel));
 		sel.flags = NHRP_PEER_FIND_EXACT;
@@ -766,8 +766,12 @@ static inline int unmarshall_protocol_address(uint8_t **pdu, size_t *pduleft, st
 	if (*pduleft < pa->addr_len)
 		return FALSE;
 
-	if (!nhrp_address_set(pa, pa->type, pa->addr_len, *pdu))
-		return FALSE;
+	if (pa->addr_len) {
+		if (!nhrp_address_set(pa, pa->type, pa->addr_len, *pdu))
+			return FALSE;
+	} else {
+		nhrp_address_set_type(pa, PF_UNSPEC);
+	}
 
 	*pdu += pa->addr_len;
 	*pduleft -= pa->addr_len;
@@ -779,10 +783,14 @@ static inline int unmarshall_nbma_address(uint8_t **pdu, size_t *pduleft, struct
 	if (*pduleft < na->addr_len + na->subaddr_len)
 		return FALSE;
 
-	if (!nhrp_address_set_full(na, na->type,
-				   na->addr_len, *pdu,
-				   na->subaddr_len, *pdu + na->addr_len))
-		return FALSE;
+	if (na->addr_len || na->subaddr_len) {
+		if (!nhrp_address_set_full(na, na->type,
+					   na->addr_len, *pdu,
+					   na->subaddr_len, *pdu + na->addr_len))
+			return FALSE;
+	} else {
+		nhrp_address_set_type(na, PF_UNSPEC);
+	}
 
 	*pdu += na->addr_len + na->subaddr_len;
 	*pduleft -= na->addr_len + na->subaddr_len;
@@ -794,16 +802,10 @@ static int unmarshall_cie(uint8_t **pdu, size_t *pduleft, struct nhrp_packet *p,
 	if (!unmarshall_binary(pdu, pduleft, sizeof(struct nhrp_cie_header), &cie->hdr))
 		return FALSE;
 
-	if (cie->hdr.nbma_address_len || cie->hdr.nbma_subaddress_len)
-		cie->nbma_address.type = nhrp_pf_from_afnum(p->hdr.afnum);
-	else
-		cie->nbma_address.type = PF_UNSPEC;
+	cie->nbma_address.type = nhrp_pf_from_afnum(p->hdr.afnum);
 	cie->nbma_address.addr_len = cie->hdr.nbma_address_len;
 	cie->nbma_address.subaddr_len = cie->hdr.nbma_subaddress_len;
-	if (cie->hdr.protocol_address_len)
-		cie->protocol_address.type = nhrp_pf_from_protocol(p->hdr.protocol_type);
-	else
-		cie->protocol_address.type = PF_UNSPEC;
+	cie->protocol_address.type = nhrp_pf_from_protocol(p->hdr.protocol_type);
 	cie->protocol_address.addr_len = cie->hdr.protocol_address_len;
 
 	if (!unmarshall_nbma_address(pdu, pduleft, &cie->nbma_address))
