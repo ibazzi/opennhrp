@@ -952,14 +952,19 @@ static void nhrp_peer_do_insert_callback(struct nhrp_task *task)
 		nhrp_peer_resolve(peer);
 		break;
 	case NHRP_PEER_TYPE_CACHED:
-		nhrp_task_schedule(&peer->task,
-				   (peer->expire_time - time(NULL) - NHRP_RENEW_TIME) * 1000,
-				   &nhrp_peer_check_renew);
-		/* Fallthrough to bring peer up */
 	case NHRP_PEER_TYPE_DYNAMIC:
 		nhrp_peer_resolve_nbma(peer);
 		if (!(peer->flags & NHRP_PEER_FLAG_LOWER_UP))
 			nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
+
+		if (peer->type == NHRP_PEER_TYPE_DYNAMIC)
+			nhrp_task_schedule(&peer->task,
+					   (peer->expire_time - time(NULL)) * 1000,
+					   &nhrp_peer_prune);
+		else
+			nhrp_task_schedule(&peer->task,
+					   (peer->expire_time - time(NULL) - NHRP_RENEW_TIME) * 1000,
+					   &nhrp_peer_check_renew);
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
 		if (!(peer->flags & NHRP_PEER_FLAG_UP) &&
