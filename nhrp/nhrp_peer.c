@@ -46,25 +46,6 @@ NHRP_TASK(nhrp_peer_do_insert);
 
 static void nhrp_peer_up(struct nhrp_peer *peer);
 
-static int bitcmp(uint8_t *a, uint8_t *b, int len)
-{
-	int bytes, bits, mask, r;
-
-	bytes = len / 8;
-	bits  = len % 8;
-
-	if (bytes != 0) {
-		r = memcmp(a, b, bytes);
-		if (r != 0)
-			return r;
-	}
-	if (bits != 0) {
-		mask = (0xff << (8 - bits)) & 0xff;
-		return ((int) (a[bytes] & mask)) - ((int) (b[bytes] & mask));
-	}
-	return 0;
-}
-
 static const char *nhrp_error_indication_text(int ei)
 {
 	switch (ei) {
@@ -1085,17 +1066,17 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 			    p->type != NHRP_PEER_TYPE_STATIC)
 				return FALSE;
 		} else if (sel->flags & NHRP_PEER_FIND_ROUTE) {
-			if (bitcmp(p->protocol_address.addr,
-				   sel->protocol_address.addr,
-				   p->prefix_length) != 0)
+			if (nhrp_address_prefix_cmp(&p->protocol_address,
+						    &sel->protocol_address,
+						    p->prefix_length) != 0)
 				return FALSE;
 		} else {
 			if (p->prefix_length < sel->prefix_length)
 				return FALSE;
 
-			if (bitcmp(p->protocol_address.addr,
-				   sel->protocol_address.addr,
-				   sel->prefix_length) != 0)
+			if (nhrp_address_prefix_cmp(&p->protocol_address,
+						    &sel->protocol_address,
+						    sel->prefix_length) != 0)
 				return FALSE;
 		}
 	}

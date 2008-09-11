@@ -50,6 +50,33 @@ static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize, struct nhrp_
 
 NHRP_TASK(prune_rate_limit_entries);
 
+static void nhrp_rate_limit_delete(struct nhrp_rate_limit *rl)
+{
+	LIST_REMOVE(rl, hash_entry);
+	free(rl);
+	num_rate_limit_entries--;
+}
+
+void nhrp_rate_limit_clear(struct nhrp_address *a, int pref)
+{
+	struct nhrp_rate_limit *rl, *next;
+	int i;
+
+	for (i = 0; i < RATE_LIMIT_HASH_SIZE; i++) {
+		for (rl = LIST_FIRST(&rate_limit_hash[i]);
+		     rl != NULL; rl = next) {
+			next = LIST_NEXT(rl, hash_entry);
+
+			if (nhrp_address_prefix_cmp(a, &rl->src, pref) == 0 ||
+			    nhrp_address_prefix_cmp(a, &rl->dst, pref) == 0)
+				nhrp_rate_limit_delete(rl);
+		}
+	}
+
+	if (num_rate_limit_entries == 0)
+		nhrp_task_cancel(&rate_limit_task);
+}
+
 static void prune_rate_limit_entries_callback(struct nhrp_task *task)
 {
 	struct nhrp_rate_limit *rl, *next;
@@ -57,20 +84,15 @@ static void prune_rate_limit_entries_callback(struct nhrp_task *task)
 	int i;
 
 	gettimeofday(&now, NULL);
-
 	for (i = 0; i < RATE_LIMIT_HASH_SIZE; i++) {
-		for (rl = LIST_FIRST(&rate_limit_hash[i]); rl != NULL; rl = next) {
+		for (rl = LIST_FIRST(&rate_limit_hash[i]);
+		     rl != NULL; rl = next) {
 			next = LIST_NEXT(rl, hash_entry);
 
 			tv = rl->rate_last;
 			tv.tv_sec += 2 * RATE_LIMIT_SILENCE;
-
-			if (timercmp(&now, &tv, >)) {
-				LIST_REMOVE(rl, hash_entry);
-				free(rl);
-
-				num_rate_limit_entries--;
-			}
+			if (timercmp(&now, &tv, >))
+				nhrp_rate_limit_delete(rl);
 		}
 	}
 
@@ -567,6 +589,8 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 		sel.protocol_address = cie->protocol_address;
 		sel.prefix_length = cie->hdr.prefix_length;
 		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+		nhrp_rate_limit_clear(&cie->protocol_address,
+				      cie->hdr.prefix_length);
 	}
 
 	return ret;

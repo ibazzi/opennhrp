@@ -18,6 +18,25 @@
 #include "nhrp_address.h"
 #include "nhrp_packet.h"
 
+static int bitcmp(uint8_t *a, uint8_t *b, int len)
+{
+	int bytes, bits, mask, r;
+
+	bytes = len / 8;
+	bits  = len % 8;
+
+	if (bytes != 0) {
+		r = memcmp(a, b, bytes);
+		if (r != 0)
+			return r;
+	}
+	if (bits != 0) {
+		mask = (0xff << (8 - bits)) & 0xff;
+		return ((int) (a[bytes] & mask)) - ((int) (b[bytes] & mask));
+	}
+	return 0;
+}
+
 uint16_t nhrp_protocol_from_pf(uint16_t pf)
 {
 	switch (pf) {
@@ -158,11 +177,28 @@ int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type,
 
 int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b)
 {
+	if (a->type > b->type)
+		return 1;
+	if (a->type < b->type)
+		return -1;
 	if (a->addr_len > b->addr_len || a->subaddr_len > b->subaddr_len)
 		return 1;
 	if (a->addr_len < b->addr_len || a->subaddr_len < b->subaddr_len)
 		return -1;
 	return memcmp(a->addr, b->addr, a->addr_len + a->subaddr_len);
+}
+
+int nhrp_address_prefix_cmp(struct nhrp_address *a, struct nhrp_address *b, int prefix)
+{
+	if (a->type > b->type)
+		return 1;
+	if (a->type < b->type)
+		return -1;
+	if (a->addr_len * 8 < prefix)
+		return 1;
+	if (b->addr_len * 8 < prefix)
+		return 1;
+	return bitcmp(a->addr, b->addr, prefix);
 }
 
 int nhrp_address_is_multicast(struct nhrp_address *addr)
