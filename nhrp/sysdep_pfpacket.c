@@ -92,8 +92,7 @@ static int check_interface(void *ctx, struct nhrp_interface *iface)
 {
 	struct filter *f = (struct filter *) ctx;
 
-	if (iface->flags & NHRP_INTERFACE_FLAG_REDIRECT)
-		emit_jump(f, BPF_JMP|BPF_JEQ|BPF_K, iface->index, LABEL_IF_OK, LABEL_NEXT);
+	emit_jump(f, BPF_JMP|BPF_JEQ|BPF_K, iface->index, LABEL_IF_OK, LABEL_NEXT);
 
 	return 0;
 }

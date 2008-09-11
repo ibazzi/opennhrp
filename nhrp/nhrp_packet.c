@@ -1377,8 +1377,10 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 		nhrp_payload_set_raw(payload,
 			nhrp_buffer_copy(packet->dst_iface->auth_token));
 
-        if (packet->dst_peer->type == NHRP_PEER_TYPE_LOCAL)
+	if (packet->dst_peer->type == NHRP_PEER_TYPE_LOCAL) {
+		packet->src_iface = packet->dst_peer->interface;
 		return nhrp_packet_receive_local(packet);
+	}
 
 	if (packet->dst_peer->flags & (NHRP_PEER_FLAG_UP |
 				       NHRP_PEER_FLAG_LOWER_UP))
@@ -1527,6 +1529,9 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
 	char tmp1[64], tmp2[64];
 	int r;
 	struct timeval now, tv;
+
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_REDIRECT))
+		return FALSE;
 
 	if (!nhrp_address_parse_packet(protocol_type, pdulen, pdu, &src, &dst))
 		return FALSE;
