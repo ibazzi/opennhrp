@@ -563,7 +563,7 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 	struct nhrp_peer_selector sel;
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
-	int ret = TRUE;
+	int flags, ret = TRUE;
 
 	nhrp_info("Received Purge Request from proto src %s to %s",
 		nhrp_address_format(&packet->src_protocol_address,
@@ -571,12 +571,17 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 		nhrp_address_format(&packet->dst_protocol_address,
 			sizeof(tmp2), tmp2));
 
+	flags = packet->hdr.flags;
 	packet->hdr.type = NHRP_PACKET_PURGE_REPLY;
 	packet->hdr.flags = 0;
 	packet->hdr.hop_count = 0;
 
-	if (!(packet->hdr.flags & NHRP_FLAG_PURGE_NO_REPLY))
-		ret = nhrp_packet_send(packet);
+	if (!(flags & NHRP_FLAG_PURGE_NO_REPLY)) {
+		if (nhrp_packet_reroute(packet, FALSE))
+			ret = nhrp_packet_send(packet);
+		else
+			ret = FALSE;
+	}
 
 	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	TAILQ_FOREACH(cie, &payload->u.cie_list_head, cie_list_entry) {
@@ -617,7 +622,8 @@ static int nhrp_do_handle_error_indication(struct nhrp_packet *error_pkt,
 				     &req->src_protocol_address))
 			continue;
 
-		req->handler(req->handler_ctx, error_pkt);
+		if (req->handler != NULL)
+			req->handler(req->handler_ctx, error_pkt);
 		nhrp_packet_dequeue(req);
 
 		return TRUE;
@@ -788,10 +794,16 @@ static int unmarshall_cie(uint8_t **pdu, size_t *pduleft, struct nhrp_packet *p,
 	if (!unmarshall_binary(pdu, pduleft, sizeof(struct nhrp_cie_header), &cie->hdr))
 		return FALSE;
 
-	cie->nbma_address.type = nhrp_pf_from_afnum(p->hdr.afnum);
+	if (cie->hdr.nbma_address_len || cie->hdr.nbma_subaddress_len)
+		cie->nbma_address.type = nhrp_pf_from_afnum(p->hdr.afnum);
+	else
+		cie->nbma_address.type = PF_UNSPEC;
 	cie->nbma_address.addr_len = cie->hdr.nbma_address_len;
 	cie->nbma_address.subaddr_len = cie->hdr.nbma_subaddress_len;
-	cie->protocol_address.type = nhrp_pf_from_protocol(p->hdr.protocol_type);
+	if (cie->hdr.protocol_address_len)
+		cie->protocol_address.type = nhrp_pf_from_protocol(p->hdr.protocol_type);
+	else
+		cie->protocol_address.type = PF_UNSPEC;
 	cie->protocol_address.addr_len = cie->hdr.protocol_address_len;
 
 	if (!unmarshall_nbma_address(pdu, pduleft, &cie->nbma_address))
@@ -1005,7 +1017,8 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 					     &req->src_protocol_address))
 				continue;
 
-			req->handler(req->handler_ctx, packet);
+			if (req->handler != NULL)
+				req->handler(req->handler_ctx, packet);
 			nhrp_packet_dequeue(req);
 
 			return TRUE;
@@ -1427,7 +1440,8 @@ static void nhrp_packet_xmit_timeout_callback(struct nhrp_task *task)
 	} else {
 		if (packet->dst_peer == NULL)
 			nhrp_error("nhrp_packet_xmit_timeout: no destination peer!");
-		packet->handler(packet->handler_ctx, NULL);
+		if (packet->handler != NULL)
+			packet->handler(packet->handler_ctx, NULL);
 		nhrp_packet_dequeue(packet);
 	}
 }

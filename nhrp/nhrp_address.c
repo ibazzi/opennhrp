@@ -235,6 +235,9 @@ const char *nhrp_address_format(struct nhrp_address *addr,
 				size_t buflen, char *buffer)
 {
 	switch (addr->type) {
+	case PF_UNSPEC:
+		snprintf(buffer, buflen, "(unspecified)");
+		break;
 	case PF_INET:
 		snprintf(buffer, buflen, "%d.%d.%d.%d",
 			 addr->addr[0], addr->addr[1],

@@ -205,11 +205,11 @@ static pid_t nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*c
 	}
 
 	envp[i++] = env("NHRP_TYPE", nhrp_peer_type[peer->type]);
-	if (iface->protocol_address.type != AF_UNSPEC)
+	if (iface->protocol_address.type != PF_UNSPEC)
 		envp[i++] = env("NHRP_SRCADDR",
 				nhrp_address_format(&iface->protocol_address,
 						    sizeof(tmp), tmp));
-	if (peer->my_nbma_address.type != AF_UNSPEC)
+	if (peer->my_nbma_address.type != PF_UNSPEC)
 		envp[i++] = env("NHRP_SRCNBMA",
 				nhrp_address_format(&peer->my_nbma_address,
 						    sizeof(tmp), tmp));
@@ -359,11 +359,37 @@ static void nhrp_peer_up(struct nhrp_peer *peer)
 	}
 }
 
+static int nhrp_add_local_route_cie(void *ctx, struct nhrp_peer *route)
+{
+	struct nhrp_packet *packet = (struct nhrp_packet *) ctx;
+	struct nhrp_payload *payload;
+	struct nhrp_cie *cie;
+
+	if (!(route->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST))
+		return 0;
+
+	cie = nhrp_cie_alloc();
+	if (cie == NULL)
+		return 0;
+
+	*cie = (struct nhrp_cie) {
+		.hdr.code = 0,
+		.hdr.prefix_length = route->prefix_length,
+		.protocol_address = route->protocol_address,
+	};
+
+	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_payload_add_cie(payload, cie);
+
+	return 0;
+}
+
 static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *reply)
 {
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx;
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
+	struct nhrp_packet *packet;
 	char tmp[NHRP_PEER_FORMAT_LEN];
 	int ec;
 
@@ -398,6 +424,47 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 				  nhrp_address_format(&cie->nbma_address, sizeof(tmp), tmp));
 			peer->interface->nat_cie = *cie;
 		}
+	}
+
+	/* If not re-registration, send a purge request for each subnet
+	 * we accept shortcuts to, to clear server redirection cache. */
+	if (!(peer->flags & NHRP_PEER_FLAG_UP) &&
+	    (packet = nhrp_packet_alloc()) != NULL) {
+		struct nhrp_peer_selector sel;
+
+		packet->hdr = (struct nhrp_packet_header) {
+			.afnum = peer->afnum,
+			.protocol_type = peer->protocol_type,
+			.version = NHRP_VERSION_RFC2332,
+			.type = NHRP_PACKET_PURGE_REQUEST
+		};
+		packet->dst_protocol_address = peer->protocol_address;
+
+		memset(&sel, 0, sizeof(sel));
+		sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL);
+		nhrp_peer_foreach(nhrp_add_local_route_cie, packet, &sel);
+
+		nhrp_packet_extension(packet,
+				      NHRP_EXTENSION_FORWARD_TRANSIT_NHS |
+				      NHRP_EXTENSION_FLAG_COMPULSORY,
+				      NHRP_PAYLOAD_TYPE_CIE_LIST);
+		nhrp_packet_extension(packet,
+				      NHRP_EXTENSION_REVERSE_TRANSIT_NHS |
+				      NHRP_EXTENSION_FLAG_COMPULSORY,
+				      NHRP_PAYLOAD_TYPE_CIE_LIST);
+		nhrp_packet_extension(packet,
+				      NHRP_EXTENSION_RESPONDER_ADDRESS |
+				      NHRP_EXTENSION_FLAG_COMPULSORY,
+				      NHRP_PAYLOAD_TYPE_CIE_LIST);
+
+		nhrp_info("Sending Purge Request (of local routes) to %s",
+			  nhrp_address_format(&peer->protocol_address,
+					      sizeof(tmp), tmp));
+
+		packet->dst_peer = nhrp_peer_dup(peer);
+		packet->dst_iface = peer->interface;
+		nhrp_packet_send_request(packet, NULL, NULL);
+		nhrp_packet_free(packet);
 	}
 
 	/* Re-register after holding time expires */
@@ -855,7 +922,7 @@ static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer)
 	char tmp[64];
 	int r;
 
-	if (peer->interface->nbma_address.type == AF_UNSPEC) {
+	if (peer->interface->nbma_address.type == PF_UNSPEC) {
 		r = kernel_route(NULL, &peer->next_hop_address,
 				 &peer->my_nbma_address, NULL);
 		if (!r) {
@@ -1053,7 +1120,7 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 	    p->interface != sel->interface)
 		return FALSE;
 
-	if (sel->protocol_address.type != AF_UNSPEC) {
+	if (sel->protocol_address.type != PF_UNSPEC) {
 		if (sel->prefix_length == 0)
 			sel->prefix_length = sel->protocol_address.addr_len * 8;
 
@@ -1081,7 +1148,7 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 		}
 	}
 
-	if (sel->next_hop_address.type != AF_UNSPEC) {
+	if (sel->next_hop_address.type != PF_UNSPEC) {
 		if (nhrp_address_cmp(&p->next_hop_address,
 				     &sel->next_hop_address) != 0)
 			return FALSE;
