@@ -200,7 +200,7 @@ err_noiface:
 	return FALSE;
 }
 
-static void admin_show(void *ctx, const char *cmd)
+static void admin_cache_show(void *ctx, const char *cmd)
 {
 	struct nhrp_peer_selector sel;
 
@@ -212,7 +212,7 @@ static void admin_show(void *ctx, const char *cmd)
 	nhrp_peer_foreach(admin_show_peer, ctx, &sel);
 }
 
-static void admin_purge(void *ctx, const char *cmd)
+static void admin_cache_purge(void *ctx, const char *cmd)
 {
 	struct nhrp_peer_selector sel;
 	int count = 0;
@@ -231,7 +231,7 @@ static void admin_purge(void *ctx, const char *cmd)
 		    count);
 }
 
-static void admin_flush(void *ctx, const char *cmd)
+static void admin_cache_flush(void *ctx, const char *cmd)
 {
 	struct nhrp_peer_selector sel;
 	int count = 0;
@@ -244,6 +244,33 @@ static void admin_flush(void *ctx, const char *cmd)
 
 	nhrp_peer_foreach(nhrp_peer_remove_matching, &count, &sel);
 
+	admin_write(ctx,
+		    "Status: ok\n"
+		    "Entries-Affected: %d\n",
+		    count);
+}
+
+static void admin_redirect_purge(void *ctx, const char *cmd)
+{
+	char keyword[64];
+	struct nhrp_address addr;
+	uint8_t prefix;
+	int count;
+
+	nhrp_address_set_type(&addr, AF_UNSPEC);
+
+	if (parse_word(&cmd, sizeof(keyword), keyword)) {
+		if (!nhrp_address_parse(keyword, &addr, &prefix)) {
+			admin_write(ctx,
+				    "Status: failed\n"
+				    "Reason: invalid-address\n"
+				    "Near-Keyword: '%s'\n",
+				    keyword);
+			return;
+		}
+	}
+
+	count = nhrp_rate_limit_clear(&addr, prefix);
 	admin_write(ctx,
 		    "Status: ok\n"
 		    "Entries-Affected: %d\n",
@@ -270,9 +297,13 @@ static struct {
 	const char *command;
 	void (*handler)(void *ctx, const char *cmd);
 } admin_handler[] = {
-	{ "show",		admin_show },
-	{ "flush",		admin_flush },
-	{ "purge",		admin_purge },
+	{ "show",		admin_cache_show },
+	{ "cache show",		admin_cache_show },
+	{ "flush",		admin_cache_flush },
+	{ "cache flush",	admin_cache_flush },
+	{ "purge",		admin_cache_purge },
+	{ "cache purge",	admin_cache_purge },
+	{ "redirect purge",	admin_redirect_purge },
 	{ "schedule",		admin_schedule },
 };
 

@@ -57,24 +57,29 @@ static void nhrp_rate_limit_delete(struct nhrp_rate_limit *rl)
 	num_rate_limit_entries--;
 }
 
-void nhrp_rate_limit_clear(struct nhrp_address *a, int pref)
+int nhrp_rate_limit_clear(struct nhrp_address *a, int pref)
 {
 	struct nhrp_rate_limit *rl, *next;
-	int i;
+	int i, ret = 0;
 
 	for (i = 0; i < RATE_LIMIT_HASH_SIZE; i++) {
 		for (rl = LIST_FIRST(&rate_limit_hash[i]);
 		     rl != NULL; rl = next) {
 			next = LIST_NEXT(rl, hash_entry);
 
-			if (nhrp_address_prefix_cmp(a, &rl->src, pref) == 0 ||
-			    nhrp_address_prefix_cmp(a, &rl->dst, pref) == 0)
+			if (a->addr == AF_UNSPEC ||
+			    nhrp_address_prefix_cmp(a, &rl->src, pref) == 0 ||
+			    nhrp_address_prefix_cmp(a, &rl->dst, pref) == 0) {
 				nhrp_rate_limit_delete(rl);
+				ret++;
+			}
 		}
 	}
 
 	if (num_rate_limit_entries == 0)
 		nhrp_task_cancel(&rate_limit_task);
+
+	return ret;
 }
 
 static void prune_rate_limit_entries_callback(struct nhrp_task *task)

@@ -1,4 +1,4 @@
-.TH OPENNHRP 8 "25 February 2008" "" "OpenNHRP Documentation"
+.TH OPENNHRP 8 "11 September 2008" "" "OpenNHRP Documentation"
 
 .SH NAME
 opennhrpctl \- opennhrp administrative control tool
@@ -20,21 +20,30 @@ the permissions and ownership of the socket.
 
 The following commands are available:
 
-.BI "show [" selector "]..."
+.BI "[cache] show [" selector "]..."
 .RS
 Show contents of next hop cache (configured and resolved entries).
 .RE
 
-.BI "flush [" selector "]..."
+.BI "[cache] flush [" selector "]..."
 .RS
-Clear all non-permanent entries which matching the selector
-specifiers.
+Clear all non-permanent entries which match the selector specifiers.
 .RE
 
-.BI "purge [" selector "]..."
+.BI "[cache] purge [" selector "]..."
 .RS
 Purge entries from NHRP cache: cached entries are removed and permanent
 entries are forced down, up and finally reregistered.
+.RE
+
+.BI "redirect purge [" protocol-address "/" prefix-length "]"
+.RS
+Clear redirection cache from all entries matching the specified address.
+.RE
+
+.BI "schedule"
+.RS
+Show internal event schedule. Mostly useful only for debugging.
 .RE
 
 The following selectors can be used to limit which cache entries will
