@@ -8,6 +8,7 @@ svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 -----------------------------------------------------------------------------
  opennhrp 0.8 - to be released ??/???/2008
 -----------------------------------------------------------------------------
+ - licensing terms changed to GPL version 2 or later
  - send purge request to shortcut subnets after registration
  - clear redirection rate limiting cache for purge request addresses
  - new admin commands: "redirect purge" and "schedule"

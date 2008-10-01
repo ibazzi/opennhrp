@@ -3,9 +3,11 @@
  * Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
  * All rights reserved.
  *
- * This program is free software; you can redistribute it and/or modify it 
- * under the terms of the GNU General Public License version 3 as published
- * by the Free Software Foundation. See http://www.gnu.org/ for details.
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 or later as
+ * published by the Free Software Foundation.
+ *
+ * See http://www.gnu.org/ for details.
  */
 
 #include <ctype.h>
