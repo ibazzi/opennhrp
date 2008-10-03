@@ -6,7 +6,7 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
- opennhrp 0.8 - to be released ??/???/2008
+ opennhrp 0.8 - released 03/Oct/2008
 -----------------------------------------------------------------------------
  - licensing terms changed to GPL version 2 or later
  - send purge request to shortcut subnets after registration
