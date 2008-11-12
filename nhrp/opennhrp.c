@@ -142,10 +142,9 @@ static int load_config(const char *config_file)
 			if (!nhrp_address_parse(nbma, &peer->next_hop_address,
 						NULL)) {
 				if (!nhrp_address_resolve(nbma,
-						&peer->next_hop_address)) {
-					rc = 4;
-					break;
-				}
+							  &peer->next_hop_address))
+					nhrp_info("WARNING: Unable to resolve domain name '%s'",
+						  nbma);
 				peer->nbma_hostname = strdup(nbma);
 			}
 			peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
