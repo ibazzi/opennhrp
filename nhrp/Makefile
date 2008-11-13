@@ -30,6 +30,7 @@ opennhrpctl_OBJS = \
 ALL_OBJS = $(opennhrp_OBJS) $(opennhrpctl_OBJS)
 
 CFLAGS += -I../include -DOPENNHRP_ADMIN_SOCKET=\"$(STATEDIR)/opennhrp.socket\"
+LDFLAGS += -lrt
 
 all: $(TARGETS)
 

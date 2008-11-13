@@ -11,6 +11,8 @@
  */
 
 #include <poll.h>
+#include <time.h>
+#include <unistd.h>
 #include "nhrp_defines.h"
 #include "nhrp_common.h"
 
@@ -27,6 +29,19 @@ struct nhrp_task_list nhrp_all_tasks;
 static int numfds = 0;
 static struct pollfd gfds[MAX_FDS];
 static struct pollctx gctx[MAX_FDS];
+
+void nhrp_time_monotonic(struct timeval *tv)
+{
+#ifdef _POSIX_MONOTONIC_CLOCK
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	tv->tv_sec = ts.tv_sec;
+	tv->tv_usec = ts.tv_nsec / 1000;
+#else
+	gettimeofday(tv, NULL);
+#endif
+}
 
 int nhrp_task_poll_fd(int fd, short events, int (*callback)(void *ctx, int fd, short events),
 		      void *ctx)
@@ -64,18 +79,35 @@ void nhrp_task_unpoll_fd(int fd)
 		nhrp_task_unpoll_index(i);
 }
 
-void nhrp_task_schedule(struct nhrp_task *task, int timeout, const struct nhrp_task_ops *ops)
+void nhrp_task_schedule(struct nhrp_task *task, int timeout,
+			const struct nhrp_task_ops *ops)
+{
+	struct timeval now;
+
+	nhrp_time_monotonic(&now);
+	nhrp_task_schedule_relative(task, &now, timeout, ops);
+}
+
+void nhrp_task_schedule_relative(struct nhrp_task *task,
+				 struct timeval *when,
+				 int rel_ms,
+				 const struct nhrp_task_ops *ops)
 {
 	struct nhrp_task *after = NULL, *next;
+	struct timeval rel;
 
 	nhrp_task_cancel(task);
 
-	gettimeofday(&task->execute_time, NULL);
 	task->ops = ops;
-	task->execute_time.tv_usec += (timeout % 1000) * 1000;
-	task->execute_time.tv_sec += timeout / 1000 +
-		(task->execute_time.tv_usec / 1000000);
-	task->execute_time.tv_usec %= 1000000;
+	if (rel_ms < 0) {
+		rel.tv_sec = (-rel_ms) / 1000;
+		rel.tv_usec = (-rel_ms) % 1000;
+		timersub(when, &rel, &task->execute_time);
+	} else {
+		rel.tv_sec = rel_ms / 1000;
+		rel.tv_usec = rel_ms % 1000;
+		timeradd(when, &rel, &task->execute_time);
+	}
 
 	for (next = LIST_FIRST(&nhrp_all_tasks);
 	     next != NULL && timercmp(&task->execute_time, &next->execute_time, >);
@@ -87,6 +119,10 @@ void nhrp_task_schedule(struct nhrp_task *task, int timeout, const struct nhrp_t
 	else
 		LIST_INSERT_HEAD(&nhrp_all_tasks, task, task_list);
 }
+
+void nhrp_task_schedule_relative(struct nhrp_task *task, struct timeval *tv,
+				 int rel_ms, const struct nhrp_task_ops *ops);
+
 
 void nhrp_task_cancel(struct nhrp_task *task)
 {
@@ -107,7 +143,7 @@ void nhrp_task_run(void)
 		if (numfds == 0 && LIST_EMPTY(&nhrp_all_tasks))
 			break;
 
-		gettimeofday(&now, NULL);
+		nhrp_time_monotonic(&now);
 		while (!LIST_EMPTY(&nhrp_all_tasks) && timercmp(&LIST_FIRST(&nhrp_all_tasks)->execute_time, &now, <=)) {
 			const struct nhrp_task_ops *ops;
 

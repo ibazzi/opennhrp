@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
@@ -78,6 +79,7 @@ static const char *nhrp_error_indication_text(int ei)
 static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len, char *buf, int full)
 {
 	char tmp[NHRP_PEER_FORMAT_LEN];
+	struct timeval now;
 	int i = 0;
 
 	if (peer == NULL) {
@@ -122,8 +124,12 @@ static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len, char *buf
 		i += snprintf(&buf[i], len - i, " up");
 	else if (peer->flags & NHRP_PEER_FLAG_LOWER_UP)
 		i += snprintf(&buf[i], len - i, " lower-up");
-	if (peer->expire_time) {
-		int rel = peer->expire_time - time(NULL);
+	if (peer->expire_time.tv_sec && peer->expire_time.tv_usec) {
+		int rel;
+
+		nhrp_time_monotonic(&now);
+		rel = peer->expire_time.tv_sec - now.tv_sec;
+
 		if (rel >= 0) {
 			i += snprintf(&buf[i], len - i, " expires_in %d:%02d",
 				      rel / 60, rel % 60);
@@ -644,7 +650,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		peer->next_hop_address = natcie->nbma_address;
 		if (natoacie != NULL)
 			peer->next_hop_nat_oa = natoacie->nbma_address;
-		peer->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
+		nhrp_time_monotonic(&peer->expire_time);
+		peer->expire_time.tv_sec += ntohs(cie->hdr.holding_time);
 		nhrp_address_mask(&peer->protocol_address, peer->prefix_length);
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED);
 		return;
@@ -664,7 +671,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		if (natoacie != NULL)
 			np->next_hop_nat_oa = natoacie->nbma_address;
 		np->prefix_length = cie->protocol_address.addr_len * 8;
-		np->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
+		nhrp_time_monotonic(&np->expire_time);
+		np->expire_time.tv_sec += ntohs(cie->hdr.holding_time);
 		nhrp_peer_insert(np);
 		nhrp_peer_free(np);
 	}
@@ -672,7 +680,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	/* Off NBMA destination; a shortcut route */
 	peer->prefix_length = cie->hdr.prefix_length;
 	peer->next_hop_address = cie->protocol_address;
-	peer->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
+	nhrp_time_monotonic(&peer->expire_time);
+	peer->expire_time.tv_sec += ntohs(cie->hdr.holding_time);
 	nhrp_address_mask(&peer->protocol_address, peer->prefix_length);
 	nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED_ROUTE);
 }
@@ -797,9 +806,8 @@ static void nhrp_peer_check_renew_callback(struct nhrp_task *task)
 	int used;
 
 	peer->flags |= NHRP_PEER_FLAG_PRUNE_PENDING;
-	nhrp_task_schedule(&peer->task,
-			   (peer->expire_time - time(NULL)) * 1000,
-			   &nhrp_peer_prune);
+	nhrp_task_schedule_at(&peer->task, &peer->expire_time,
+			      &nhrp_peer_prune);
 
 	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
 		memset(&sel, 0, sizeof(sel));
@@ -960,13 +968,13 @@ static void nhrp_peer_do_insert_callback(struct nhrp_task *task)
 			nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
 
 		if (peer->type == NHRP_PEER_TYPE_DYNAMIC)
-			nhrp_task_schedule(&peer->task,
-					   (peer->expire_time - time(NULL)) * 1000,
-					   &nhrp_peer_prune);
+			nhrp_task_schedule_at(&peer->task, &peer->expire_time,
+					      &nhrp_peer_prune);
 		else
-			nhrp_task_schedule(&peer->task,
-					   (peer->expire_time - time(NULL) - NHRP_RENEW_TIME) * 1000,
-					   &nhrp_peer_check_renew);
+			nhrp_task_schedule_relative(&peer->task,
+						    &peer->expire_time,
+						    -NHRP_RENEW_TIME*1000,
+						    &nhrp_peer_check_renew);
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
 		if (!(peer->flags & NHRP_PEER_FLAG_UP) &&
@@ -978,12 +986,15 @@ static void nhrp_peer_do_insert_callback(struct nhrp_task *task)
 			nhrp_peer_run_script(peer, "route-up",
 					     nhrp_peer_script_route_up_done);
 
-		nhrp_task_schedule(&peer->task,
-				   (peer->expire_time - time(NULL) - NHRP_RENEW_TIME - 1) * 1000,
-				   &nhrp_peer_check_renew);
+		nhrp_task_schedule_relative(&peer->task,
+					    &peer->expire_time,
+					    -(NHRP_RENEW_TIME+1) * 1000,
+					    &nhrp_peer_check_renew);
 		break;
 	case NHRP_PEER_TYPE_NEGATIVE:
-		peer->expire_time = time(NULL) + NHRP_NEGATIVE_CACHE_TIME;
+		nhrp_time_monotonic(&peer->expire_time);
+		peer->expire_time.tv_sec += NHRP_NEGATIVE_CACHE_TIME;
+
 		if (peer->flags & NHRP_PEER_FLAG_UP)
 			kernel_inject_neighbor(&peer->protocol_address,
 					       NULL, peer->interface);
@@ -1267,7 +1278,7 @@ static int decide_route(void *ctx, struct nhrp_peer *peer)
 			return 0;
 
 		if (rd->best_found->prefix_length == peer->prefix_length &&
-		    rd->best_found->last_used < peer->last_used)
+		    timercmp(&rd->best_found->last_used, &peer->last_used, <))
 			return 0;
 	}
 
@@ -1302,7 +1313,7 @@ struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *interface,
 	    !(rd.best_found->flags & NHRP_PEER_FLAG_UP))
 		return NULL;
 
-	time(&rd.best_found->last_used);
+	nhrp_time_monotonic(&rd.best_found->last_used);
 	return rd.best_found;
 }
 

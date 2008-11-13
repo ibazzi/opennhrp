@@ -48,6 +48,7 @@ struct nhrp_task {
 LIST_HEAD(nhrp_task_list, nhrp_task);
 extern struct nhrp_task_list nhrp_all_tasks;
 
+void nhrp_time_monotonic(struct timeval *tv);
 int nhrp_task_poll_fd(int fd, short events,
 		      int (*callback)(void *ctx, int fd, short events),
 		      void *ctx);
@@ -56,7 +57,16 @@ void nhrp_task_run(void);
 void nhrp_task_stop(void);
 void nhrp_task_schedule(struct nhrp_task *task, int timeout,
 			const struct nhrp_task_ops *ops);
+void nhrp_task_schedule_relative(struct nhrp_task *task, struct timeval *tv,
+				 int rel_ms, const struct nhrp_task_ops *ops);
 void nhrp_task_cancel(struct nhrp_task *task);
+
+static inline void nhrp_task_schedule_at(struct nhrp_task *task,
+					 struct timeval *tv,
+					 const struct nhrp_task_ops *ops)
+{
+	nhrp_task_schedule_relative(task, tv, 0, ops);
+}
 
 /* Logging */
 void nhrp_debug(const char *format, ...);

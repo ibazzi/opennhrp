@@ -72,7 +72,8 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 {
 	char buf[512], tmp[32];
 	size_t len = sizeof(buf);
-	int i = 0;
+	struct timeval now;
+	int i = 0, rel;
 
 	i += snprintf(&buf[i], len - i,
 		"Interface: %s\n"
@@ -107,9 +108,14 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 			i += snprintf(&buf[i], len - i, " lower-up");
 		i += snprintf(&buf[i], len - i, "\n");
 	}
-	if (peer->expire_time)
-		i += snprintf(&buf[i], len - i, "Expires-At: %s",
-			      ctime(&peer->expire_time));
+	if (peer->expire_time.tv_sec && peer->expire_time.tv_usec) {
+		nhrp_time_monotonic(&now);
+		rel = peer->expire_time.tv_sec - now.tv_sec;
+		if (rel >= 0) {
+			i += snprintf(&buf[i], len - i, "Expires-In: %d:%02d\n",
+				      rel / 60, rel % 60);
+		}
+	}
 
 	admin_write(ctx, "%s\n", buf);
 	return 0;
@@ -287,7 +293,7 @@ static void admin_schedule(void *ctx, const char *cmd)
 
 	admin_write(ctx, "Status: ok\n\n");
 
-	gettimeofday(&now, NULL);
+	nhrp_time_monotonic(&now);
 	LIST_FOREACH(task, &nhrp_all_tasks, task_list) {
 		admin_write(ctx, "Timeout: %d\nDescription: %s\n\n",
 			    task->execute_time.tv_sec - now.tv_sec,

@@ -90,7 +90,7 @@ static void prune_rate_limit_entries_callback(struct nhrp_task *task)
 	struct timeval now, tv;
 	int i;
 
-	gettimeofday(&now, NULL);
+	nhrp_time_monotonic(&now);
 	for (i = 0; i < RATE_LIMIT_HASH_SIZE; i++) {
 		for (rl = LIST_FIRST(&rate_limit_hash[i]);
 		     rl != NULL; rl = next) {
@@ -441,8 +441,10 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	struct nhrp_cie *cie;
 	struct nhrp_peer *peer, *rpeer = NULL;
 	struct nhrp_peer_selector sel;
+	struct timeval now;
 	int natted = 0;
 
+	nhrp_time_monotonic(&now);
 	nhrp_info("Received Registration Request from proto src %s to %s",
 		nhrp_address_format(&packet->src_protocol_address,
 			sizeof(tmp), tmp),
@@ -492,7 +494,8 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		peer->type = NHRP_PEER_TYPE_DYNAMIC;
 		peer->afnum = packet->hdr.afnum;
 		peer->protocol_type = packet->hdr.protocol_type;
-		peer->expire_time = time(NULL) + ntohs(cie->hdr.holding_time);
+		peer->expire_time = now;
+		peer->expire_time.tv_sec += ntohs(cie->hdr.holding_time);
 
 		if (cie->nbma_address.addr_len != 0)
 			peer->next_hop_address = cie->nbma_address;
@@ -1542,7 +1545,7 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
 	if (rl == NULL)
 		return FALSE;
 
-	gettimeofday(&now, NULL);
+	nhrp_time_monotonic(&now);
 	tv = rl->rate_last;
 	tv.tv_sec += RATE_LIMIT_SILENCE;
 
