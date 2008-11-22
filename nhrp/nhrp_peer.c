@@ -48,6 +48,7 @@ NHRP_TASK(nhrp_peer_check_renew);
 NHRP_TASK(nhrp_peer_do_insert);
 
 static void nhrp_peer_up(struct nhrp_peer *peer);
+static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer);
 
 static const char *nhrp_error_indication_text(int ei)
 {
