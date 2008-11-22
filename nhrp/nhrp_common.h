@@ -61,12 +61,8 @@ void nhrp_task_schedule_relative(struct nhrp_task *task, struct timeval *tv,
 				 int rel_ms, const struct nhrp_task_ops *ops);
 void nhrp_task_cancel(struct nhrp_task *task);
 
-static inline void nhrp_task_schedule_at(struct nhrp_task *task,
-					 struct timeval *tv,
-					 const struct nhrp_task_ops *ops)
-{
-	nhrp_task_schedule_relative(task, tv, 0, ops);
-}
+#define nhrp_task_schedule_at(task, tv, ops) \
+	nhrp_task_schedule_relative(task, tv, 0, ops)
 
 /* Logging */
 void nhrp_debug(const char *format, ...);

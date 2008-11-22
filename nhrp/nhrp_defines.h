@@ -71,4 +71,10 @@
         (type *)( (char *)__mptr - offsetof(type,member) );})
 #endif
 
+#if __GNUC__ >= 3
+#define NHRP_EMPTY_ARRAY
+#else
+#define NHRP_EMPTY_ARRAY		0
+#endif
+
 #endif

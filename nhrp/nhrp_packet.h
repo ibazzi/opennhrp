@@ -24,7 +24,7 @@ struct nhrp_interface;
 
 struct nhrp_buffer {
 	uint32_t length;
-	uint8_t data[];
+	uint8_t data[NHRP_EMPTY_ARRAY];
 };
 
 struct nhrp_cie {
