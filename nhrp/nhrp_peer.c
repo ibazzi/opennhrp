@@ -217,6 +217,8 @@ static pid_t nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*c
 		envp[i++] = env("NHRP_SRCADDR",
 				nhrp_address_format(&iface->protocol_address,
 						    sizeof(tmp), tmp));
+	if (peer->my_nbma_address.type == PF_UNSPEC)
+		nhrp_peer_resolve_nbma(peer);
 	if (peer->my_nbma_address.type != PF_UNSPEC)
 		envp[i++] = env("NHRP_SRCNBMA",
 				nhrp_address_format(&peer->my_nbma_address,
