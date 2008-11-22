@@ -21,12 +21,12 @@
 #include "nhrp_address.h"
 
 #define NHRP_DEFAULT_HOLDING_TIME	(2 * 60 * 60)
-#define INDEX_HASH_SIZE (1 << 4)
+#define NHRP_INDEX_HASH_SIZE		(1 << 6)
 
 LIST_HEAD(nhrp_interface_list, nhrp_interface);
 
 static struct nhrp_interface_list name_list;
-static struct nhrp_interface_list index_hash[INDEX_HASH_SIZE];
+static struct nhrp_interface_list index_hash[NHRP_INDEX_HASH_SIZE];
 
 static char *env(const char *key, const char *value)
 {
@@ -40,7 +40,7 @@ static char *env(const char *key, const char *value)
 
 void nhrp_interface_hash(struct nhrp_interface *iface)
 {
-	int iidx = iface->index & (INDEX_HASH_SIZE - 1);
+	int iidx = iface->index & (NHRP_INDEX_HASH_SIZE - 1);
 
 	LIST_REMOVE(iface, name_list);
 	LIST_REMOVE(iface, index_list);
@@ -88,7 +88,7 @@ struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create)
 struct nhrp_interface *nhrp_interface_get_by_index(unsigned int index, int create)
 {
 	struct nhrp_interface *iface;
-	int iidx = index & (INDEX_HASH_SIZE - 1);
+	int iidx = index & (NHRP_INDEX_HASH_SIZE - 1);
 
 	LIST_FOREACH(iface, &index_hash[iidx], index_list) {
 		if (iface->index == index)
