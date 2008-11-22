@@ -380,7 +380,7 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	cie->hdr = (struct nhrp_cie_header) {
 		.code = NHRP_CODE_SUCCESS,
 		.prefix_length = packet->dst_peer->prefix_length,
-		.holding_time = constant_htons(NHRP_HOLDING_TIME),
+		.holding_time = htons(packet->dst_peer->interface->holding_time),
 	};
 
 	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_ANY);
@@ -998,7 +998,7 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 		if (cie != NULL) {
 			cie->hdr = (struct nhrp_cie_header) {
 				.code = NHRP_CODE_SUCCESS,
-				.holding_time = NHRP_HOLDING_TIME,
+				.holding_time = htons(packet->dst_iface->holding_time),
 			};
 			cie->nbma_address = packet->dst_peer->my_nbma_address;
 			cie->protocol_address = packet->dst_iface->protocol_address;
@@ -1364,7 +1364,7 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 		if (cie == NULL)
 			return FALSE;
 
-		cie->hdr.holding_time = htons(NHRP_HOLDING_TIME);
+		cie->hdr.holding_time = htons(packet->dst_iface->holding_time);
 		cie->nbma_address = packet->dst_peer->my_nbma_address;
 		cie->protocol_address = packet->dst_iface->protocol_address;
 		nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);

@@ -53,6 +53,15 @@ specifies that Registration Request should be sent to this peer on
 startup.
 .RE
 
+.BI "holding-time " holdtime
+.RS
+Specifies the holding time for NHRP Registration Requests and
+Resolution Replies sent by this host.
+The
+.I holdtime
+is specified in seconds and defaults to two hours.
+.RE
+
 .BI "cisco-authentication " secret
 .RS
 Enables Cisco style authentication on NHRP packets. This embeds the

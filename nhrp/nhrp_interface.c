@@ -20,6 +20,7 @@
 #include "nhrp_interface.h"
 #include "nhrp_address.h"
 
+#define NHRP_DEFAULT_HOLDING_TIME	(2 * 60 * 60)
 #define INDEX_HASH_SIZE (1 << 4)
 
 LIST_HEAD(nhrp_interface_list, nhrp_interface);
@@ -74,6 +75,7 @@ struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create)
 		return NULL;
 
 	iface = calloc(1, sizeof(struct nhrp_interface));
+	iface->holding_time = NHRP_DEFAULT_HOLDING_TIME;
 	strncpy(iface->name, name, sizeof(iface->name));
 	CIRCLEQ_INIT(&iface->peer_cache);
 

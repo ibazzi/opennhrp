@@ -481,8 +481,8 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	/* Re-register after holding time expires */
 	nhrp_peer_up(peer);
 	nhrp_task_schedule(&peer->task,
-			   (NHRP_HOLDING_TIME - NHRP_RENEW_TIME) * 1000,
-			   &nhrp_peer_register);
+			   (peer->interface->holding_time - NHRP_RENEW_TIME)
+				* 1000, &nhrp_peer_register);
 }
 
 static void nhrp_peer_register_callback(struct nhrp_task *task)
@@ -517,7 +517,7 @@ static void nhrp_peer_register_callback(struct nhrp_task *task)
 		.hdr.code = NHRP_CODE_SUCCESS,
 		.hdr.prefix_length = 0xff,
 		.hdr.mtu = 0,
-		.hdr.holding_time = constant_htons(NHRP_HOLDING_TIME),
+		.hdr.holding_time = htons(peer->interface->holding_time),
 		.hdr.preference = 0,
 	};
 
@@ -720,7 +720,7 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 		.hdr.code = NHRP_CODE_SUCCESS,
 		.hdr.prefix_length = 0,
 		.hdr.mtu = 0,
-		.hdr.holding_time = constant_htons(NHRP_HOLDING_TIME),
+		.hdr.holding_time = htons(peer->interface->holding_time),
 	};
 
 	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);

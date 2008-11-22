@@ -29,6 +29,7 @@ struct nhrp_interface {
 	/* Configured information */
 	char name[16];
 	unsigned int flags;
+	unsigned int holding_time;
 	struct nhrp_buffer *auth_token;
 
 	/* Cached from kernel interface */

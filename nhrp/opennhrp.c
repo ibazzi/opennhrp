@@ -153,6 +153,10 @@ static int load_config(const char *config_file)
 		} else if (strcmp(word, "register") == 0) {
 			NEED_PEER();
 			peer->flags |= NHRP_PEER_FLAG_REGISTER;
+		} else if (strcmp(word, "holding-time") == 0) {
+			NEED_INTERFACE();
+			read_word(in, &lineno, sizeof(word), word);
+			iface->holding_time = atoi(word);
 		} else if (strcmp(word, "cisco-authentication") == 0) {
 			struct nhrp_buffer *buf;
 			struct nhrp_cisco_authentication_extension *auth;

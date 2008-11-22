@@ -71,6 +71,4 @@
         (type *)( (char *)__mptr - offsetof(type,member) );})
 #endif
 
-#define NHRP_HOLDING_TIME 7200
-
 #endif
