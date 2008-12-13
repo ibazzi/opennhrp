@@ -25,6 +25,13 @@
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
 
+const char *nhrp_version_string =
+	"OpenNHRP " OPENNHRP_VERSION
+#ifdef NHRP_NO_NBMA_GRE
+	" (no NBMA GRE support)"
+#endif
+	;
+
 const char *nhrp_admin_socket = OPENNHRP_ADMIN_SOCKET;
 const char *nhrp_pid_file     = "/var/run/opennhrp.pid";
 const char *nhrp_config_file  = "/etc/opennhrp/opennhrp.conf";
@@ -312,7 +319,7 @@ int main(int argc, char **argv)
 			nhrp_verbose = 1;
 			break;
 		case 'V':
-			puts("OpenNHRP " OPENNHRP_VERSION);
+			puts(nhrp_version_string);
 			return 0;
 		default:
 			return usage(argv[0]);
@@ -322,7 +329,7 @@ int main(int argc, char **argv)
 	if (!log_init())
 		return 1;
 
-	nhrp_info("OpenNHRP " OPENNHRP_VERSION " starting");
+	nhrp_info("%s starting", nhrp_version_string);
 	if (!signal_init())
 		return 2;
 	if (!load_config(nhrp_config_file))

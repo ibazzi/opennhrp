@@ -23,6 +23,7 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <asm/types.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <linux/ip.h>
@@ -48,7 +49,6 @@ struct netlink_fd {
 	int dispatch_size;
 	const netlink_dispatch_f *dispatch;
 };
-
 
 static struct netlink_fd netlink_fd;
 static int packet_fd;
@@ -77,23 +77,6 @@ static int netlink_add_rtattr_l(struct nlmsghdr *n, int maxlen, int type,
 	rta->rta_len = len;
 	memcpy(RTA_DATA(rta), data, alen);
 	n->nlmsg_len = NLMSG_ALIGN(n->nlmsg_len) + RTA_ALIGN(len);
-	return TRUE;
-}
-
-static int netlink_add_nested_rtattr_u32(struct rtattr *rta, int maxlen,
-					 int type, uint32_t value)
-{
-	int len = RTA_LENGTH(4);
-	struct rtattr *subrta;
-
-	if (RTA_ALIGN(rta->rta_len) + len > maxlen)
-		return FALSE;
-
-	subrta = (struct rtattr*)(((char*)rta) + RTA_ALIGN(rta->rta_len));
-	subrta->rta_type = type;
-	subrta->rta_len = len;
-	memcpy(RTA_DATA(subrta), &value, 4);
-	rta->rta_len = NLMSG_ALIGN(rta->rta_len) + len;
 	return TRUE;
 }
 
@@ -236,6 +219,25 @@ static int do_get_ioctl(const char *basedev, struct ip_tunnel_parm *p)
 	return TRUE;
 }
 
+#ifndef NHRP_NO_NBMA_GRE
+
+static int netlink_add_nested_rtattr_u32(struct rtattr *rta, int maxlen,
+					 int type, uint32_t value)
+{
+	int len = RTA_LENGTH(4);
+	struct rtattr *subrta;
+
+	if (RTA_ALIGN(rta->rta_len) + len > maxlen)
+		return FALSE;
+
+	subrta = (struct rtattr*)(((char*)rta) + RTA_ALIGN(rta->rta_len));
+	subrta->rta_type = type;
+	subrta->rta_len = len;
+	memcpy(RTA_DATA(subrta), &value, 4);
+	rta->rta_len = NLMSG_ALIGN(rta->rta_len) + len;
+	return TRUE;
+}
+
 static int netlink_configure_arp(struct nhrp_interface *iface, int pf)
 {
 	struct {
@@ -295,6 +297,20 @@ static int netlink_link_arp_on(struct nhrp_interface *iface)
 	}
 	return TRUE;
 }
+
+#else
+
+static int netlink_configure_arp(struct nhrp_interface *iface, int pf)
+{
+	return TRUE;
+}
+
+static int netlink_link_arp_on(struct nhrp_interface *iface)
+{
+	return TRUE;
+}
+
+#endif
 
 static int proc_icmp_redirect_off(struct nhrp_interface *iface)
 {

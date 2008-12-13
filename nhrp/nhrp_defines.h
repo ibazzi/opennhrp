@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <byteswap.h>
 #include <sys/param.h>
+#include <linux/version.h>
 
 #ifndef NULL
 #define NULL 0L
@@ -76,5 +77,10 @@
 #else
 #define NHRP_EMPTY_ARRAY		0
 #endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0)
+#define NHRP_NO_NBMA_GRE
+#endif
+#define NHRP_NO_NBMA_GRE
 
 #endif
