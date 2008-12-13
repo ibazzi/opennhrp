@@ -47,6 +47,7 @@
 
 #define NHRP_PEER_FLAG_UNIQUE		0x01	/* Peer is unique; see RFC2332 */
 #define NHRP_PEER_FLAG_REGISTER		0x02	/* For TYPE_STATIC: send registration */
+#define NHRP_PEER_FLAG_CISCO		0x04	/* For TYPE_STATIC: peer is Cisco */
 #define NHRP_PEER_FLAG_USED		0x10	/* Peer is in kernel ARP table */
 #define NHRP_PEER_FLAG_LOWER_UP		0x20	/* Script executed succesfully */
 #define NHRP_PEER_FLAG_UP		0x40	/* Can send all packets (registration ok) */

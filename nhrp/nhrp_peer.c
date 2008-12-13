@@ -77,6 +77,25 @@ static const char *nhrp_error_indication_text(int ei)
 	return "unknown";
 }
 
+static const char *nhrp_cie_code_text(int ct)
+{
+	switch (ct) {
+	case NHRP_CODE_SUCCESS:
+		return "success";
+	case NHRP_CODE_ADMINISTRATIVELY_PROHIBITED:
+		return "administratively prohibited";
+	case NHRP_CODE_INSUFFICIENT_RESOURCES:
+		return "insufficient resources";
+	case NHRP_CODE_NO_BINDING_EXISTS:
+		return "no binding exists";
+	case NHRP_CODE_BINDING_NON_UNIQUE:
+		return "binding non-unique";
+	case NHRP_CODE_UNIQUE_ADDRESS_REGISTERED:
+		return "unique address already registered";
+	}
+	return "unknown";
+}
+
 static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len, char *buf, int full)
 {
 	char tmp[NHRP_PEER_FORMAT_LEN];
@@ -370,6 +389,70 @@ static void nhrp_peer_up(struct nhrp_peer *peer)
 	}
 }
 
+static void nhrp_peer_send_protocol_purge(struct nhrp_peer *peer)
+{
+	char tmp[64];
+	struct nhrp_packet *packet;
+	struct nhrp_cie *cie;
+	struct nhrp_payload *payload;
+	int sent = FALSE;
+
+	packet = nhrp_packet_alloc();
+	if (packet == NULL)
+		goto error;
+
+	packet->hdr = (struct nhrp_packet_header) {
+		.afnum = peer->afnum,
+		.protocol_type = peer->protocol_type,
+		.version = NHRP_VERSION_RFC2332,
+		.type = NHRP_PACKET_PURGE_REQUEST,
+		.flags = NHRP_FLAG_PURGE_NO_REPLY,
+	};
+	if (peer->flags & NHRP_PEER_FLAG_CISCO) {
+		/* Cisco IOS seems to require reqistration and purge
+		 * request id to match, so we need to used a fixed
+		 * value. This is in violation of RFC, though. */
+		packet->hdr.u.request_id =
+			nhrp_address_hash(&peer->interface->protocol_address);
+	}
+	packet->dst_protocol_address = peer->protocol_address;
+
+	/* Payload CIE */
+	cie = nhrp_cie_alloc();
+	if (cie == NULL)
+		goto error_free_packet;
+
+	*cie = (struct nhrp_cie) {
+		.hdr.code = NHRP_CODE_SUCCESS,
+		.hdr.mtu = 0,
+		.hdr.preference = 0,
+		.hdr.prefix_length = 0xff,
+	};
+	cie->protocol_address = peer->interface->protocol_address;
+
+	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	nhrp_payload_add_cie(payload, cie);
+
+	nhrp_info("Sending Purge Request (of protocol address) to %s",
+		  nhrp_address_format(&peer->protocol_address,
+				      sizeof(tmp), tmp));
+
+	packet->dst_peer = nhrp_peer_dup(peer);
+	packet->dst_iface = peer->interface;
+	sent = nhrp_packet_send(packet);
+error_free_packet:
+	nhrp_packet_free(packet);
+error:
+	if (!sent) {
+		/* Try again later */
+		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME * 1000,
+				   &nhrp_peer_register);
+	} else {
+		nhrp_task_schedule(&peer->task, 2000,
+				   &nhrp_peer_register);
+	}
+}
+
 static int nhrp_add_local_route_cie(void *ctx, struct nhrp_peer *route)
 {
 	struct nhrp_packet *packet = (struct nhrp_packet *) ctx;
@@ -402,7 +485,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 	struct nhrp_cie *cie;
 	struct nhrp_packet *packet;
 	char tmp[NHRP_PEER_FORMAT_LEN];
-	int ec;
+	int ec = -1;
 
 	if (nhrp_peer_free(peer))
 		return;
@@ -419,9 +502,30 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 		return;
 	}
 
-	nhrp_info("Received Registration Reply from %s",
+	/* Check result */
+	payload = nhrp_packet_payload(reply, NHRP_PAYLOAD_TYPE_CIE_LIST);
+	if (payload != NULL) {
+		cie = nhrp_payload_get_cie(payload, 1);
+		if (cie != NULL)
+			ec = cie->hdr.code;
+	}
+
+	nhrp_info("Received Registration Reply from %s: %s",
 		  nhrp_address_format(&peer->protocol_address,
-				      sizeof(tmp), tmp));
+				      sizeof(tmp), tmp),
+		  nhrp_cie_code_text(ec));
+
+	switch (ec) {
+	case NHRP_CODE_SUCCESS:
+		break;
+	case NHRP_CODE_UNIQUE_ADDRESS_REGISTERED:
+		nhrp_peer_send_protocol_purge(peer);
+		return;
+	default:
+		nhrp_task_schedule(&peer->task, NHRP_RETRY_REGISTER_TIME * 1000,
+				   &nhrp_peer_register);
+		return;
+	}
 
 	/* Check for NAT */
 	payload = nhrp_packet_extension(reply,
@@ -506,7 +610,14 @@ static void nhrp_peer_register_callback(struct nhrp_task *task)
 		.flags = NHRP_FLAG_REGISTRATION_UNIQUE |
 			 NHRP_FLAG_REGISTRATION_NAT
 	};
-        packet->dst_protocol_address = peer->protocol_address;
+	if (peer->flags & NHRP_PEER_FLAG_CISCO) {
+		/* Cisco IOS seems to require reqistration and purge
+		 * request id to match, so we need to used a fixed
+		 * value. This is in violation of RFC, though. */
+		packet->hdr.u.request_id =
+			nhrp_address_hash(&peer->interface->protocol_address);
+	}
+	packet->dst_protocol_address = peer->protocol_address;
 
 	/* Payload CIE */
 	cie = nhrp_cie_alloc();

@@ -1475,8 +1475,10 @@ int nhrp_packet_send_request(struct nhrp_packet *pkt,
 	packet = nhrp_packet_dup(pkt);
 
 	packet->retry = 0;
-	request_id++;
-	packet->hdr.u.request_id = htonl(request_id);
+	if (packet->hdr.u.request_id == constant_htonl(0)) {
+		request_id++;
+		packet->hdr.u.request_id = htonl(request_id);
+	}
 
 	packet->handler = handler;
 	packet->handler_ctx = ctx;

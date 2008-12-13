@@ -33,7 +33,7 @@ directive must be present to enable NHRP on that interface.
 These configuration keywords can appear only in the interface context.
 
 .PP
-.BI "map " protocol-address[/prefix] " " nbma-address " [register]"
+.BI "map " protocol-address[/prefix] " " nbma-address " [register] [cisco]"
 .RS
 Creates static peer mapping of
 .I protocol-address
@@ -51,6 +51,13 @@ The optional parameter
 .B register
 specifies that Registration Request should be sent to this peer on
 startup.
+.PP
+If the statically mapped peer is running Cisco IOS, specify the
+.B cisco
+keyword. It is used to fix statically the Registration Request ID
+so that a matching Purge Request can be sent if NBMA address has changed.
+This is to work around broken IOS which requires Purge Request ID to
+match the original Registration Request ID.
 .RE
 
 .BI "holding-time " holdtime

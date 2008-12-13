@@ -103,7 +103,7 @@ static int load_config(const char *config_file)
 		"syntax error",
 		"missing keyword",
 		"interface context not defined",
-		"register is used with map",
+		"keyword valid only for 'map' definition",
 		"invalid address",
 	};
 	struct nhrp_interface *iface = NULL;
@@ -153,6 +153,9 @@ static int load_config(const char *config_file)
 		} else if (strcmp(word, "register") == 0) {
 			NEED_PEER();
 			peer->flags |= NHRP_PEER_FLAG_REGISTER;
+		} else if (strcmp(word, "cisco") == 0) {
+			NEED_PEER();
+			peer->flags |= NHRP_PEER_FLAG_CISCO;
 		} else if (strcmp(word, "holding-time") == 0) {
 			NEED_INTERFACE();
 			read_word(in, &lineno, sizeof(word), word);
