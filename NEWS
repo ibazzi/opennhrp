@@ -6,6 +6,17 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
+ opennhrp 0.9 - to be released ??/??/????
+-----------------------------------------------------------------------------
+ - use monotonic system clock if available
+ - allow startup even if dns names are unresolveable
+ - make nhrp holding time configurable
+ - Cisco NHS specific feature: send cisco compatible purge if unique NBMA
+   mapping already exists (to re-register when NBMA address changes)
+ - additional opennhrp-script example with ipsec certificate checking
+ - some effort to make opennhrp compile on old system (in limited mode)
+
+-----------------------------------------------------------------------------
  opennhrp 0.8 - released 03/Oct/2008
 -----------------------------------------------------------------------------
  - licensing terms changed to GPL version 2 or later
