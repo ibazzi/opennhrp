@@ -227,8 +227,10 @@ static pid_t nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*c
 	if (pid == -1)
 		return -1;
 	if (pid > 0) {
-		peer->script_pid = pid;
-		peer->script_callback = cb;
+		if (cb != NULL) {
+			peer->script_pid = pid;
+			peer->script_callback = cb;
+		}
 		return pid;
 	}
 
@@ -1147,6 +1149,7 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 		else
 			CIRCLEQ_INSERT_HEAD(&iface->peer_cache, peer, peer_list);
 		peer->list_count++;
+		peer->flags &= ~NHRP_PEER_FLAG_REMOVED;
 	} else {
 		peer = ins;
 	}
@@ -1186,23 +1189,18 @@ int nhrp_peer_purge_matching(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-struct nhrp_peer *nhrp_peer_keep(struct nhrp_peer *peer)
+static struct nhrp_peer *nhrp_peer_keep(struct nhrp_peer *peer)
 {
 	peer->list_count++;
 	return peer;
 }
 
-void nhrp_peer_remove(struct nhrp_peer *peer)
+static int nhrp_peer_unkeep(struct nhrp_peer *peer)
 {
 	struct nhrp_interface *iface = peer->interface;
-	char tmp[NHRP_PEER_FORMAT_LEN];
 
 	if (--peer->list_count > 0)
-		return;
-
-	nhrp_debug("Removing %s %s",
-		   nhrp_peer_type[peer->type],
-		   nhrp_peer_format(peer, sizeof(tmp), tmp));
+		return FALSE;
 
 	if (peer->type == NHRP_PEER_TYPE_LOCAL)
 		CIRCLEQ_REMOVE(&local_peer_cache, peer, peer_list);
@@ -1212,6 +1210,20 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 
 	if (peer->type == NHRP_PEER_TYPE_LOCAL)
 		forward_local_addresses_changed();
+
+	return TRUE;
+}
+
+void nhrp_peer_remove(struct nhrp_peer *peer)
+{
+	char tmp[NHRP_PEER_FORMAT_LEN];
+
+	nhrp_debug("Removing %s %s",
+		   nhrp_peer_type[peer->type],
+		   nhrp_peer_format(peer, sizeof(tmp), tmp));
+
+	peer->flags |= NHRP_PEER_FLAG_REMOVED;
+	nhrp_peer_unkeep(peer);
 }
 
 int nhrp_peer_remove_matching(void *ctx, struct nhrp_peer *peer)
@@ -1303,10 +1315,13 @@ static int enumerate_peer_cache(struct nhrp_peer_list *peer_cache,
 	int rc = 0;
 
 	CIRCLEQ_FOREACH(p, peer_cache, peer_list) {
+		if (p->flags & NHRP_PEER_FLAG_REMOVED)
+			continue;
+
 		kept_prev = kept_curr;
 		kept_curr = nhrp_peer_keep(p);
 		if (kept_prev != NULL)
-			nhrp_peer_remove(kept_prev);
+			nhrp_peer_unkeep(kept_prev);
 
 		if (sel == NULL || nhrp_peer_match(p, sel)) {
 			rc = e(ctx, kept_curr);

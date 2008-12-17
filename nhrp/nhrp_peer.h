@@ -52,6 +52,7 @@
 #define NHRP_PEER_FLAG_LOWER_UP		0x20	/* Script executed succesfully */
 #define NHRP_PEER_FLAG_UP		0x40	/* Can send all packets (registration ok) */
 #define NHRP_PEER_FLAG_REPLACED		0x80	/* Peer has been replaced */
+#define NHRP_PEER_FLAG_REMOVED		0x100	/* Deleted, but removed from cache yet */
 
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02
