@@ -1330,7 +1330,7 @@ static int enumerate_peer_cache(struct nhrp_peer_list *peer_cache,
 		}
 	}
 	if (kept_curr != NULL)
-		nhrp_peer_remove(kept_curr);
+		nhrp_peer_unkeep(kept_curr);
 
 	return rc;
 }
