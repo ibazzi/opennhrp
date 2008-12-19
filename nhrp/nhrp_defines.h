@@ -81,6 +81,5 @@
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0)
 #define NHRP_NO_NBMA_GRE
 #endif
-#define NHRP_NO_NBMA_GRE
 
 #endif
