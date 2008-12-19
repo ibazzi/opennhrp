@@ -53,6 +53,15 @@ struct netlink_fd {
 static struct netlink_fd netlink_fd;
 static int packet_fd;
 
+static u_int16_t translate_mtu(u_int16_t mtu)
+{
+	/* if mtu is ethernet standard, do not advertise it
+	 * pmtu should be working */
+	if (mtu == 1500)
+		return 0;
+	return mtu;
+}
+
 static void netlink_parse_rtattr(struct rtattr *tb[], int max, struct rtattr *rta, int len)
 {
 	memset(tb, 0, sizeof(struct rtattr *) * (max + 1));
@@ -407,19 +416,27 @@ static void netlink_link_new(struct nlmsghdr *msg)
 		return;
 
 	ifname = RTA_DATA(rta[IFLA_IFNAME]);
-	iface = nhrp_interface_get_by_name(ifname, FALSE);
+	iface = nhrp_interface_get_by_name(ifname, TRUE);
 	if (iface == NULL)
 		return;
 
+	if (rta[IFLA_MTU])
+		iface->mtu = *((unsigned*)RTA_DATA(rta[IFLA_MTU]));
+
 	if (iface->index == 0 || (ifi->ifi_flags & ifi->ifi_change & IFF_UP)) {
-		nhrp_info("Interface '%s' is now up", ifname);
+		nhrp_info("Interface %s: new or configured up, mtu=%d",
+			  ifname, iface->mtu);
 		nhrp_interface_run_script(iface, "interface-up");
 	} else {
-		nhrp_info("Interface '%s' configuration changed", ifname);
+		nhrp_info("Interface %s: config change, mtu=%d",
+			  ifname, iface->mtu);
 	}
 
 	iface->index = ifi->ifi_index;
 	nhrp_interface_hash(iface);
+
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
+	    return;
 
 	switch (ifi->ifi_type) {
 	case ARPHRD_IPGRE:
@@ -480,6 +497,7 @@ static int netlink_addr_new_nbma(void *ctx, struct nhrp_interface *iface)
 	struct nlmsghdr *msg = (struct nlmsghdr *) ctx;
 	struct ifaddrmsg *ifa = NLMSG_DATA(msg);
 	struct rtattr *rta[IFA_MAX+1];
+	struct nhrp_interface *nbma_iface;
 
 	if (iface->link_index == ifa->ifa_index) {
 		netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa),
@@ -491,6 +509,11 @@ static int netlink_addr_new_nbma(void *ctx, struct nhrp_interface *iface)
 		nhrp_address_set(&iface->nbma_address, ifa->ifa_family,
 				 RTA_PAYLOAD(rta[IFA_LOCAL]),
 				 RTA_DATA(rta[IFA_LOCAL]));
+
+		nbma_iface = nhrp_interface_get_by_index(ifa->ifa_index, FALSE);
+		if (nbma_iface != NULL) {
+			iface->nbma_mtu = translate_mtu(nbma_iface->mtu);
+		}
 	}
 	return 0;
 }
@@ -827,7 +850,8 @@ err_close_packetfd:
 int kernel_route(struct nhrp_interface *out_iface,
 		 struct nhrp_address *dest,
 		 struct nhrp_address *default_source,
-		 struct nhrp_address *next_hop)
+		 struct nhrp_address *next_hop,
+		 u_int16_t *mtu)
 {
 	struct {
 		struct nlmsghdr 	n;
@@ -874,6 +898,23 @@ int kernel_route(struct nhrp_interface *out_iface,
 					 RTA_DATA(rta[RTA_GATEWAY]));
 		} else {
 			*next_hop = *dest;
+		}
+	}
+
+	if (mtu != NULL) {
+		*mtu = 0;
+
+		if (rta[RTA_OIF] != NULL) {
+			struct nhrp_interface *nbma_iface;
+
+			/* We use interface MTU here instead of the route
+			 * cache MTU from RTA_METRICS/RTAX_MTU since we
+			 * don't want to announce mtu if PMTU works */
+			nbma_iface = nhrp_interface_get_by_index(
+				*(int*)RTA_DATA(rta[RTA_OIF]),
+				FALSE);
+			if (nbma_iface != NULL)
+				*mtu = translate_mtu(nbma_iface->mtu);
 		}
 	}
 

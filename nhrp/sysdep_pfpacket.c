@@ -93,7 +93,9 @@ static int check_interface(void *ctx, struct nhrp_interface *iface)
 {
 	struct filter *f = (struct filter *) ctx;
 
-	emit_jump(f, BPF_JMP|BPF_JEQ|BPF_K, iface->index, LABEL_IF_OK, LABEL_NEXT);
+	if (iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED)
+		emit_jump(f, BPF_JMP|BPF_JEQ|BPF_K, iface->index,
+			  LABEL_IF_OK, LABEL_NEXT);
 
 	return 0;
 }
@@ -275,6 +277,8 @@ static int pfp_read(void *ctx, int fd, short events)
 
 		iface = nhrp_interface_get_by_index(lladdr.sll_ifindex, FALSE);
 		if (iface == NULL)
+			continue;
+		if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
 			continue;
 
 		if (!nhrp_address_parse_packet(lladdr.sll_protocol,

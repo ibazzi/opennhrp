@@ -391,6 +391,7 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	if (!nhrp_packet_reroute(packet, FALSE))
 		return FALSE;
 
+	cie->hdr.mtu = htons(packet->dst_peer->my_nbma_mtu);
 	cie->nbma_address = packet->dst_peer->my_nbma_address;
 	cie->protocol_address = packet->dst_iface->protocol_address;
 
@@ -1278,7 +1279,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	} else {
 		r = kernel_route(packet->dst_iface, dest,
 				 &packet->dst_iface->protocol_address,
-				 &proto_nexthop);
+				 &proto_nexthop, NULL);
 		if (!r) {
 			nhrp_error("No route to protocol address %s",
 				nhrp_address_format(dest, sizeof(tmp), tmp));

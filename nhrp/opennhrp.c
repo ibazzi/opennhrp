@@ -132,6 +132,8 @@ static int load_config(const char *config_file)
 				break;
 			}
 			iface = nhrp_interface_get_by_name(word, TRUE);
+			if (iface != NULL)
+				iface->flags |= NHRP_INTERFACE_FLAG_CONFIGURED;
 			peer = NULL;
 		} else if (strcmp(word, "map") == 0) {
 			NEED_INTERFACE();

@@ -21,6 +21,7 @@
 #define NHRP_INTERFACE_FLAG_SHORTCUT		0x0002	/* Create shortcut routes */
 #define NHRP_INTERFACE_FLAG_REDIRECT		0x0004	/* Send redirects */
 #define NHRP_INTERFACE_FLAG_SHORTCUT_DEST	0x0008	/* Advertise routes */
+#define NHRP_INTERFACE_FLAG_CONFIGURED		0x0010	/* Found in config file */
 
 struct nhrp_interface {
 	LIST_ENTRY(nhrp_interface) name_list;
@@ -35,6 +36,7 @@ struct nhrp_interface {
 	/* Cached from kernel interface */
 	unsigned int index, link_index;
 	uint16_t afnum;
+	uint16_t mtu, nbma_mtu;
 	struct nhrp_address nbma_address;
 	struct nhrp_cie nat_cie;
 

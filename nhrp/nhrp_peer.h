@@ -79,7 +79,7 @@ struct nhrp_peer {
 	uint8_t prefix_length;
 	uint16_t afnum;
 	uint16_t protocol_type;
-	uint16_t mtu;
+	uint16_t mtu, my_nbma_mtu;
 	struct timeval expire_time;
 	struct timeval last_used;
 	struct nhrp_address my_nbma_address;

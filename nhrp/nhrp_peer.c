@@ -128,10 +128,13 @@ static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len, char *buf
 	}
 	if (peer->next_hop_nat_oa.type != PF_UNSPEC) {
 		i += snprintf(&buf[i], len - i, " nbma-nat-oa %s",
-			nhrp_address_format(&peer->next_hop_nat_oa, sizeof(tmp), tmp));
+			      nhrp_address_format(&peer->next_hop_nat_oa,
+						  sizeof(tmp), tmp));
 	}
 	i += snprintf(&buf[i], len - i, " dev %s",
 		      peer->interface->name);
+	if (peer->mtu)
+		i += snprintf(&buf[i], len - i, " mtu %d", peer->mtu);
 
 	if (!full)
 		return buf;
@@ -259,6 +262,10 @@ static pid_t nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*c
 		envp[i++] = env("NHRP_DESTNBMA",
 			nhrp_address_format(&peer->next_hop_address,
 					    sizeof(tmp), tmp));
+		if (peer->mtu) {
+			sprintf(tmp, "%d", peer->mtu);
+			envp[i++] = env("NHRP_DESTMTU", tmp);
+		}
 		if (peer->next_hop_nat_oa.type != PF_UNSPEC)
 			envp[i++] = env("NHRP_DESTNBMA_NAT_OA",
 				nhrp_address_format(&peer->next_hop_nat_oa,
@@ -629,7 +636,7 @@ static void nhrp_peer_register_callback(struct nhrp_task *task)
         *cie = (struct nhrp_cie) {
 		.hdr.code = NHRP_CODE_SUCCESS,
 		.hdr.prefix_length = 0xff,
-		.hdr.mtu = 0,
+		.hdr.mtu = htons(peer->my_nbma_mtu),
 		.hdr.holding_time = htons(peer->interface->holding_time),
 		.hdr.preference = 0,
 	};
@@ -668,9 +675,10 @@ static void nhrp_peer_register_callback(struct nhrp_task *task)
 					NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
-	nhrp_info("Sending Registration Request to %s",
+	nhrp_info("Sending Registration Request to %s (my mtu=%d)",
 		  nhrp_address_format(&peer->protocol_address,
-				      sizeof(dst), dst));
+				      sizeof(dst), dst),
+		  peer->my_nbma_mtu);
 
 	packet->dst_peer = nhrp_peer_dup(peer);
 	packet->dst_iface = peer->interface;
@@ -762,6 +770,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 
 	if (nhrp_address_cmp(&peer->protocol_address, &cie->protocol_address) == 0) {
 		/* Destination is within NBMA network; update cache */
+		peer->mtu = ntohs(cie->hdr.mtu);
 		peer->prefix_length = cie->hdr.prefix_length;
 		peer->next_hop_address = natcie->nbma_address;
 		if (natoacie != NULL)
@@ -786,6 +795,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		np->next_hop_address = natcie->nbma_address;
 		if (natoacie != NULL)
 			np->next_hop_nat_oa = natoacie->nbma_address;
+		np->mtu = ntohs(cie->hdr.mtu);
 		np->prefix_length = cie->protocol_address.addr_len * 8;
 		nhrp_time_monotonic(&np->expire_time);
 		np->expire_time.tv_sec += ntohs(cie->hdr.holding_time);
@@ -1050,7 +1060,8 @@ static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer)
 
 	if (peer->interface->nbma_address.type == PF_UNSPEC) {
 		r = kernel_route(NULL, &peer->next_hop_address,
-				 &peer->my_nbma_address, NULL);
+				 &peer->my_nbma_address, NULL,
+				 &peer->my_nbma_mtu);
 		if (!r) {
 			nhrp_error("No route to next hop address %s",
 				   nhrp_address_format(&peer->next_hop_address,
@@ -1058,6 +1069,7 @@ static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer)
 		}
 	} else {
 		peer->my_nbma_address = peer->interface->nbma_address;
+		peer->my_nbma_mtu = peer->interface->nbma_mtu;
 	}
 }
 
