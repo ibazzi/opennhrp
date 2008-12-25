@@ -15,6 +15,9 @@ svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
    mapping already exists (to re-register when NBMA address changes)
  - additional opennhrp-script example with ipsec certificate checking
  - some effort to make opennhrp compile on old system (in limited mode)
+ - detect NBMA MTU from interface and transmit it over NHRP and pass it to
+   opennhrp-script (to insert manual NBMA routes if path MTU discovery
+   does not work)
 
 -----------------------------------------------------------------------------
  opennhrp 0.8 - released 03/Oct/2008
