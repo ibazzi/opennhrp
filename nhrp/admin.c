@@ -65,7 +65,8 @@ static void admin_write(void *ctx, const char *format, ...)
 	len = vsnprintf(msg, sizeof(msg), format, ap);
 	va_end(ap);
 
-	write(rmt->fd, msg, len);
+	if (write(rmt->fd, msg, len) != len) {
+	}
 }
 
 static int admin_show_peer(void *ctx, struct nhrp_peer *peer)

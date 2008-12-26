@@ -222,6 +222,7 @@ static int daemonize(void)
 {
 	char tmp[16];
 	pid_t pid;
+	int n;
 
 	pid = fork();
 	if (pid < 0)
@@ -241,30 +242,41 @@ static int daemonize(void)
 	if (chdir("/") < 0)
 		return FALSE;
 
-	pid_file_fd = open(nhrp_pid_file, O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR);
+	pid_file_fd = open(nhrp_pid_file, O_CREAT | O_WRONLY,
+			   S_IRUSR | S_IWUSR);
 	if (pid_file_fd < 0) {
 		nhrp_error("Unable to open pid file: %s.", strerror(errno));
 		return FALSE;
 	}
 
-	if (flock(pid_file_fd, LOCK_EX | LOCK_NB) < 0) {
-		nhrp_error("Unable to lock pid file (already running?).");
-		close(pid_file_fd);
-		pid_file_fd = 0;
-		return FALSE;
-	}
+	if (flock(pid_file_fd, LOCK_EX | LOCK_NB) < 0)
+		goto errmsg;
 
-	ftruncate(pid_file_fd, 0);
-	write(pid_file_fd, tmp, sprintf(tmp, "%d\n", getpid()));
+	if (ftruncate(pid_file_fd, 0) < 0)
+		goto errmsg;
+
+	n = sprintf(tmp, "%d\n", getpid());
+	if (write(pid_file_fd, tmp, n) != n)
+		goto errmsg;
+
 	atexit(remove_pid_file);
-
-	freopen("/dev/null", "r", stdin);
-	freopen("/dev/null", "w", stdout);
-	freopen("/dev/null", "w", stderr);
-
 	umask(0);
 
+	if (freopen("/dev/null", "r", stdin) == NULL ||
+	    freopen("/dev/null", "w", stdout) == NULL ||
+	    freopen("/dev/null", "w", stderr) == NULL) {
+		nhrp_error("Unable reopen standard file descriptors");
+		goto err;
+	}
+
 	return TRUE;
+
+errmsg:
+	nhrp_error("Unable to lock/write pid file");
+err:
+	close(pid_file_fd);
+	pid_file_fd = 0;
+	return FALSE;
 }
 
 int usage(const char *prog)

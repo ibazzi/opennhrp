@@ -45,7 +45,10 @@ static void admin_close(int fd)
 
 static int admin_send(int fd, const char *str)
 {
-	write(fd, str, strlen(str));
+	int len = strlen(str);
+
+	if (write(fd, str, len) != len)
+		return -1;
 	shutdown(fd, SHUT_WR);
 	return 0;
 }
@@ -55,8 +58,10 @@ static int admin_receive(int fd)
 	char msg[512];
 	size_t len;
 
-	while ((len = recv(fd, msg, sizeof(msg), 0)) > 0)
-		write(fileno(stdout), msg, len);
+	while ((len = recv(fd, msg, sizeof(msg), 0)) > 0) {
+		if (write(fileno(stdout), msg, len) != len)
+			return -1;
+	}
 
 	if (len < 0)
 		return -1;

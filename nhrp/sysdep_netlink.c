@@ -324,16 +324,17 @@ static int netlink_link_arp_on(struct nhrp_interface *iface)
 static int proc_icmp_redirect_off(struct nhrp_interface *iface)
 {
 	char fname[256];
-	int fd;
+	int fd, ret = FALSE;
 
 	sprintf(fname, "/proc/sys/net/ipv4/conf/%s/send_redirects", iface->name);
 	fd = open(fname, O_WRONLY);
 	if (fd < 0)
 		return FALSE;
-	write(fd, "0\n", 2);
+	if (write(fd, "0\n", 2) == 2)
+		ret = TRUE;
 	close(fd);
 
-	return TRUE;
+	return ret;
 }
 
 static void netlink_neigh_request(struct nlmsghdr *msg)
