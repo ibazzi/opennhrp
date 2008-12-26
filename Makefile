@@ -9,7 +9,7 @@
 #
 # See http://www.gnu.org/ for details.
 
-VERSION := 0.8
+VERSION := 0.9
 
 SVN_REV := $(shell svnversion || echo exported)
 ifneq ($(SVN_REV), exported)

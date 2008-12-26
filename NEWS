@@ -6,7 +6,7 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
- opennhrp 0.9 - to be released ??/??/????
+ opennhrp 0.9 - released 26/Dec/2008
 -----------------------------------------------------------------------------
  - use monotonic system clock if available
  - allow startup even if dns names are unresolveable
