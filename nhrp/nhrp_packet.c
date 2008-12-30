@@ -388,7 +388,7 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
-	if (!nhrp_packet_reroute(packet, FALSE))
+	if (!nhrp_packet_reroute(packet, NULL))
 		return FALSE;
 
 	cie->hdr.mtu = htons(packet->dst_peer->my_nbma_mtu);
@@ -583,7 +583,7 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 	packet->hdr.hop_count = 0;
 
 	if (!(flags & NHRP_FLAG_PURGE_NO_REPLY)) {
-		if (nhrp_packet_reroute(packet, FALSE))
+		if (nhrp_packet_reroute(packet, NULL))
 			ret = nhrp_packet_send(packet);
 		else
 			ret = FALSE;
@@ -966,7 +966,7 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 	}
 	packet->hdr.hop_count--;
 
-	if (!nhrp_packet_reroute(packet, FALSE)) {
+	if (!nhrp_packet_reroute(packet, NULL)) {
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
 	}
