@@ -96,6 +96,18 @@ static const char *nhrp_cie_code_text(int ct)
 	return "unknown";
 }
 
+static inline void nhrp_peer_debug_refcount(const char *func,
+					    struct nhrp_peer *peer)
+{
+#if 0
+	char tmp[NHRP_PEER_FORMAT_LEN];
+	nhrp_debug("%s(%s %s) ref_count=%d list_count=%d",
+		   func, nhrp_peer_type[peer->type],
+		   nhrp_peer_format(peer, sizeof(tmp), tmp),
+		   peer->ref_count, peer->list_count);
+#endif
+}
+
 static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len, char *buf, int full)
 {
 	char tmp[NHRP_PEER_FORMAT_LEN];
@@ -196,15 +208,11 @@ static char *nhrp_peer_prune_describe(struct nhrp_task *task, size_t buflen, cha
 
 static void nhrp_peer_reinsert(struct nhrp_peer *peer, int type)
 {
-	struct nhrp_peer *dup;
+	NHRP_BUG_ON((peer->type == NHRP_PEER_TYPE_LOCAL) !=
+		    (type == NHRP_PEER_TYPE_LOCAL));
 
-	dup = nhrp_peer_dup(peer);
-
-	nhrp_peer_remove(peer);
-	dup->type = type;
-	nhrp_peer_insert(dup);
-
-	nhrp_peer_free(dup);
+	peer->type = type;
+	nhrp_peer_do_insert_callback(&peer->task);
 }
 
 static char *env(const char *key, const char *value)
@@ -226,6 +234,13 @@ static pid_t nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*c
 	pid_t pid;
 	int i = 0;
 
+	/* Resolve own NBMA address before forking if required
+	 * since it requires traversing peer cache and can trigger
+	 * logging and other stuff. */
+	if (peer->my_nbma_address.type == PF_UNSPEC)
+		nhrp_peer_resolve_nbma(peer);
+
+	/* Fork and execute script */
 	pid = fork();
 	if (pid == -1)
 		return -1;
@@ -242,8 +257,6 @@ static pid_t nhrp_peer_run_script(struct nhrp_peer *peer, char *action, void (*c
 		envp[i++] = env("NHRP_SRCADDR",
 				nhrp_address_format(&iface->protocol_address,
 						    sizeof(tmp), tmp));
-	if (peer->my_nbma_address.type == PF_UNSPEC)
-		nhrp_peer_resolve_nbma(peer);
 	if (peer->my_nbma_address.type != PF_UNSPEC)
 		envp[i++] = env("NHRP_SRCNBMA",
 				nhrp_address_format(&peer->my_nbma_address,
@@ -963,8 +976,11 @@ struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface)
 
 struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer)
 {
-	if (peer != NULL)
-		peer->ref_count++;
+	if (peer == NULL)
+		return NULL;
+
+	peer->ref_count++;
+	nhrp_peer_debug_refcount(__FUNCTION__, peer);
 
 	return peer;
 }
@@ -974,7 +990,12 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 	struct nhrp_interface *iface = peer->interface;
 	struct nhrp_peer_selector sel;
 
-	if (--peer->ref_count > 0)
+	NHRP_BUG_ON(peer->ref_count == 0);
+
+	peer->ref_count--;
+	nhrp_peer_debug_refcount(__FUNCTION__, peer);
+
+	if (peer->ref_count > 0)
 		return FALSE;
 
 	switch (peer->type) {
@@ -1073,6 +1094,49 @@ static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer)
 	}
 }
 
+static struct nhrp_peer *nhrp_peer_keep(struct nhrp_peer *peer)
+{
+	if (peer->list_count == 0) {
+		peer = nhrp_peer_dup(peer);
+		if (peer->type == NHRP_PEER_TYPE_LOCAL)
+			CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
+		else
+			CIRCLEQ_INSERT_HEAD(&peer->interface->peer_cache,
+					    peer, peer_list);
+		peer->flags &= ~NHRP_PEER_FLAG_REMOVED;
+	}
+	peer->list_count++;
+	nhrp_peer_debug_refcount(__FUNCTION__, peer);
+
+	return peer;
+}
+
+static int nhrp_peer_unkeep(struct nhrp_peer *peer)
+{
+	struct nhrp_interface *iface = peer->interface;
+	int type;
+
+	NHRP_BUG_ON(peer->list_count == 0);
+
+	peer->list_count--;
+	nhrp_peer_debug_refcount(__FUNCTION__, peer);
+
+	if (peer->list_count > 0)
+		return FALSE;
+
+	if (peer->type == NHRP_PEER_TYPE_LOCAL)
+		CIRCLEQ_REMOVE(&local_peer_cache, peer, peer_list);
+	else
+		CIRCLEQ_REMOVE(&iface->peer_cache, peer, peer_list);
+	type = peer->type;
+	nhrp_peer_free(peer);
+
+	if (type == NHRP_PEER_TYPE_LOCAL)
+		forward_local_addresses_changed();
+
+	return TRUE;
+}
+
 static void nhrp_peer_do_insert_callback(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
@@ -1140,31 +1204,22 @@ static char *nhrp_peer_do_insert_describe(struct nhrp_task *task, size_t buflen,
 
 void nhrp_peer_insert(struct nhrp_peer *ins)
 {
-	struct nhrp_interface *iface = ins->interface;
 	struct nhrp_peer_selector sel;
 	struct nhrp_peer *peer;
 	char tmp[NHRP_PEER_FORMAT_LEN];
+
+	NHRP_BUG_ON(ins->list_count != 0);
 
 	/* First, prune all duplicates */
 	memset(&sel, 0, sizeof(sel));
 	sel.flags = NHRP_PEER_FIND_EXACT;
 	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
-	sel.interface = iface;
+	sel.interface = ins->interface;
 	sel.protocol_address = ins->protocol_address;
 	sel.prefix_length = ins->prefix_length;
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 
-	if (ins->list_count == 0) {
-		peer = nhrp_peer_dup(ins);
-		if (peer->type == NHRP_PEER_TYPE_LOCAL)
-			CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
-		else
-			CIRCLEQ_INSERT_HEAD(&iface->peer_cache, peer, peer_list);
-		peer->list_count++;
-		peer->flags &= ~NHRP_PEER_FLAG_REMOVED;
-	} else {
-		peer = ins;
-	}
+	peer = nhrp_peer_keep(ins);
 
 	nhrp_debug("Adding %s %s",
 		   nhrp_peer_type[peer->type],
@@ -1201,34 +1256,11 @@ int nhrp_peer_purge_matching(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-static struct nhrp_peer *nhrp_peer_keep(struct nhrp_peer *peer)
-{
-	peer->list_count++;
-	return peer;
-}
-
-static int nhrp_peer_unkeep(struct nhrp_peer *peer)
-{
-	struct nhrp_interface *iface = peer->interface;
-
-	if (--peer->list_count > 0)
-		return FALSE;
-
-	if (peer->type == NHRP_PEER_TYPE_LOCAL)
-		CIRCLEQ_REMOVE(&local_peer_cache, peer, peer_list);
-	else
-		CIRCLEQ_REMOVE(&iface->peer_cache, peer, peer_list);
-	nhrp_peer_free(peer);
-
-	if (peer->type == NHRP_PEER_TYPE_LOCAL)
-		forward_local_addresses_changed();
-
-	return TRUE;
-}
-
 void nhrp_peer_remove(struct nhrp_peer *peer)
 {
 	char tmp[NHRP_PEER_FORMAT_LEN];
+
+	NHRP_BUG_ON(peer->flags & NHRP_PEER_FLAG_REMOVED);
 
 	nhrp_debug("Removing %s %s",
 		   nhrp_peer_type[peer->type],
@@ -1327,13 +1359,13 @@ static int enumerate_peer_cache(struct nhrp_peer_list *peer_cache,
 	int rc = 0;
 
 	CIRCLEQ_FOREACH(p, peer_cache, peer_list) {
-		if (p->flags & NHRP_PEER_FLAG_REMOVED)
-			continue;
-
 		kept_prev = kept_curr;
 		kept_curr = nhrp_peer_keep(p);
 		if (kept_prev != NULL)
 			nhrp_peer_unkeep(kept_prev);
+
+		if (p->flags & NHRP_PEER_FLAG_REMOVED)
+			continue;
 
 		if (sel == NULL || nhrp_peer_match(p, sel)) {
 			rc = e(ctx, kept_curr);
