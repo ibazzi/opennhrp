@@ -231,10 +231,6 @@ static int open_pid_file(void)
 	if (flock(pid_file_fd, LOCK_EX | LOCK_NB) < 0)
 		goto err_close;
 
-	if (ftruncate(pid_file_fd, 0) < 0)
-		goto err_close;
-
-	atexit(remove_pid_file);
 	return TRUE;
 
 err_close:
@@ -250,9 +246,14 @@ static int write_pid(void)
 	int n;
 
 	if (pid_file_fd >= 0) {
+		if (ftruncate(pid_file_fd, 0) < 0)
+			return FALSE;
+
 		n = sprintf(tmp, "%d\n", getpid());
 		if (write(pid_file_fd, tmp, n) != n)
 			return FALSE;
+
+		atexit(remove_pid_file);
 	}
 
 	return TRUE;
