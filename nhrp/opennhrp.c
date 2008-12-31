@@ -218,11 +218,49 @@ static void remove_pid_file(void)
 	}
 }
 
-static int daemonize(void)
+static int open_pid_file(void)
+{
+	if (strlen(nhrp_pid_file) == 0)
+		return TRUE;
+
+	pid_file_fd = open(nhrp_pid_file, O_CREAT | O_WRONLY,
+			   S_IRUSR | S_IWUSR);
+	if (pid_file_fd < 0)
+		goto err;
+
+	if (flock(pid_file_fd, LOCK_EX | LOCK_NB) < 0)
+		goto err_close;
+
+	if (ftruncate(pid_file_fd, 0) < 0)
+		goto err_close;
+
+	atexit(remove_pid_file);
+	return TRUE;
+
+err_close:
+	close(pid_file_fd);
+err:
+	nhrp_error("Unable to open/lock pid file: %s.", strerror(errno));
+	return FALSE;
+}
+
+static int write_pid(void)
 {
 	char tmp[16];
-	pid_t pid;
 	int n;
+
+	if (pid_file_fd >= 0) {
+		n = sprintf(tmp, "%d\n", getpid());
+		if (write(pid_file_fd, tmp, n) != n)
+			return FALSE;
+	}
+
+	return TRUE;
+}
+
+static int daemonize(void)
+{
+	pid_t pid;
 
 	pid = fork();
 	if (pid < 0)
@@ -242,24 +280,6 @@ static int daemonize(void)
 	if (chdir("/") < 0)
 		return FALSE;
 
-	pid_file_fd = open(nhrp_pid_file, O_CREAT | O_WRONLY,
-			   S_IRUSR | S_IWUSR);
-	if (pid_file_fd < 0) {
-		nhrp_error("Unable to open pid file: %s.", strerror(errno));
-		return FALSE;
-	}
-
-	if (flock(pid_file_fd, LOCK_EX | LOCK_NB) < 0)
-		goto errmsg;
-
-	if (ftruncate(pid_file_fd, 0) < 0)
-		goto errmsg;
-
-	n = sprintf(tmp, "%d\n", getpid());
-	if (write(pid_file_fd, tmp, n) != n)
-		goto errmsg;
-
-	atexit(remove_pid_file);
 	umask(0);
 
 	if (freopen("/dev/null", "r", stdin) == NULL ||
@@ -271,8 +291,6 @@ static int daemonize(void)
 
 	return TRUE;
 
-errmsg:
-	nhrp_error("Unable to lock/write pid file");
 err:
 	close(pid_file_fd);
 	pid_file_fd = 0;
@@ -343,6 +361,9 @@ int main(int argc, char **argv)
 	if (!log_init())
 		return 1;
 
+	if (!open_pid_file())
+		return 1;
+
 	nhrp_info("%s starting", nhrp_version_string);
 	if (!signal_init())
 		return 2;
@@ -360,6 +381,7 @@ int main(int argc, char **argv)
 		return 7;
 	}
 
+	write_pid();
 	nhrp_task_run();
 
 	return 0;
