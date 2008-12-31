@@ -6,7 +6,7 @@ Detailed changelog is available via SVN history using:
 svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
 
 -----------------------------------------------------------------------------
- opennhrp 0.9.1 - to be released
+ opennhrp 0.9.1 - released 31/Dec/2008
 -----------------------------------------------------------------------------
  - fix a crash in peer cache enumeration
  - update opennhrp-script to show how to add host route with mtu
