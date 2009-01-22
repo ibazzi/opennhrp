@@ -32,7 +32,7 @@ static struct pollctx gctx[MAX_FDS];
 
 void nhrp_time_monotonic(struct timeval *tv)
 {
-#ifdef _POSIX_MONOTONIC_CLOCK
+#if defined(_POSIX_MONOTONIC_CLOCK) || defined(CLOCK_MONOTONIC)
 	struct timespec ts;
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
