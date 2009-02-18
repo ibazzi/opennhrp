@@ -1260,7 +1260,8 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 {
 	char tmp[NHRP_PEER_FORMAT_LEN];
 
-	NHRP_BUG_ON(peer->flags & NHRP_PEER_FLAG_REMOVED);
+	if (peer->flags & NHRP_PEER_FLAG_REMOVED)
+		return;
 
 	nhrp_debug("Removing %s %s",
 		   nhrp_peer_type[peer->type],
