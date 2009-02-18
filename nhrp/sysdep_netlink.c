@@ -516,6 +516,7 @@ static int netlink_addr_new_nbma(void *ctx, struct nhrp_interface *iface)
 			iface->nbma_mtu = translate_mtu(nbma_iface->mtu);
 		}
 	}
+
 	return 0;
 }
 
@@ -561,52 +562,62 @@ static void netlink_addr_new(struct nlmsghdr *msg)
 	nhrp_peer_free(peer);
 }
 
+struct netlink_del_addr_msg {
+	int interface_index;
+	struct nhrp_address address;
+};
+
 static int netlink_addr_del_nbma(void *ctx, struct nhrp_interface *iface)
 {
-	struct nlmsghdr *msg = (struct nlmsghdr *) ctx;
-	struct ifaddrmsg *ifa = NLMSG_DATA(msg);
-	struct rtattr *rta[IFA_MAX+1];
-	struct nhrp_address nbma_address;
+	struct netlink_del_addr_msg *msg = (struct netlink_del_addr_msg *) ctx;
 
-	if (iface->link_index == ifa->ifa_index) {
-		netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa),
-				     IFA_PAYLOAD(msg));
+	if (iface->link_index == msg->interface_index &&
+	    nhrp_address_cmp(&msg->address, &iface->nbma_address) == 0)
+		nhrp_address_set_type(&iface->nbma_address, PF_UNSPEC);
 
-		if (rta[IFA_LOCAL] == NULL)
-			return 0;
-
-		nhrp_address_set(&nbma_address, ifa->ifa_family,
-				 RTA_PAYLOAD(rta[IFA_LOCAL]),
-				 RTA_DATA(rta[IFA_LOCAL]));
-
-		if (nhrp_address_cmp(&nbma_address, &iface->nbma_address) == 0)
-			nhrp_address_set_type(&iface->nbma_address, PF_UNSPEC);
-	}
 	return 0;
 }
 
-static void netlink_addr_del(struct nlmsghdr *msg)
+static int netlink_addr_purge_nbma(void *ctx, struct nhrp_peer *peer)
 {
+	struct netlink_del_addr_msg *msg = (struct netlink_del_addr_msg *) ctx;
+
+	if (nhrp_address_cmp(&peer->my_nbma_address, &msg->address) == 0)
+		nhrp_peer_purge(peer);
+
+	return 0;
+}
+
+static void netlink_addr_del(struct nlmsghdr *nlmsg)
+{
+	struct netlink_del_addr_msg msg;
 	struct nhrp_interface *iface;
-	struct ifaddrmsg *ifa = NLMSG_DATA(msg);
+	struct ifaddrmsg *ifa = NLMSG_DATA(nlmsg);
 	struct rtattr *rta[IFA_MAX+1];
 	struct nhrp_peer_selector sel;
 
-	if (!(ifa->ifa_flags & IFA_F_SECONDARY))
-		nhrp_interface_foreach(netlink_addr_del_nbma, msg);
+	netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(nlmsg));
+	if (rta[IFA_LOCAL] == NULL)
+		return;
 
-	netlink_parse_rtattr(rta, IFA_MAX, IFA_RTA(ifa), IFA_PAYLOAD(msg));
+	msg.interface_index = ifa->ifa_index;
+	nhrp_address_set(&msg.address, ifa->ifa_family,
+			 RTA_PAYLOAD(rta[IFA_LOCAL]),
+			 RTA_DATA(rta[IFA_LOCAL]));
+
+	if (!(ifa->ifa_flags & IFA_F_SECONDARY))
+		nhrp_interface_foreach(netlink_addr_del_nbma, &msg);
+	nhrp_peer_foreach(netlink_addr_purge_nbma, &msg, NULL);
+
 	iface = nhrp_interface_get_by_index(ifa->ifa_index, FALSE);
-	if (iface == NULL || rta[IFA_LOCAL] == NULL)
+	if (iface == NULL)
 		return;
 
 	memset(&sel, 0, sizeof(sel));
 	sel.flags = NHRP_PEER_FIND_EXACT;
 	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL);
 	sel.interface = iface;
-	nhrp_address_set(&sel.protocol_address, ifa->ifa_family,
-			 RTA_PAYLOAD(rta[IFA_LOCAL]),
-			 RTA_DATA(rta[IFA_LOCAL]));
+	sel.protocol_address = msg.address;
 	sel.prefix_length = sel.protocol_address.addr_len * 8;
 
 	if (nhrp_address_cmp(&sel.protocol_address, &iface->protocol_address) == 0)

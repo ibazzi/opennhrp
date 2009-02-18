@@ -1143,7 +1143,6 @@ static void nhrp_peer_do_insert_callback(struct nhrp_task *task)
 
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
-		nhrp_peer_resolve_nbma(peer);
 		nhrp_peer_run_up_script_callback(task);
 		break;
 	case NHRP_PEER_TYPE_LOCAL:
@@ -1238,6 +1237,7 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 		peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
 		nhrp_task_cancel(&peer->task);
 		nhrp_peer_run_script(peer, "peer-down", nhrp_peer_script_peer_down_done);
+		nhrp_address_set_type(&peer->my_nbma_address, PF_UNSPEC);
 		break;
 	default:
 		nhrp_peer_remove(peer);
