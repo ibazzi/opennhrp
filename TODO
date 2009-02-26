@@ -1,0 +1,35 @@
+Open items that need work on OpenNHRP:
+  
+- "dns-map" directive, to map multiple GRE IP:s based on DNS;
+   e.g. "dns-map 172.16.0.1/16 core.foo.example register" or similar
+     would automatically do:
+       map 172.16.0.1/16 a.core.foo.example register
+       map 172.16.0.2/16 b.core.foo.example register
+       ...
+   for all existing DNS entries. This would make adding a new global
+   hub node very simple.
+
+- Proper handling of unique bit. Currently registration of unique address
+  overwrites previous registration, but this against RFC.
+
+- Load balancing: return multiple CIE entries, when we have multiple
+  local IP addresses. When receiving multi CIE next-hop, balance traffic
+  or for shortcut routes, create a multi nexthop route.
+
+- Create some logic to detect if NBMA and public IPs are mixed up in
+  the "map" directive. Issue on warning about this.
+
+- Recheck the NHRP packet routing logic. It looks like a packet originator
+  is not checked when making new routing decision. This can lead an packet
+  to return to sender. Especially if there is a BGP routing loop. In such
+  situations the packet should be dropped.
+
+- Do to the above bug, shortcut might be created based on a local route.
+  Thus opennhrp might replace a local, administrative route. Make sure
+  local routes are never ever replaced.
+
+- Support reloading of configuration (via SIGHUP or "opennhrpctl reload")
+
+- Clean shutdown: send purge request to registration servers, dynamic
+  clients and possibly track resolution requests and purge those too.
+
