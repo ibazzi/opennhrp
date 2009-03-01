@@ -6,6 +6,8 @@ and Cisco IOS extensions.
 
 Project homepage: http://sourceforge.net/projects/opennhrp
 
+Git repository: git://opennhrp.git.sourceforge.net/gitroot/opennhrp
+
 	KERNEL REQUIREMENTS
 
 You need a kernel with ip_gre patched to support sending and receiving
@@ -41,8 +43,8 @@ This should work with the configuration example in opennhrp.conf(5).
 
 	IPSEC ENCRYPTION OF GRE PACKETS
 
-ipsec-tools CVS HEAD version contains now everything required to integrate
-it smoothly with OpenNHRP. Grab it.
+ipsec-tools CVS HEAD and 0.8 snapshot version contain now everything
+required to integrate it smoothly with OpenNHRP. Grab either of those.
 
 Or if you prefer to use a ipsec-tools release as a basis, check
 patches/ipsec-tools-0.7.diff. It was contributed by Steffen Schmidt.

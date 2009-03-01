@@ -2,8 +2,8 @@
 OpenNHRP ChangeLog                   http://sourceforge.net/projects/opennhrp
 =============================================================================
 
-Detailed changelog is available via SVN history using:
-svn log https://opennhrp.svn.sourceforge.net/svnroot/opennhrp
+Detailed changelog is available via Git history via web:
+http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
  opennhrp 0.9.3 - released 20/Feb/2009
