@@ -1,17 +1,24 @@
 Open items that need work on OpenNHRP:
 
+- seen netlink overrun messages. likely happened when public ip was
+  changed by dhcp resulting in lot of netlink messages, and opennhrp
+  was probably blocking in dns resolver. i guess i need an async dns
+  resolver.
+
+- mtu is not properly injected always; e.g. NHS is restart, and
+  routing table is flush, the new mtu is not injected until dynamic
+  is manually flushed and re-registers
+
 - Limit the amount of simultanous opennhrp-script spawns. There are
   situations where a script storm arises: e.g. hub node is rebooted and all
   leafs try to connect about the same time.
   
-- "dns-map" directive, to map multiple GRE IP:s based on DNS;
-   e.g. "dns-map 172.16.0.1/16 core.foo.example register" or similar
-     would automatically do:
-       map 172.16.0.1/16 a.core.foo.example register
-       map 172.16.0.2/16 b.core.foo.example register
-       ...
-   for all existing DNS entries. This would make adding a new global
-   hub node very simple.
+- "dns-map" directive, to map multiple GRE IP:s based on DNS
+   e.g. "dns-map N 172.16.0.0/16 core.foo.example register" or similar
+     would automatically get A records for core.foo.example, and
+     connect to N of them. the actual private IP of a public IP could
+     be figured out using opennhrp-script, and parse IPsec certificate,
+     or get corresponding TXT records
 
 - Proper handling of unique bit. Currently registration of unique address
   overwrites previous registration, but this against RFC.
