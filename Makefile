@@ -11,9 +11,13 @@
 
 VERSION := 0.9.3
 
-SVN_REV := $(shell svnversion || echo exported)
-ifneq ($(SVN_REV), exported)
-FULL_VERSION := $(VERSION)-r$(SVN_REV)
+GIT_REV := $(shell git-describe || echo exported)
+ifneq ($(GIT_REV), exported)
+ifneq ($(filter v$(VERSION)%, $(GIT_REV)),)
+FULL_VERSION := $(patsubst v%,%,$(GIT_REV))
+else
+FULL_VERSION := $(GIT_REV)
+endif
 else
 FULL_VERSION := $(VERSION)
 endif
@@ -47,9 +51,8 @@ install::
 	$(INSTALL) README $(DESTDIR)$(DOCDIR)
 
 dist:
-	svn-clean
 	(TOP=`pwd` && cd .. && ln -s $$TOP opennhrp-$(VERSION) && \
-	 tar --exclude '*/.svn*' -cjvf opennhrp-$(VERSION).tar.bz2 opennhrp-$(VERSION)/* && \
+	 tar --exclude '*/.git*' -cjvf opennhrp-$(VERSION).tar.bz2 opennhrp-$(VERSION)/* && \
 	 rm opennhrp-$(VERSION))
 
 .EXPORT_ALL_VARIABLES:
