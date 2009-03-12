@@ -1,5 +1,11 @@
 Open items that need work on OpenNHRP:
 
+- processing of registration script is currently synchronous; it
+  could cause bad things to happen if too many registration requests
+  got queued (e.g. timers/signals not handled properly). fix the
+  registration script hook to be asynchronous. this implies having
+  a list of pending registration requests.
+
 - seen netlink overrun messages. likely happened when public ip was
   changed by dhcp resulting in lot of netlink messages, and opennhrp
   was probably blocking in dns resolver. i guess i need an async dns

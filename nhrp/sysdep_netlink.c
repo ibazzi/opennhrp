@@ -780,9 +780,10 @@ static int pfpacket_read(void *ctx, int fd, short events)
 	};
 	uint8_t buf[1500];
 	struct nhrp_address from;
+	int i;
 
 	iov.iov_base = buf;
-	while (1) {
+	for (i = 0; i < 2; i++) {
 		int status;
 
 		iov.iov_len = sizeof(buf);
