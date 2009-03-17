@@ -396,8 +396,11 @@ static int admin_accept(void *ctx, int fd, short events)
 	rm = calloc(1, sizeof(struct admin_remote));
 	rm->fd = cnx;
 
-	if (!nhrp_task_poll_fd(cnx, POLLIN, admin_receive, rm))
+	if (!nhrp_task_poll_fd(cnx, POLLIN, admin_receive, rm)) {
 		close(cnx);
+		free(rm);
+		return 0;
+	}
 
 	nhrp_task_schedule(&rm->timeout, 10000, &admin_timeout);
 
