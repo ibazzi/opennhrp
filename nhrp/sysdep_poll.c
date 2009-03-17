@@ -43,9 +43,21 @@ void nhrp_time_monotonic(struct timeval *tv)
 #endif
 }
 
-int nhrp_task_poll_fd(int fd, short events, int (*callback)(void *ctx, int fd, short events),
+int nhrp_task_poll_fd(int fd, short events,
+		      int (*callback)(void *ctx, int fd, short events),
 		      void *ctx)
 {
+	int i;
+
+	for (i = 0; i < numfds; i++) {
+		if (gfds[i].fd == fd) {
+			gctx[i].callback = callback;
+			gctx[i].ctx = ctx;
+			gfds[i].events = events;
+			return TRUE;
+		}
+	}
+
 	if (numfds >= MAX_FDS) {
 		nhrp_error("Poll table full. Increase MAX_FDS in sysdep_poll.c.");
 		return FALSE;

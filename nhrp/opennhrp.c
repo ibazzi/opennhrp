@@ -149,13 +149,8 @@ static int load_config(const char *config_file)
 			}
 			peer->protocol_type = nhrp_protocol_from_pf(peer->protocol_address.type);
 			if (!nhrp_address_parse(nbma, &peer->next_hop_address,
-						NULL)) {
-				if (!nhrp_address_resolve(nbma,
-							  &peer->next_hop_address))
-					nhrp_info("WARNING: Unable to resolve domain name '%s'",
-						  nbma);
+						NULL))
 				peer->nbma_hostname = strdup(nbma);
-			}
 			peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
 			nhrp_peer_insert(peer);
 			nhrp_peer_free(peer);
@@ -361,25 +356,27 @@ int main(int argc, char **argv)
 
 	if (!log_init())
 		return 1;
-
 	if (!open_pid_file())
 		return 1;
 
 	nhrp_info("%s starting", nhrp_version_string);
+
 	if (!signal_init())
 		return 2;
-	if (!load_config(nhrp_config_file))
+	if (!nhrp_address_init())
 		return 3;
-	if (!kernel_init())
+	if (!load_config(nhrp_config_file))
 		return 4;
-	if (!admin_init(nhrp_admin_socket))
+	if (!kernel_init())
 		return 5;
-	if (!forward_init())
+	if (!admin_init(nhrp_admin_socket))
 		return 6;
+	if (!forward_init())
+		return 7;
 
 	if (daemonmode && !daemonize()) {
 		nhrp_error("Failed to daemonize. Exit.");
-		return 7;
+		return 8;
 	}
 
 	write_pid();

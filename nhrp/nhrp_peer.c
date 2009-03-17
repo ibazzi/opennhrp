@@ -354,26 +354,37 @@ static void nhrp_peer_script_route_up_done(struct nhrp_peer *peer, int status)
 	}
 }
 
+static void nhrp_peer_address_query_callback(struct nhrp_address_query *query,
+					     struct nhrp_address *result)
+{
+	struct nhrp_peer *peer = container_of(query, struct nhrp_peer, address_query);
+	char host[64];
+
+	if (result->type != AF_UNSPEC) {
+		nhrp_info("Resolved '%s' as %s",
+			  peer->nbma_hostname,
+			  nhrp_address_format(result, sizeof(host), host));
+		peer->next_hop_address = *result;
+		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
+	} else {
+		nhrp_error("Failed to resolve '%s'", peer->nbma_hostname);
+		nhrp_task_schedule(&peer->task, 5000,
+				   &nhrp_peer_run_up_script);
+	}
+}
+
 static void nhrp_peer_run_up_script_callback(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
 
 	if (peer->nbma_hostname) {
-		char host[64];
-
-		if (!nhrp_address_resolve(peer->nbma_hostname, &peer->next_hop_address)) {
-			nhrp_task_schedule(&peer->task, 5000,
-					   &nhrp_peer_run_up_script);
-			return;
-		}
-
-		nhrp_info("Resolved '%s' as %s",
-			peer->nbma_hostname,
-			nhrp_address_format(&peer->next_hop_address,
-					    sizeof(host), host));
+		nhrp_address_resolve(&peer->address_query,
+				     peer->nbma_hostname,
+				     nhrp_peer_address_query_callback);
+	} else {
+		nhrp_peer_run_script(peer, "peer-up",
+				     nhrp_peer_script_peer_up_done);
 	}
-
-	nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
 }
 
 static char *nhrp_peer_run_up_script_describe(struct nhrp_task *task, size_t buflen, char *buf)

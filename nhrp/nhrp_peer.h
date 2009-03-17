@@ -70,6 +70,7 @@ struct nhrp_peer {
 	unsigned short list_count;
 	CIRCLEQ_ENTRY(nhrp_peer) peer_list;
 	struct nhrp_task task;
+	struct nhrp_address_query address_query;
 	struct nhrp_interface *interface;
 	pid_t script_pid;
 	void (*script_callback)(struct nhrp_peer *peer, int status);

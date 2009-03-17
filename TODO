@@ -6,10 +6,7 @@ Open items that need work on OpenNHRP:
   registration script hook to be asynchronous. this implies having
   a list of pending registration requests.
 
-- seen netlink overrun messages. likely happened when public ip was
-  changed by dhcp resulting in lot of netlink messages, and opennhrp
-  was probably blocking in dns resolver. i guess i need an async dns
-  resolver.
+- make netlink buffer larger
 
 - mtu is not properly injected always; e.g. NHS is restart, and
   routing table is flush, the new mtu is not injected until dynamic

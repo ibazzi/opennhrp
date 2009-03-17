@@ -26,9 +26,15 @@ CC=gcc
 INSTALL=install
 INSTALLDIR=$(INSTALL) -d
 
-CFLAGS=-Werror -Wall -Wstrict-prototypes -std=gnu99 -O2 \
-       -DOPENNHRP_VERSION=\"$(FULL_VERSION)\"
-LDFLAGS=
+CFLAGS+=-Werror -Wall -Wstrict-prototypes -std=gnu99 -O2 \
+       -DOPENNHRP_VERSION=\"$(FULL_VERSION)\" \
+       $(shell pkg-config --cflags libcares)
+LDFLAGS+=$(shell pkg-config --libs libcares)
+
+ifneq ($(DEBUG),)
+CFLAGS+=-g
+LDFLAGS+=-g
+endif
 
 DESTDIR=
 SBINDIR=/usr/sbin

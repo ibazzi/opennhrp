@@ -19,6 +19,11 @@
 #define NHRP_MAX_ADDRESS_LEN            6
 
 struct nhrp_cie_list_head;
+struct nhrp_address;
+struct nhrp_address_query;
+
+typedef void (*nhrp_address_query_callback)(struct nhrp_address_query *query,
+					    struct nhrp_address *result);
 
 struct nhrp_address {
 	uint16_t type;
@@ -27,14 +32,21 @@ struct nhrp_address {
 	uint8_t addr[NHRP_MAX_ADDRESS_LEN];
 };
 
+struct nhrp_address_query {
+	nhrp_address_query_callback callback;
+};
+
 uint16_t nhrp_protocol_from_pf(uint16_t pf);
 uint16_t nhrp_pf_from_protocol(uint16_t protocol);
 uint16_t nhrp_afnum_from_pf(uint16_t pf);
 uint16_t nhrp_pf_from_afnum(uint16_t afnum);
 
+int nhrp_address_init(void);
 int nhrp_address_parse_packet(uint16_t protocol, size_t len, uint8_t *packet, struct nhrp_address *src, struct nhrp_address *dst);
 int nhrp_address_parse(const char *string, struct nhrp_address *addr, uint8_t *prefix_len);
-int nhrp_address_resolve(const char *hostname, struct nhrp_address *addr);
+void nhrp_address_resolve(struct nhrp_address_query *query,
+			  const char *hostname,
+			  nhrp_address_query_callback callback);
 void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type);
 int nhrp_address_set(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes);
 int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes, uint8_t sublen, uint8_t *subbytes);

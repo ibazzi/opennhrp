@@ -10,15 +10,49 @@
  * See http://www.gnu.org/ for details.
  */
 
-#include <netdb.h>
 #include <stdio.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <arpa/nameser.h>
 #include <linux/ip.h>
+
+#include <ares.h>
 
 #include "afnum.h"
 #include "nhrp_address.h"
 #include "nhrp_packet.h"
+#include "nhrp_common.h"
+
+static ares_channel ares_resolver;
+
+static int ares_poll_cb(void *ctx, int fd, short events)
+{
+	ares_socket_t rfd = ARES_SOCKET_BAD, wfd = ARES_SOCKET_BAD;
+
+	if (events & POLLIN)
+		rfd = fd;
+	if (events & POLLOUT)
+		wfd = fd;
+	ares_process_fd(*(ares_channel *) ctx, rfd, wfd);
+
+	return 0;
+}
+
+static void ares_socket_cb(void *data, ares_socket_t fd,
+			   int readable, int writable)
+{
+	short events = 0;
+
+	if (readable)
+		events |= POLLIN;
+	if (writable)
+		events |= POLLOUT;
+
+	if (events)
+		nhrp_task_poll_fd(fd, events, ares_poll_cb, data);
+	else
+		nhrp_task_unpoll_fd(fd);
+}
 
 static int bitcmp(uint8_t *a, uint8_t *b, int len)
 {
@@ -124,21 +158,34 @@ int nhrp_address_parse_packet(uint16_t protocol, size_t len, uint8_t *packet,
 	return TRUE;
 }
 
-int nhrp_address_resolve(const char *hostname, struct nhrp_address *addr)
+static void ares_address_cb(void *arg, int status, int timeouts,
+			    unsigned char *abuf, int alen)
 {
-	struct hostent *he;
+	struct nhrp_address_query *query =
+		(struct nhrp_address_query *) arg;
+	struct nhrp_address addr;
+	struct addrttl addrttls[1];
+	int naddrttls = ARRAY_SIZE(addrttls);
 
-	he = gethostbyname(hostname);
-	if (he == NULL)
-		return FALSE;
+	nhrp_address_set_type(&addr, AF_UNSPEC);
+	if (status == ARES_SUCCESS) {
+		status = ares_parse_a_reply(abuf, alen, NULL,
+					    addrttls, &naddrttls);
+		if (status == ARES_SUCCESS)
+			nhrp_address_set(&addr, AF_INET,
+					 sizeof(addrttls[0].ipaddr),
+					 (void *) &addrttls[0].ipaddr);
+	}
+	query->callback(query, &addr);
+}
 
-	if (he->h_addrtype != AF_INET)
-		return FALSE;
-
-	nhrp_address_set(addr, he->h_addrtype, he->h_length,
-			 (unsigned char *) he->h_addr);
-
-	return TRUE;
+void nhrp_address_resolve(struct nhrp_address_query *query,
+			  const char *hostname,
+			  nhrp_address_query_callback callback)
+{
+	query->callback = callback;
+	ares_query(ares_resolver, hostname, C_IN, T_A,
+		   ares_address_cb, query);
 }
 
 void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type)
@@ -269,3 +316,16 @@ int nhrp_address_match_cie_list(struct nhrp_address *nbma_address,
 	return FALSE;
 }
 
+int nhrp_address_init(void)
+{
+	struct ares_options ares_opts;
+
+	memset(&ares_opts, 0, sizeof(ares_opts));
+	ares_opts.sock_state_cb = &ares_socket_cb;
+	ares_opts.sock_state_cb_data = &ares_resolver;
+	if (ares_init_options(&ares_resolver, &ares_opts,
+			      ARES_OPT_SOCK_STATE_CB) != ARES_SUCCESS)
+		return FALSE;
+
+	return TRUE;
+}
