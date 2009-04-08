@@ -34,6 +34,9 @@
 #include "nhrp_interface.h"
 #include "nhrp_peer.h"
 
+#define NETLINK_KERNEL_BUFFER	(64 * 1024)
+#define NETLINK_RECV_BUFFER	(8 * 1024)
+
 #define NLMSG_TAIL(nmsg) \
 	((struct rtattr *) (((void *) (nmsg)) + NLMSG_ALIGN((nmsg)->nlmsg_len)))
 
@@ -100,7 +103,7 @@ static int netlink_receive(struct netlink_fd *fd, struct nlmsghdr *reply)
 		.msg_iovlen = 1,
 	};
 	int got_reply = FALSE, len;
-	char buf[16*1024];
+	char buf[NETLINK_RECV_BUFFER];
 
 	iov.iov_base = buf;
 	while (!got_reply) {
@@ -732,7 +735,7 @@ static void netlink_close(struct netlink_fd *fd)
 static int netlink_open(struct netlink_fd *fd, int protocol, int groups)
 {
 	struct sockaddr_nl addr;
-	int buf = 16 * 1024;
+	int buf = NETLINK_KERNEL_BUFFER;
 
 	fd->fd = socket(AF_NETLINK, SOCK_RAW, protocol);
 	fd->seq = time(NULL);

@@ -6,7 +6,7 @@ Open items that need work on OpenNHRP:
   registration script hook to be asynchronous. this implies having
   a list of pending registration requests.
 
-- make netlink buffer larger
+- cancel pending adns query if peer is purged/flushed during query
 
 - mtu is not properly injected always; e.g. NHS is restart, and
   routing table is flush, the new mtu is not injected until dynamic
