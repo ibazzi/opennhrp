@@ -12,11 +12,14 @@
 
 #include <stdio.h>
 #include <string.h>
+
+#include <netdb.h>
 #include <arpa/inet.h>
 #include <arpa/nameser.h>
 #include <linux/ip.h>
 
 #include <ares.h>
+#include <ares_version.h>
 
 #include "afnum.h"
 #include "nhrp_address.h"
@@ -158,24 +161,22 @@ int nhrp_address_parse_packet(uint16_t protocol, size_t len, uint8_t *packet,
 	return TRUE;
 }
 
+#if ARES_VERSION_MAJOR > 1 || ARES_VERSION_MINOR > 4
 static void ares_address_cb(void *arg, int status, int timeouts,
-			    unsigned char *abuf, int alen)
+			    struct hostent *he)
+#else
+static void ares_address_cb(void *arg, int status, struct hostent *he)
+#endif
 {
 	struct nhrp_address_query *query =
 		(struct nhrp_address_query *) arg;
 	struct nhrp_address addr;
-	struct addrttl addrttls[1];
-	int naddrttls = ARRAY_SIZE(addrttls);
 
-	nhrp_address_set_type(&addr, AF_UNSPEC);
-	if (status == ARES_SUCCESS) {
-		status = ares_parse_a_reply(abuf, alen, NULL,
-					    addrttls, &naddrttls);
-		if (status == ARES_SUCCESS)
-			nhrp_address_set(&addr, AF_INET,
-					 sizeof(addrttls[0].ipaddr),
-					 (void *) &addrttls[0].ipaddr);
-	}
+	if (status == ARES_SUCCESS)
+		nhrp_address_set(&addr, AF_INET, he->h_length,
+				 (uint8_t *) he->h_addr);
+	else
+		nhrp_address_set_type(&addr, AF_UNSPEC);
 	query->callback(query, &addr);
 }
 
@@ -184,8 +185,8 @@ void nhrp_address_resolve(struct nhrp_address_query *query,
 			  nhrp_address_query_callback callback)
 {
 	query->callback = callback;
-	ares_query(ares_resolver, hostname, C_IN, T_A,
-		   ares_address_cb, query);
+	ares_gethostbyname(ares_resolver, hostname, C_IN,
+			   ares_address_cb, query);
 }
 
 void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type)

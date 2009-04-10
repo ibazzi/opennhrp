@@ -11,7 +11,7 @@
 
 VERSION := 0.9.3
 
-GIT_REV := $(shell git-describe || echo exported)
+GIT_REV := $(shell git describe || echo exported)
 ifneq ($(GIT_REV), exported)
 ifneq ($(filter v$(VERSION)%, $(GIT_REV)),)
 FULL_VERSION := $(patsubst v%,%,$(GIT_REV))
@@ -27,9 +27,14 @@ INSTALL=install
 INSTALLDIR=$(INSTALL) -d
 
 CFLAGS+=-Werror -Wall -Wstrict-prototypes -std=gnu99 -O2 \
-       -DOPENNHRP_VERSION=\"$(FULL_VERSION)\" \
-       $(shell pkg-config --cflags libcares)
+       -DOPENNHRP_VERSION=\"$(FULL_VERSION)\"
+
+ifeq ($(shell pkg-config --exists libcares && echo "yes"),yes)
+CFLAGS+=$(shell pkg-config --cflags libcares)
 LDFLAGS+=$(shell pkg-config --libs libcares)
+else
+LDFLAGS+=-lcares
+endif
 
 ifneq ($(DEBUG),)
 CFLAGS+=-g
