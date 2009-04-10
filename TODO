@@ -8,10 +8,6 @@ Open items that need work on OpenNHRP:
 
 - cancel pending adns query if peer is purged/flushed during query
 
-- mtu is not properly injected always; e.g. NHS is restart, and
-  routing table is flush, the new mtu is not injected until dynamic
-  is manually flushed and re-registers
-
 - Limit the amount of simultanous opennhrp-script spawns. There are
   situations where a script storm arises: e.g. hub node is rebooted and all
   leafs try to connect about the same time.

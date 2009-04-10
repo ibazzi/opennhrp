@@ -497,6 +497,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		peer->protocol_type = packet->hdr.protocol_type;
 		peer->expire_time = now;
 		peer->expire_time.tv_sec += ntohs(cie->hdr.holding_time);
+		peer->mtu = ntohs(cie->hdr.mtu);
 
 		if (cie->nbma_address.addr_len != 0)
 			peer->next_hop_address = cie->nbma_address;
