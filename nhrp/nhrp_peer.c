@@ -1054,6 +1054,7 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 	}
 
 	nhrp_task_cancel(&peer->task);
+	nhrp_address_resolve_cancel(&peer->address_query);
 
 	free(peer);
 

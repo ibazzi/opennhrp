@@ -177,7 +177,9 @@ static void ares_address_cb(void *arg, int status, struct hostent *he)
 				 (uint8_t *) he->h_addr);
 	else
 		nhrp_address_set_type(&addr, AF_UNSPEC);
+
 	query->callback(query, &addr);
+	query->callback = NULL;
 }
 
 void nhrp_address_resolve(struct nhrp_address_query *query,
@@ -187,6 +189,16 @@ void nhrp_address_resolve(struct nhrp_address_query *query,
 	query->callback = callback;
 	ares_gethostbyname(ares_resolver, hostname, C_IN,
 			   ares_address_cb, query);
+}
+
+void nhrp_address_resolve_cancel(struct nhrp_address_query *query)
+{
+	/* The kills all active queries; not just the one
+	 * given as parameter. But as those will be retried later
+	 * anyway, it is not a problem for now. */
+
+	if (query->callback != NULL)
+		ares_cancel(ares_resolver);
 }
 
 void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type)

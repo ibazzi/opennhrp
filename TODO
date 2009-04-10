@@ -6,8 +6,6 @@ Open items that need work on OpenNHRP:
   registration script hook to be asynchronous. this implies having
   a list of pending registration requests.
 
-- cancel pending adns query if peer is purged/flushed during query
-
 - Limit the amount of simultanous opennhrp-script spawns. There are
   situations where a script storm arises: e.g. hub node is rebooted and all
   leafs try to connect about the same time.

@@ -47,6 +47,7 @@ int nhrp_address_parse(const char *string, struct nhrp_address *addr, uint8_t *p
 void nhrp_address_resolve(struct nhrp_address_query *query,
 			  const char *hostname,
 			  nhrp_address_query_callback callback);
+void nhrp_address_resolve_cancel(struct nhrp_address_query *query);
 void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type);
 int nhrp_address_set(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes);
 int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes, uint8_t sublen, uint8_t *subbytes);
