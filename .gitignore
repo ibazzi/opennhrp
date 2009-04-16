@@ -1,0 +1,5 @@
+opennhrp
+opennhrpctl
+*.o
+*.d
+*.cmd
