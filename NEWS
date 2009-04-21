@@ -6,6 +6,16 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.10 - released 21/Mar/2009
+-----------------------------------------------------------------------------
+ - use c-ares library to make dns queries asynchronous
+ - fix mtu handling from registration requests
+ - avoid opennhrp-script zombie floods by reaping children between
+   processing registration request packets
+ - rewrite build system to something similar to kbuild
+ - migrate to git
+
+-----------------------------------------------------------------------------
  opennhrp 0.9.3 - released 20/Feb/2009
 -----------------------------------------------------------------------------
  - when public IP changes purge all related peer entries (opennhrp should
