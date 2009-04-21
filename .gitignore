@@ -3,3 +3,4 @@ opennhrpctl
 *.o
 *.d
 *.cmd
+*~

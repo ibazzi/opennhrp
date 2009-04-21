@@ -35,5 +35,6 @@ install::
 
 dist:
 	(TOP=`pwd` && cd .. && ln -s $$TOP opennhrp-$(VERSION) && \
-	 tar --exclude '*/.git*' -cjvf opennhrp-$(VERSION).tar.bz2 opennhrp-$(VERSION)/* && \
+	 tar --exclude '*/.git*' --exclude-from opennhrp-$(VERSION)/.gitignore \
+	     -cjvf opennhrp-$(VERSION).tar.bz2 opennhrp-$(VERSION)/* && \
 	 rm opennhrp-$(VERSION))
