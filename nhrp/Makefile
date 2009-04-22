@@ -18,7 +18,7 @@ progs-y			+= opennhrpctl
 opennhrpctl-objs	+= opennhrpctl.o
 CFLAGS_opennhrpctl.o	+= $(CFLAGS_opennhrp.o)
 
-CFLAGS			+= -I$(src)/include
+CFLAGS_EXTRA		+= -I$(srctree)/include
 
 install::
 	$(INSTALLDIR) $(DESTDIR)$(SBINDIR)
