@@ -365,6 +365,7 @@ static void nhrp_peer_address_query_callback(struct nhrp_address_query *query,
 			  peer->nbma_hostname,
 			  nhrp_address_format(result, sizeof(host), host));
 		peer->next_hop_address = *result;
+		peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
 		nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
 	} else {
 		nhrp_error("Failed to resolve '%s'", peer->nbma_hostname);
