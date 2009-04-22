@@ -187,7 +187,7 @@ void nhrp_address_resolve(struct nhrp_address_query *query,
 			  nhrp_address_query_callback callback)
 {
 	query->callback = callback;
-	ares_gethostbyname(ares_resolver, hostname, C_IN,
+	ares_gethostbyname(ares_resolver, hostname, AF_INET,
 			   ares_address_cb, query);
 }
 
