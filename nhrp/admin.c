@@ -167,7 +167,7 @@ static int admin_parse_selector(void *ctx, const char *cmd,
 		} else if (strcmp(keyword, "nbma") == 0) {
 			if (sel->next_hop_address.type != AF_UNSPEC)
 				goto err_conflict;
-			sel->type_mask = ~BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+			sel->type_mask &= ~BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
 			sel->next_hop_address = address;
 		} else if (strcmp(keyword, "local-protocol") == 0) {
 			if (sel->interface != NULL)
