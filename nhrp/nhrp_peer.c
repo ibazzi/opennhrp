@@ -829,12 +829,21 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	}
 
 	/* Off NBMA destination; a shortcut route */
-	peer->prefix_length = cie->hdr.prefix_length;
-	peer->next_hop_address = cie->protocol_address;
-	nhrp_time_monotonic(&peer->expire_time);
-	peer->expire_time.tv_sec += ntohs(cie->hdr.holding_time);
-	nhrp_address_mask(&peer->protocol_address, peer->prefix_length);
-	nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED_ROUTE);
+	np = nhrp_peer_alloc(iface);
+	np->type = NHRP_PEER_TYPE_CACHED_ROUTE;
+	np->afnum = reply->hdr.afnum;
+	np->protocol_type = reply->hdr.protocol_type;
+	np->protocol_address = peer->protocol_address;
+	np->prefix_length = cie->hdr.prefix_length;
+	np->next_hop_address = cie->protocol_address;
+	nhrp_time_monotonic(&np->expire_time);
+	np->expire_time.tv_sec += ntohs(cie->hdr.holding_time);
+	nhrp_address_mask(&np->protocol_address, np->prefix_length);
+	nhrp_peer_insert(np);
+	nhrp_peer_free(np);
+
+	/* Delete the incomplete entry */
+	nhrp_peer_remove(peer);
 }
 
 static void nhrp_peer_resolve(struct nhrp_peer *peer)
@@ -1224,7 +1233,14 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 
 	/* First, prune all duplicates */
 	memset(&sel, 0, sizeof(sel));
-	sel.flags = NHRP_PEER_FIND_EXACT;
+	if (ins->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
+		/* remove all existing shortcuts with same nexthop */
+		sel.flags = NHRP_PEER_FIND_SUBNET;
+		sel.next_hop_address = ins->next_hop_address;
+	} else {
+		/* remove exact nbma protocol address matches */
+		sel.flags = NHRP_PEER_FIND_EXACT;
+	}
 	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
 	sel.interface = ins->interface;
 	sel.protocol_address = ins->protocol_address;
@@ -1508,9 +1524,19 @@ void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 				  uint16_t afnum, struct nhrp_address *dst)
 {
 	struct nhrp_peer *peer;
+	int type;
+
+	/* For off-NBMA destinations, we consider all shortcut routes,
+	 * but NBMA destinations should be exact because we want to drop
+	 * NHS from the path. */
+	if (nhrp_address_prefix_cmp(dst, &iface->protocol_address,
+				    iface->protocol_address_prefix) != 0)
+		type = NHRP_PEER_FIND_ROUTE;
+	else
+		type = NHRP_PEER_FIND_EXACT;
 
 	/* Have we done something for this destination already? */
-	peer = nhrp_peer_route(iface, dst, NHRP_PEER_FIND_EXACT, 0, NULL);
+	peer = nhrp_peer_route(iface, dst, type, 0, NULL);
 	if (peer != NULL)
 		return;
 

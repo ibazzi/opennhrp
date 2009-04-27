@@ -546,6 +546,7 @@ static void netlink_addr_new(struct nlmsghdr *msg)
 	nhrp_address_set(&iface->protocol_address, ifa->ifa_family,
 			 RTA_PAYLOAD(rta[IFA_LOCAL]),
 			 RTA_DATA(rta[IFA_LOCAL]));
+	iface->protocol_address_prefix = ifa->ifa_prefixlen;
 
 	peer = nhrp_peer_alloc(iface);
 	peer->type = NHRP_PEER_TYPE_LOCAL;

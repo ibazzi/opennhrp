@@ -43,6 +43,7 @@ struct nhrp_interface {
 	/* Actually, we should have list of protocol addresses;
 	 * we might have multiple address and multiple protocol types */
 	struct nhrp_address protocol_address;
+	int protocol_address_prefix;
 
         /* Peer cache is interface specific */
 	struct nhrp_peer_list peer_cache;
