@@ -32,10 +32,6 @@ Open items that need work on OpenNHRP:
   to return to sender. Especially if there is a BGP routing loop. In such
   situations the packet should be dropped.
 
-- Do to the above bug, shortcut might be created based on a local route.
-  Thus opennhrp might replace a local, administrative route. Make sure
-  local routes are never ever replaced.
-
 - Support reloading of configuration (via SIGHUP or "opennhrpctl reload")
 
 - Clean shutdown: send purge request to registration servers, dynamic

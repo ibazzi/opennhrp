@@ -731,12 +731,18 @@ static char *nhrp_peer_register_describe(struct nhrp_task *task, size_t buflen, 
 			"Renew registration" : "Register");
 }
 
+static int error_on_matching(void *ctx, struct nhrp_peer *peer)
+{
+	return 1;
+}
+
 static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *reply)
 {
 	struct nhrp_peer *peer = (struct nhrp_peer *) ctx, *np;
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie, *natcie = NULL, *natoacie = NULL;
 	struct nhrp_interface *iface;
+	struct nhrp_peer_selector sel;
 	char dst[64], tmp[64], nbma[64];
 	int ec;
 
@@ -755,7 +761,6 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		/* Negative and up: no route what so ever - do not
 		 * use static routes to send stuff to this address */
 		peer->flags |= NHRP_PEER_FLAG_UP;
-
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 		return;
 	}
@@ -804,6 +809,23 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 		peer->expire_time.tv_sec += ntohs(cie->hdr.holding_time);
 		nhrp_address_mask(&peer->protocol_address, peer->prefix_length);
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED);
+		return;
+	}
+
+	/* Check that we won't replace a local route */
+	sel = (struct nhrp_peer_selector) {
+		.flags = NHRP_PEER_FIND_EXACT,
+		.type_mask = BIT(NHRP_PEER_TYPE_LOCAL),
+		.protocol_address = peer->protocol_address,
+		.prefix_length = cie->hdr.prefix_length,
+	};
+	if (nhrp_peer_foreach(error_on_matching, NULL, &sel)) {
+		nhrp_error("Local route %s/%d exists: not replacing with shortcut",
+			   nhrp_address_format(&peer->protocol_address,
+					       sizeof(tmp), tmp),
+			   cie->hdr.prefix_length);
+		peer->flags |= NHRP_PEER_FLAG_UP;
+		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 		return;
 	}
 
