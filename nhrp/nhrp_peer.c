@@ -320,7 +320,7 @@ static void nhrp_peer_script_peer_up_done(struct nhrp_peer *peer, int status)
 					       sizeof(tmp), tmp),
 			   status);
 
-		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
+		if (peer->type == NHRP_PEER_TYPE_STATIC)
 			nhrp_task_schedule(&peer->task, 10000,
 					   &nhrp_peer_run_up_script);
 		else
