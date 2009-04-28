@@ -127,10 +127,18 @@ int nhrp_peer_remove_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_purge_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_set_used_matching(void *ctx, struct nhrp_peer *peer);
 
-struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *iface,
-				  struct nhrp_address *dest,
-				  int flags, int type_mask,
-				  struct nhrp_cie_list_head *exclude);
+struct nhrp_peer *nhrp_peer_route_full(struct nhrp_interface *iface,
+				       struct nhrp_address *dest,
+				       int flags, int type_mask,
+				       struct nhrp_address *source,
+				       struct nhrp_cie_list_head *exclude);
+
+static inline struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *iface,
+						struct nhrp_address *dest,
+						int flags, int type_mask)
+{
+	return nhrp_peer_route_full(iface, dest, flags, type_mask, NULL, NULL);
+}
 
 void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 				  uint16_t afnum, struct nhrp_address *dst);

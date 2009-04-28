@@ -1089,8 +1089,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	else
 		dest = &packet->dst_protocol_address;
 
-	peer = nhrp_peer_route(iface, dest, 0,
-			       BIT(NHRP_PEER_TYPE_LOCAL), NULL);
+	peer = nhrp_peer_route(iface, dest, 0, BIT(NHRP_PEER_TYPE_LOCAL));
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
 	packet->dst_peer = nhrp_peer_dup(peer);
@@ -1250,7 +1249,7 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 
 int nhrp_packet_route(struct nhrp_packet *packet)
 {
-	struct nhrp_address proto_nexthop, *dest;
+	struct nhrp_address proto_nexthop, *src, *dst;
 	struct nhrp_cie_list_head *cielist = NULL;
 	struct nhrp_payload *payload;
 	struct nhrp_peer *peer;
@@ -1263,10 +1262,12 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	}
 
 	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY) {
-		dest = &packet->src_protocol_address;
+		dst = &packet->src_protocol_address;
+		src = &packet->dst_protocol_address;
 		r = NHRP_EXTENSION_REVERSE_TRANSIT_NHS;
 	} else {
-		dest = &packet->dst_protocol_address;
+		dst = &packet->dst_protocol_address;
+		src = &packet->src_protocol_address;
 		r = NHRP_EXTENSION_FORWARD_TRANSIT_NHS;
 	}
 	payload = nhrp_packet_extension(packet,
@@ -1278,21 +1279,19 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	if (packet->dst_peer != NULL) {
 		proto_nexthop = packet->dst_peer->next_hop_address;
 	} else {
-		r = kernel_route(packet->dst_iface, dest,
+		r = kernel_route(packet->dst_iface, dst,
 				 &packet->dst_iface->protocol_address,
 				 &proto_nexthop, NULL);
 		if (!r) {
 			nhrp_error("No route to protocol address %s",
-				nhrp_address_format(dest, sizeof(tmp), tmp));
+				   nhrp_address_format(dst, sizeof(tmp), tmp));
 			return FALSE;
 		}
 
-		peer = nhrp_peer_route(packet->dst_iface,
-				       &proto_nexthop,
-				       0,
-				       ~(BIT(NHRP_PEER_TYPE_CACHED_ROUTE) |
-					 BIT(NHRP_PEER_TYPE_INCOMPLETE)),
-				       cielist);
+		peer = nhrp_peer_route_full(packet->dst_iface, &proto_nexthop, 0,
+					    ~(BIT(NHRP_PEER_TYPE_CACHED_ROUTE) |
+					      BIT(NHRP_PEER_TYPE_INCOMPLETE)),
+					    src, cielist);
 		if (peer == NULL || peer->type == NHRP_PEER_TYPE_NEGATIVE) {
 			nhrp_error("No peer entry for protocol address %s",
 				   nhrp_address_format(&proto_nexthop,

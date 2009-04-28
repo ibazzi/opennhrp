@@ -832,7 +832,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx, struct nhrp_packet *rep
 	/* Update the received NBMA address to nexthop */
 	iface = peer->interface;
 	np = nhrp_peer_route(iface, &cie->protocol_address,
-			     NHRP_PEER_FIND_EXACT, 0, NULL);
+			     NHRP_PEER_FIND_EXACT, 0);
 	if (np == NULL) {
 		np = nhrp_peer_alloc(iface);
 		np->type = NHRP_PEER_TYPE_CACHED;
@@ -1216,8 +1216,7 @@ static void nhrp_peer_do_insert_callback(struct nhrp_task *task)
 		    nhrp_peer_route(peer->interface,
 				    &peer->next_hop_address,
 				    NHRP_PEER_FIND_UP | NHRP_PEER_FIND_EXACT,
-				    NHRP_PEER_TYPEMASK_ADJACENT,
-				    NULL) != NULL)
+				    NHRP_PEER_TYPEMASK_ADJACENT) != NULL)
 			nhrp_peer_run_script(peer, "route-up",
 					     nhrp_peer_script_route_up_done);
 
@@ -1472,6 +1471,7 @@ struct route_decision {
 	struct nhrp_peer_selector sel;
 	struct nhrp_cie_list_head *exclude;
 	struct nhrp_peer *best_found;
+	struct nhrp_address *src;
 	int found_exact, found_up;
 };
 
@@ -1480,12 +1480,27 @@ static int decide_route(void *ctx, struct nhrp_peer *peer)
 	struct route_decision *rd = (struct route_decision *) ctx;
 	int exact;
 
-	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE &&
-	    rd->exclude != NULL &&
-	    nhrp_address_match_cie_list(&peer->next_hop_address,
-					&peer->protocol_address,
-					rd->exclude))
-		return 0;
+	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE) {
+		/* Exclude addresses from CIE from routing decision
+		 * to avoid routing loops within NHS clusters. */
+		if (rd->exclude != NULL &&
+		    nhrp_address_match_cie_list(&peer->next_hop_address,
+						&peer->protocol_address,
+						rd->exclude))
+			return 0;
+
+		/* Exclude also source address, we don't want to
+		 * forward questions back to who's asking. */
+		if (rd->src != NULL &&
+		    nhrp_address_cmp(rd->src, &peer->protocol_address) == 0)
+			return 0;
+	} else {
+		/* Exclude routes that point back to the sender
+		 * of the packet */
+		if (rd->src != NULL &&
+		    nhrp_address_cmp(rd->src, &peer->next_hop_address) == 0)
+			return 0;
+	}
 
 	exact = (peer->type >= NHRP_PEER_TYPE_STATIC) &&
 		(nhrp_address_cmp(&peer->protocol_address,
@@ -1513,10 +1528,11 @@ static int decide_route(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *interface,
-				  struct nhrp_address *dest,
-				  int flags, int type_mask,
-				  struct nhrp_cie_list_head *exclude)
+struct nhrp_peer *nhrp_peer_route_full(struct nhrp_interface *interface,
+				       struct nhrp_address *dst,
+				       int flags, int type_mask,
+				       struct nhrp_address *src,
+				       struct nhrp_cie_list_head *exclude)
 {
 	struct route_decision rd;
 
@@ -1527,8 +1543,9 @@ struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *interface,
 		rd.sel.flags |= NHRP_PEER_FIND_ROUTE;
 	rd.sel.type_mask = type_mask;
 	rd.sel.interface = interface;
-	rd.sel.protocol_address = *dest;
+	rd.sel.protocol_address = *dst;
 	rd.exclude = exclude;
+	rd.src = src;
 	nhrp_peer_foreach(decide_route, &rd, &rd.sel);
 
 	if (rd.best_found == NULL)
@@ -1558,7 +1575,7 @@ void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 		type = NHRP_PEER_FIND_EXACT;
 
 	/* Have we done something for this destination already? */
-	peer = nhrp_peer_route(iface, dst, type, 0, NULL);
+	peer = nhrp_peer_route(iface, dst, type, 0);
 	if (peer != NULL)
 		return;
 

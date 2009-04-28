@@ -27,11 +27,6 @@ Open items that need work on OpenNHRP:
 - Create some logic to detect if NBMA and public IPs are mixed up in
   the "map" directive. Issue on warning about this.
 
-- Recheck the NHRP packet routing logic. It looks like a packet originator
-  is not checked when making new routing decision. This can lead an packet
-  to return to sender. Especially if there is a BGP routing loop. In such
-  situations the packet should be dropped.
-
 - Support reloading of configuration (via SIGHUP or "opennhrpctl reload")
 
 - Clean shutdown: send purge request to registration servers, dynamic

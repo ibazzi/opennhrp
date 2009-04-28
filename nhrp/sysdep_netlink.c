@@ -364,7 +364,7 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 	nhrp_debug("NL-ARP(%s) who-has %s",
 		   iface->name, nhrp_address_format(&addr, sizeof(tmp), tmp));
 
-	peer = nhrp_peer_route(iface, &addr, 0, 0, NULL);
+	peer = nhrp_peer_route(iface, &addr, 0, 0);
 	if (peer == NULL)
 		return;
 
