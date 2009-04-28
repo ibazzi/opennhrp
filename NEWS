@@ -6,13 +6,20 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
- opennhrp 0.10.1 - released 22/Mar/2009
+ opennhrp 0.10.2 - released 28/Apr/2009
+-----------------------------------------------------------------------------
+ - various safety measures in case of off-nbma routing loops
+ - fix a bug which caused static entries without 'register' to get deleted
+ - try to combine shortcut routes to get less nhrp cache entries
+
+-----------------------------------------------------------------------------
+ opennhrp 0.10.1 - released 22/Apr/2009
 -----------------------------------------------------------------------------
  - fix the breakage in build system after the rewrite
  - fix registration to servers when using domain names
 
 -----------------------------------------------------------------------------
- opennhrp 0.10 - released 21/Mar/2009
+ opennhrp 0.10 - released 21/Apr/2009
 -----------------------------------------------------------------------------
  - use c-ares library to make dns queries asynchronous
  - fix mtu handling from registration requests
