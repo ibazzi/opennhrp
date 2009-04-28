@@ -214,6 +214,7 @@ static void admin_cache_show(void *ctx, const char *cmd)
 	struct nhrp_peer_selector sel;
 
 	memset(&sel, 0, sizeof(sel));
+	sel.type_mask = NHRP_PEER_TYPEMASK_ALL;
 	if (!admin_parse_selector(ctx, cmd, &sel))
 		return;
 
@@ -228,7 +229,6 @@ static void admin_cache_purge(void *ctx, const char *cmd)
 
 	memset(&sel, 0, sizeof(sel));
 	sel.type_mask = NHRP_PEER_TYPEMASK_PURGEABLE;
-
 	if (!admin_parse_selector(ctx, cmd, &sel))
 		return;
 
@@ -247,7 +247,6 @@ static void admin_cache_flush(void *ctx, const char *cmd)
 
 	memset(&sel, 0, sizeof(sel));
 	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
-
 	if (!admin_parse_selector(ctx, cmd, &sel))
 		return;
 
