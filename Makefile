@@ -14,7 +14,7 @@ MANDIR=/usr/share/man
 DOCDIR=/usr/share/doc/opennhrp
 STATEDIR=/var/run
 
-export DESTDIR SBINDIR CONFDIR MANDIR DOCDIR
+export DESTDIR SBINDIR CONFDIR MANDIR DOCDIR STATEDIR
 
 ##
 # Top-level rules and targets
