@@ -360,6 +360,9 @@ static void nhrp_peer_address_query_callback(struct nhrp_address_query *query,
 	struct nhrp_peer *peer = container_of(query, struct nhrp_peer, address_query);
 	char host[64];
 
+	if (nhrp_peer_free(peer))
+		return;
+
 	if (result->type != AF_UNSPEC) {
 		nhrp_info("Resolved '%s' as %s",
 			  peer->nbma_hostname,
@@ -379,6 +382,7 @@ static void nhrp_peer_run_up_script_callback(struct nhrp_task *task)
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
 
 	if (peer->nbma_hostname) {
+		nhrp_peer_dup(peer);
 		nhrp_address_resolve(&peer->address_query,
 				     peer->nbma_hostname,
 				     nhrp_peer_address_query_callback);
@@ -1086,8 +1090,6 @@ int nhrp_peer_free(struct nhrp_peer *peer)
 	}
 
 	nhrp_task_cancel(&peer->task);
-	nhrp_address_resolve_cancel(&peer->address_query);
-
 	free(peer);
 
 	return TRUE;
