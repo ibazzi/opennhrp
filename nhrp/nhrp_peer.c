@@ -49,6 +49,7 @@ NHRP_TASK(nhrp_peer_do_insert);
 
 static void nhrp_peer_up(struct nhrp_peer *peer);
 static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer);
+static void nhrp_peer_cancel_async(struct nhrp_peer *peer);
 
 static const char *nhrp_error_indication_text(int ei)
 {
@@ -941,7 +942,7 @@ static int nhrp_peer_routes_renew(void *ctx, struct nhrp_peer *peer)
 
 	if (peer->flags & NHRP_PEER_FLAG_PRUNE_PENDING) {
 		peer->flags &= ~NHRP_PEER_FLAG_PRUNE_PENDING;
-		nhrp_task_cancel(&peer->task);
+		nhrp_peer_cancel_async(peer);
 		nhrp_peer_resolve(peer);
 		(*num_routes)++;
 	}
@@ -968,7 +969,7 @@ static void nhrp_peer_renew(struct nhrp_peer *peer)
 
 	if (peer->flags & NHRP_PEER_FLAG_PRUNE_PENDING) {
 		peer->flags &= ~NHRP_PEER_FLAG_PRUNE_PENDING;
-		nhrp_task_cancel(&peer->task);
+		nhrp_peer_cancel_async(peer);
 		nhrp_peer_resolve(peer);
 	}
 }
@@ -1195,6 +1196,7 @@ static void nhrp_peer_do_insert_callback(struct nhrp_task *task)
 {
 	struct nhrp_peer *peer = container_of(task, struct nhrp_peer, task);
 
+	nhrp_peer_cancel_async(peer);
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
 		nhrp_peer_run_up_script_callback(task);
@@ -1295,7 +1297,7 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
 		peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
-		nhrp_task_cancel(&peer->task);
+		nhrp_peer_cancel_async(peer);
 		nhrp_peer_run_script(peer, "peer-down", nhrp_peer_script_peer_down_done);
 		nhrp_address_set_type(&peer->my_nbma_address, PF_UNSPEC);
 		break;
