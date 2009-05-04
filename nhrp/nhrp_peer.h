@@ -115,8 +115,8 @@ typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);
 void nhrp_peer_reap_pid(pid_t pid, int status);
 
 struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface);
-struct nhrp_peer *nhrp_peer_dup(struct nhrp_peer *peer);
-int nhrp_peer_free(struct nhrp_peer *peer);
+struct nhrp_peer *nhrp_peer_get(struct nhrp_peer *peer);
+int nhrp_peer_put(struct nhrp_peer *peer);
 
 int nhrp_peer_authorize_registration(struct nhrp_peer *peer);
 void nhrp_peer_insert(struct nhrp_peer *peer);

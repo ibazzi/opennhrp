@@ -563,7 +563,7 @@ static void netlink_addr_new(struct nlmsghdr *msg)
 	default:
 		break;
 	}
-	nhrp_peer_free(peer);
+	nhrp_peer_put(peer);
 }
 
 struct netlink_del_addr_msg {
@@ -663,7 +663,7 @@ static void netlink_route_new(struct nlmsghdr *msg)
 	peer->protocol_type = nhrp_protocol_from_pf(rtm->rtm_family);
 	peer->prefix_length = rtm->rtm_dst_len;
 	nhrp_peer_insert(peer);
-	nhrp_peer_free(peer);
+	nhrp_peer_put(peer);
 }
 
 static void netlink_route_del(struct nlmsghdr *msg)

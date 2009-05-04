@@ -153,7 +153,7 @@ static int load_config(const char *config_file)
 				peer->nbma_hostname = strdup(nbma);
 			peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
 			nhrp_peer_insert(peer);
-			nhrp_peer_free(peer);
+			nhrp_peer_put(peer);
 		} else if (strcmp(word, "register") == 0) {
 			NEED_PEER();
 			peer->flags |= NHRP_PEER_FLAG_REGISTER;

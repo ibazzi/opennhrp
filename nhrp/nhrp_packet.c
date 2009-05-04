@@ -329,7 +329,7 @@ void nhrp_packet_free(struct nhrp_packet *packet)
 		return;
 
 	if (packet->dst_peer != NULL)
-		nhrp_peer_free(packet->dst_peer);
+		nhrp_peer_put(packet->dst_peer);
 	for (i = 0; i < packet->num_extensions; i++)
 		nhrp_payload_free(&packet->extension_by_order[i]);
 	free(packet);
@@ -340,8 +340,8 @@ static int nhrp_packet_reroute(struct nhrp_packet *packet,
 {
 	packet->dst_iface = packet->src_iface;
 	if (packet->dst_peer != NULL)
-		nhrp_peer_free(packet->dst_peer);
-	packet->dst_peer = nhrp_peer_dup(dst_peer);
+		nhrp_peer_put(packet->dst_peer);
+	packet->dst_peer = nhrp_peer_get(dst_peer);
 	return nhrp_packet_route(packet);
 }
 
@@ -551,24 +551,24 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 			nhrp_peer_insert(peer);
 
 			if (rpeer == NULL)
-				rpeer = nhrp_peer_dup(peer);
+				rpeer = nhrp_peer_get(peer);
 		} else {
 			/* Non-removable binding already exists */
 			cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
 			peer->flags |= NHRP_PEER_FLAG_REPLACED;
 		}
-		nhrp_peer_free(peer);
+		nhrp_peer_put(peer);
 	}
 
 	if (!nhrp_packet_reroute(packet, rpeer)) {
 		if (rpeer != NULL)
-			nhrp_peer_free(rpeer);
+			nhrp_peer_put(rpeer);
 
 		nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 		return FALSE;
 	}
 	if (rpeer != NULL)
-		nhrp_peer_free(rpeer);
+		nhrp_peer_put(rpeer);
 
 	return nhrp_packet_send(packet);
 }
@@ -1101,7 +1101,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	peer = nhrp_peer_route(iface, dest, 0, BIT(NHRP_PEER_TYPE_LOCAL));
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
-	packet->dst_peer = nhrp_peer_dup(peer);
+	packet->dst_peer = nhrp_peer_get(peer);
 
 	/* RFC2332 5.3.4 - Authentication is always done pairwise on an NHRP
 	 * hop-by-hop basis; i.e. regenerated at each hop. */
@@ -1307,7 +1307,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 						       sizeof(tmp), tmp));
 			return FALSE;
 		}
-		packet->dst_peer = nhrp_peer_dup(peer);
+		packet->dst_peer = nhrp_peer_get(peer);
 	}
 
 	return TRUE;
