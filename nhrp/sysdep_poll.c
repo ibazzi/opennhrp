@@ -13,6 +13,9 @@
 #include <poll.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <ares.h>
+
 #include "nhrp_defines.h"
 #include "nhrp_common.h"
 
@@ -22,6 +25,8 @@ struct pollctx {
 	int (*callback)(void *ctx, int fd, short events);
 	void *ctx;
 };
+
+extern ares_channel nhrp_ares_resolver;
 
 int nhrp_running = 0;
 struct nhrp_task_list nhrp_all_tasks;
@@ -146,7 +151,7 @@ void nhrp_task_cancel(struct nhrp_task *task)
 
 void nhrp_task_run(void)
 {
-	struct timeval now;
+	struct timeval now, ares, *t;
 	struct nhrp_task *task;
 	int i, timeout;
 
@@ -155,8 +160,11 @@ void nhrp_task_run(void)
 		if (numfds == 0 && LIST_EMPTY(&nhrp_all_tasks))
 			break;
 
+		/* execute pending tasks */
 		nhrp_time_monotonic(&now);
-		while (!LIST_EMPTY(&nhrp_all_tasks) && timercmp(&LIST_FIRST(&nhrp_all_tasks)->execute_time, &now, <=)) {
+		while (!LIST_EMPTY(&nhrp_all_tasks) &&
+		       timercmp(&LIST_FIRST(&nhrp_all_tasks)->execute_time,
+				&now, <)) {
 			const struct nhrp_task_ops *ops;
 
 			task = LIST_FIRST(&nhrp_all_tasks);
@@ -166,18 +174,28 @@ void nhrp_task_run(void)
 			ops->callback(task);
 		}
 
+		/* figure out timeout from scheduled tasks and c-ares */
 		if (!LIST_EMPTY(&nhrp_all_tasks)) {
-			task = LIST_FIRST(&nhrp_all_tasks);
+			timersub(&LIST_FIRST(&nhrp_all_tasks)->execute_time,
+				 &now, &now);
+			t = &now;
+		} else
+			t = NULL;
+		t = ares_timeout(nhrp_ares_resolver, t, &ares);
 
-			timeout = task->execute_time.tv_sec - now.tv_sec;
-			timeout *= 1000;
-			timeout += (task->execute_time.tv_usec - now.tv_usec) / 1000;
-		} else {
+		/* convert timeout to milliseconds */
+		if (t != NULL)
+			timeout = (t->tv_sec * 1000) + (t->tv_usec / 1000);
+		else
 			timeout = -1;
-		}
 
-		poll(gfds, numfds, timeout);
+		i = poll(gfds, numfds, timeout);
 
+		/* process c-ares timeouts */
+		if ((i == 0 || timeout == 0) && (t == &ares))
+			ares_process(nhrp_ares_resolver, NULL, NULL);
+
+		/* process file descriptors */
 		for (i = 0; i < numfds; i++) {
 			if (gfds[i].revents) {
 				if (gctx[i].callback(gctx[i].ctx, gfds[i].fd,

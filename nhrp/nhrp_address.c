@@ -26,7 +26,7 @@
 #include "nhrp_packet.h"
 #include "nhrp_common.h"
 
-static ares_channel ares_resolver;
+ares_channel nhrp_ares_resolver;
 
 static int ares_poll_cb(void *ctx, int fd, short events)
 {
@@ -195,7 +195,7 @@ void nhrp_address_resolve(struct nhrp_address_query *query,
 	}
 
 	query->callback = callback;
-	ares_gethostbyname(ares_resolver, hostname, AF_INET,
+	ares_gethostbyname(nhrp_ares_resolver, hostname, AF_INET,
 			   ares_address_cb, query);
 }
 
@@ -206,7 +206,7 @@ void nhrp_address_resolve_cancel(struct nhrp_address_query *query)
 	 * anyway, it is not a problem for now. */
 
 	if (query->callback != NULL)
-		ares_cancel(ares_resolver);
+		ares_cancel(nhrp_ares_resolver);
 }
 
 void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type)
@@ -343,9 +343,12 @@ int nhrp_address_init(void)
 
 	memset(&ares_opts, 0, sizeof(ares_opts));
 	ares_opts.sock_state_cb = &ares_socket_cb;
-	ares_opts.sock_state_cb_data = &ares_resolver;
-	if (ares_init_options(&ares_resolver, &ares_opts,
-			      ARES_OPT_SOCK_STATE_CB) != ARES_SUCCESS)
+	ares_opts.sock_state_cb_data = &nhrp_ares_resolver;
+	ares_opts.timeout = 2;
+	ares_opts.tries = 3;
+	if (ares_init_options(&nhrp_ares_resolver, &ares_opts,
+			      ARES_OPT_SOCK_STATE_CB | ARES_OPT_TIMEOUT |
+			      ARES_OPT_TRIES) != ARES_SUCCESS)
 		return FALSE;
 
 	return TRUE;
