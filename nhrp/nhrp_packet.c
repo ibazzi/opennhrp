@@ -396,15 +396,6 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	if (!nhrp_packet_reroute(packet, NULL))
 		return FALSE;
 
-	if (packet->dst_peer->flags & NHRP_PEER_FLAG_REGISTER) {
-		nhrp_info("NHS %s is resolving us; re-registering instead",
-			  nhrp_address_format(&packet->src_protocol_address,
-					      sizeof(tmp), tmp));
-		nhrp_peer_purge(packet->dst_peer);
-
-		return FALSE;
-	}
-
 	cie->hdr.mtu = htons(packet->dst_peer->my_nbma_mtu);
 	cie->nbma_address = packet->dst_peer->my_nbma_address;
 	cie->protocol_address = packet->dst_iface->protocol_address;
