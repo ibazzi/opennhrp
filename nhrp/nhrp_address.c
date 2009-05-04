@@ -178,6 +178,8 @@ static void ares_address_cb(void *arg, int status, struct hostent *he)
 	else
 		nhrp_address_set_type(&addr, AF_UNSPEC);
 
+	NHRP_BUG_ON(query->callback == NULL);
+
 	query->callback(query, &addr);
 	query->callback = NULL;
 }
@@ -186,6 +188,12 @@ void nhrp_address_resolve(struct nhrp_address_query *query,
 			  const char *hostname,
 			  nhrp_address_query_callback callback)
 {
+	if (query->callback != NULL) {
+		nhrp_error("Trying to resolve '%s', but previous query "
+			   "was not finished yet", hostname);
+		return;
+	}
+
 	query->callback = callback;
 	ares_gethostbyname(ares_resolver, hostname, AF_INET,
 			   ares_address_cb, query);

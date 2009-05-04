@@ -14,6 +14,7 @@
 #define NHRP_COMMON_H
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <poll.h>
 #include <sys/time.h>
 #include <sys/queue.h>
