@@ -6,6 +6,14 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.10.3 - released 04/May/2009
+-----------------------------------------------------------------------------
+ - fix handling of c-ares timeouts
+ - fix cancellation of asynchronous operations in peer cache
+ - fix control socket default location (broke on makefile rewrite)
+ - code clean up (rename reference counting functions)
+
+-----------------------------------------------------------------------------
  opennhrp 0.10.2 - released 28/Apr/2009
 -----------------------------------------------------------------------------
  - various safety measures in case of off-nbma routing loops
