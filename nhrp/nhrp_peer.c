@@ -419,7 +419,7 @@ static void nhrp_peer_up(struct nhrp_peer *peer)
 
 	if (peer->queued_packet != NULL) {
 		nhrp_packet_marshall_and_send(peer->queued_packet);
-		nhrp_packet_free(peer->queued_packet);
+		nhrp_packet_put(peer->queued_packet);
 		peer->queued_packet = NULL;
 	}
 }
@@ -476,7 +476,7 @@ static void nhrp_peer_send_protocol_purge(struct nhrp_peer *peer)
 	packet->dst_iface = peer->interface;
 	sent = nhrp_packet_send(packet);
 error_free_packet:
-	nhrp_packet_free(packet);
+	nhrp_packet_put(packet);
 error:
 	if (!sent) {
 		/* Try again later */
@@ -614,7 +614,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx, struct nhrp_packet *r
 		packet->dst_peer = nhrp_peer_get(peer);
 		packet->dst_iface = peer->interface;
 		nhrp_packet_send_request(packet, NULL, NULL);
-		nhrp_packet_free(packet);
+		nhrp_packet_put(packet);
 	}
 
 	/* Re-register after holding time expires */
@@ -713,7 +713,7 @@ static void nhrp_peer_register_callback(struct nhrp_task *task)
 					nhrp_peer_get(peer));
 
 error_free_packet:
-	nhrp_packet_free(packet);
+	nhrp_packet_put(packet);
 error:
 	if (!sent) {
 		/* Try again later */
@@ -933,7 +933,7 @@ static void nhrp_peer_resolve(struct nhrp_peer *peer)
 				 nhrp_peer_get(peer));
 
 error:
-	nhrp_packet_free(packet);
+	nhrp_packet_put(packet);
 }
 
 static int nhrp_peer_routes_renew(void *ctx, struct nhrp_peer *peer)

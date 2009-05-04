@@ -281,7 +281,7 @@ struct nhrp_packet *nhrp_packet_alloc(void)
 	return packet;
 }
 
-struct nhrp_packet *nhrp_packet_dup(struct nhrp_packet *packet)
+struct nhrp_packet *nhrp_packet_get(struct nhrp_packet *packet)
 {
 	packet->ref++;
 	return packet;
@@ -320,19 +320,24 @@ struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
 	return p;
 }
 
-void nhrp_packet_free(struct nhrp_packet *packet)
+static void nhrp_packet_release(struct nhrp_packet *packet)
 {
 	int i;
-
-	packet->ref--;
-	if (packet->ref > 0)
-		return;
 
 	if (packet->dst_peer != NULL)
 		nhrp_peer_put(packet->dst_peer);
 	for (i = 0; i < packet->num_extensions; i++)
 		nhrp_payload_free(&packet->extension_by_order[i]);
 	free(packet);
+}
+
+void nhrp_packet_put(struct nhrp_packet *packet)
+{
+	NHRP_BUG_ON(packet->ref == 0);
+
+	packet->ref--;
+	if (packet->ref == 0)
+		nhrp_packet_release(packet);
 }
 
 static int nhrp_packet_reroute(struct nhrp_packet *packet,
@@ -349,7 +354,7 @@ static void nhrp_packet_dequeue(struct nhrp_packet *packet)
 {
 	nhrp_task_cancel(&packet->timeout);
 	TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
-	nhrp_packet_free(packet);
+	nhrp_packet_put(packet);
 }
 
 static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
@@ -665,12 +670,12 @@ static int nhrp_handle_error_indication(struct nhrp_packet *error_packet)
 	pduleft = payload->u.raw->length;
 
 	if (!unmarshall_packet_header(&pdu, &pduleft, packet)) {
-		nhrp_packet_free(packet);
+		nhrp_packet_put(packet);
 		return FALSE;
 	}
 
 	r = nhrp_do_handle_error_indication(error_packet, packet);
-	nhrp_packet_free(packet);
+	nhrp_packet_put(packet);
 
 	return r;
 }
@@ -1128,7 +1133,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 		ret = nhrp_packet_forward(packet);
 
 error:
-	nhrp_packet_free(packet);
+	nhrp_packet_put(packet);
 	return ret;
 }
 
@@ -1402,8 +1407,8 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 		return nhrp_packet_marshall_and_send(packet);
 
 	if (packet->dst_peer->queued_packet != NULL)
-		nhrp_packet_free(packet->dst_peer->queued_packet);
-	packet->dst_peer->queued_packet = nhrp_packet_dup(packet);
+		nhrp_packet_put(packet->dst_peer->queued_packet);
+	packet->dst_peer->queued_packet = nhrp_packet_get(packet);
 
 	return TRUE;
 }
@@ -1482,7 +1487,7 @@ int nhrp_packet_send_request(struct nhrp_packet *pkt,
 {
 	struct nhrp_packet *packet;
 
-	packet = nhrp_packet_dup(pkt);
+	packet = nhrp_packet_get(pkt);
 
 	packet->retry = 0;
 	if (packet->hdr.u.request_id == constant_htonl(0)) {
@@ -1531,7 +1536,7 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 	else
 		r = nhrp_packet_send(p);
 
-	nhrp_packet_free(p);
+	nhrp_packet_put(p);
 
 	return r;
 }
@@ -1599,7 +1604,7 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
 
 	p->dst_iface = iface;
 	r = nhrp_packet_send(p);
-	nhrp_packet_free(p);
+	nhrp_packet_put(p);
 
 	return r;
 }

@@ -96,11 +96,12 @@ void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie);
 struct nhrp_cie *nhrp_payload_get_cie(struct nhrp_payload *payload, int index);
 
 struct nhrp_packet *nhrp_packet_alloc(void);
-struct nhrp_packet *nhrp_packet_dup(struct nhrp_packet *packet);
+struct nhrp_packet *nhrp_packet_get(struct nhrp_packet *packet);
+void nhrp_packet_put(struct nhrp_packet *packet);
+
 struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet, int payload_type);
 struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
 					   uint32_t extension, int payload_type);
-void nhrp_packet_free(struct nhrp_packet *packet);
 int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,
 			struct nhrp_address *from);
