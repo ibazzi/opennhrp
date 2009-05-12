@@ -1522,6 +1522,12 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 	pl->u.raw = nhrp_buffer_alloc(error_packet->req_pdulen);
 	memcpy(pl->u.raw->data, error_packet->req_pdu, error_packet->req_pdulen);
 
+	/* Standard extensions */
+	nhrp_packet_extension(p,
+			      NHRP_EXTENSION_FORWARD_TRANSIT_NHS |
+			      NHRP_EXTENSION_FLAG_COMPULSORY,
+			      NHRP_PAYLOAD_TYPE_CIE_LIST);
+
 	if (p->dst_protocol_address.type == PF_UNSPEC)
 		r = nhrp_do_handle_error_indication(p, error_packet);
 	else
@@ -1588,6 +1594,12 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
 	pl = nhrp_packet_payload(p, NHRP_PAYLOAD_TYPE_RAW);
 	pl->u.raw = nhrp_buffer_alloc(pdulen);
 	memcpy(pl->u.raw->data, pdu, pdulen);
+
+	/* Standard extensions */
+	nhrp_packet_extension(p,
+			      NHRP_EXTENSION_FORWARD_TRANSIT_NHS |
+			      NHRP_EXTENSION_FLAG_COMPULSORY,
+			      NHRP_PAYLOAD_TYPE_CIE_LIST);
 
 	nhrp_info("Sending Traffic Indication about packet from %s to %s",
 		nhrp_address_format(&src, sizeof(tmp1), tmp1),
