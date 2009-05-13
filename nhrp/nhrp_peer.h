@@ -1,6 +1,6 @@
 /* nhrp_peer.h - NHRP peer cache definitions
  *
- * Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
+ * Copyright (C) 2007-2009 Timo Teräs <timo.teras@iki.fi>
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -70,16 +70,19 @@ struct nhrp_packet;
 struct nhrp_cie_list_head;
 
 struct nhrp_peer {
-	unsigned short ref_count;
+	unsigned short ref;
 	unsigned short list_count;
+	unsigned int flags;
+
 	CIRCLEQ_ENTRY(nhrp_peer) peer_list;
+	struct nhrp_interface *interface;
+	struct nhrp_packet *queued_packet;
+
 	struct nhrp_task task;
 	struct nhrp_address_query address_query;
-	struct nhrp_interface *interface;
 	pid_t script_pid;
 	void (*script_callback)(struct nhrp_peer *peer, int status);
 
-	unsigned int flags;
 	uint8_t type;
 	uint8_t prefix_length;
 	uint16_t afnum;
@@ -94,8 +97,6 @@ struct nhrp_peer {
 	/* NHRP_PEER_TYPE_ROUTE: protocol addr., others: NBMA addr. */
 	struct nhrp_address next_hop_address;
 	struct nhrp_address next_hop_nat_oa;
-
-	struct nhrp_packet *queued_packet;
 };
 
 struct nhrp_peer_selector {
