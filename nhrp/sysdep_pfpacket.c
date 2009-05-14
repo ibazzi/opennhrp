@@ -1,6 +1,6 @@
 /* sysdep_pfpacket.c - Tracing of forwarded packets using PF_PACKET
  *
- * Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
+ * Copyright (C) 2007-2009 Timo Teräs <timo.teras@iki.fi>
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -24,6 +24,7 @@
 #include <linux/if_packet.h>
 #include <linux/ip.h>
 
+#include "libev.h"
 #include "nhrp_defines.h"
 #include "nhrp_common.h"
 #include "nhrp_interface.h"
@@ -31,7 +32,9 @@
 
 #define MAX_OPCODES 100
 
-static int packet_fd;
+static struct ev_io packet_io;
+static struct ev_timer install_filter_timer;
+
 
 enum {
 	LABEL_NEXT = 0,
@@ -119,15 +122,15 @@ static int check_ipv4(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-static struct nhrp_task install_filter_task;
-NHRP_TASK(install_filter);
-
-void install_filter_callback(struct nhrp_task *task)
+static void install_filter_cb(struct ev_timer *w, int revents)
 {
 	struct nhrp_peer_selector sel;
 	struct sock_fprog prog;
 	struct filter f;
 	int i;
+
+	if (ev_is_pending(&install_filter_timer))
+		ev_timer_stop(&install_filter_timer);
 
 	memset(&f, 0, sizeof(f));
 
@@ -187,23 +190,17 @@ void install_filter_callback(struct nhrp_task *task)
 	/* Attach filter */
 	prog.len = f.numops;
 	prog.filter = f.code;
-	if (setsockopt(packet_fd, SOL_SOCKET, SO_ATTACH_FILTER,
+	if (setsockopt(packet_io.fd, SOL_SOCKET, SO_ATTACH_FILTER,
 		       &prog, sizeof(prog)))
 		return;
 
 	nhrp_info("Filter code installed (%d opcodes)", f.numops);
-	nhrp_task_cancel(&install_filter_task);
-}
-
-char *install_filter_describe(struct nhrp_task *task, size_t buflen, char *buf)
-{
-	snprintf(buf, buflen, "Install PF_PACKET filter code");
-	return buf;
 }
 
 int forward_local_addresses_changed(void)
 {
-	nhrp_task_schedule(&install_filter_task, 0, &install_filter);
+	if (install_filter_timer.cb != NULL)
+		ev_timer_again(&install_filter_timer);
 	return TRUE;
 }
 
@@ -221,7 +218,7 @@ static int pfp_send_mcast(void *ctx, struct nhrp_peer *peer)
 	memcpy(lladdr->sll_addr, peer->next_hop_address.addr,
 	       lladdr->sll_halen);
 
-	if (sendmsg(packet_fd, msg, 0) < 0) {
+	if (sendmsg(packet_io.fd, msg, 0) < 0) {
 		nhrp_error("Failed to forward multicast packet to %s",
 			   nhrp_address_format(&peer->next_hop_address,
 					       sizeof(to), to));
@@ -230,7 +227,7 @@ static int pfp_send_mcast(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-static int pfp_read(void *ctx, int fd, short events)
+static void pfp_read_cb(struct ev_io *w, int revents)
 {
 	struct nhrp_interface *iface;
 	struct nhrp_peer_selector sel;
@@ -249,9 +246,10 @@ static int pfp_read(void *ctx, int fd, short events)
 	} u;
 	char fr[32], to[32];
 	int status, i, nbmaset;
+	int fd = w->fd;
 
-	if (!(events & POLLIN))
-		return 0;
+	if (!(revents & EV_READ))
+		return;
 
 	iov.iov_base = u.buf;
 	while (TRUE) {
@@ -262,14 +260,14 @@ static int pfp_read(void *ctx, int fd, short events)
 			if (errno == EINTR)
 				continue;
 			if (errno == EAGAIN)
-				return 0;
+				return;
 			nhrp_perror("PF_PACKET overrun");
 			continue;
 		}
 
 		if (iov.iov_len == 0) {
 			nhrp_error("PF_PACKET returned EOF");
-			return 0;
+			return;
 		}
 
 		if (lladdr.sll_pkttype != PACKET_OUTGOING)
@@ -284,7 +282,7 @@ static int pfp_read(void *ctx, int fd, short events)
 		if (!nhrp_address_parse_packet(lladdr.sll_protocol,
 					       iov.iov_len, u.buf,
 					       &src, &dst))
-			return FALSE;
+			return;
 
 		nbmaset = 0;
 		for (i = 0; i < lladdr.sll_halen; i++)
@@ -313,28 +311,26 @@ static int pfp_read(void *ctx, int fd, short events)
 						 u.buf, iov.iov_len);
 		}
 	}
-
-	return 0;
 }
 
 int forward_init(void)
 {
-	packet_fd = socket(PF_PACKET, SOCK_DGRAM, ntohs(ETH_P_ALL));
-	if (packet_fd < 0) {
+	int fd;
+
+	fd = socket(PF_PACKET, SOCK_DGRAM, ntohs(ETH_P_ALL));
+	if (fd < 0) {
 		nhrp_error("Unable to create PF_PACKET socket");
 		return FALSE;
 	}
 
-	fcntl(packet_fd, F_SETFD, FD_CLOEXEC);
-	install_filter_callback(&install_filter_task);
+	fcntl(fd, F_SETFD, FD_CLOEXEC);
 
-	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfp_read, NULL))
-		goto err_close;
+	ev_io_init(&packet_io, pfp_read_cb, fd, EV_READ);
+	ev_io_start(&packet_io);
+
+	ev_timer_init(&install_filter_timer, install_filter_cb, .0, .01);
+	install_filter_cb(&install_filter_timer, 0);
 
 	return TRUE;
-
-err_close:
-	close(packet_fd);
-	return FALSE;
 }
 

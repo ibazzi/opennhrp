@@ -18,6 +18,7 @@
 #include <sys/types.h>
 #include <sys/queue.h>
 #include "nhrp_address.h"
+#include "libev.h"
 
 #define NHRP_PEER_TYPE_INCOMPLETE	0x00	/* Resolution request sent */
 #define NHRP_PEER_TYPE_NEGATIVE		0x01	/* Negative cached */
@@ -78,18 +79,17 @@ struct nhrp_peer {
 	struct nhrp_interface *interface;
 	struct nhrp_packet *queued_packet;
 
-	struct nhrp_task task;
+	struct ev_timer timer;
+	struct ev_child child;
 	struct nhrp_address_query address_query;
-	pid_t script_pid;
-	void (*script_callback)(struct nhrp_peer *peer, int status);
 
 	uint8_t type;
 	uint8_t prefix_length;
 	uint16_t afnum;
 	uint16_t protocol_type;
 	uint16_t mtu, my_nbma_mtu;
-	struct timeval expire_time;
-	struct timeval last_used;
+	ev_tstamp expire_time;
+	ev_tstamp last_used;
 	struct nhrp_address my_nbma_address;
 	struct nhrp_address protocol_address;
 
@@ -112,8 +112,6 @@ struct nhrp_peer_selector {
 
 const char * const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
 typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);
-
-void nhrp_peer_reap_pid(pid_t pid, int status);
 
 struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface);
 struct nhrp_peer *nhrp_peer_get(struct nhrp_peer *peer);

@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include "nhrp_common.h"
 #include "nhrp_interface.h"
 #include "nhrp_address.h"
 

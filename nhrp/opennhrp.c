@@ -1,6 +1,6 @@
 /* opennhrp.c - OpenNHRP main routines
  *
- * Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
+ * Copyright (C) 2007-2009 Timo Teräs <timo.teras@iki.fi>
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -37,6 +37,7 @@ const char *nhrp_pid_file     = "/var/run/opennhrp.pid";
 const char *nhrp_config_file  = "/etc/opennhrp/opennhrp.conf";
 const char *nhrp_script_file  = "/etc/opennhrp/opennhrp-script";
 int nhrp_verbose = 0;
+int nhrp_running = FALSE;
 
 static int pid_file_fd;
 
@@ -67,6 +68,38 @@ void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes)
 		fprintf(stderr, "\n");
 	}
 	fprintf(stderr, "\n");
+}
+
+static void handle_signal_cb(struct ev_signal *w, int revents)
+{
+	struct nhrp_peer_selector sel;
+
+	switch (w->signum) {
+	case SIGUSR1:
+		nhrp_peer_dump_cache();
+		break;
+	case SIGINT:
+	case SIGTERM:
+		ev_unloop(EVUNLOOP_ALL);
+		break;
+	case SIGHUP:
+		memset(&sel, 0, sizeof(sel));
+		sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
+		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+		break;
+	}
+}
+
+static int hook_signal[] = { SIGUSR1, SIGHUP, SIGINT, SIGTERM };
+static ev_signal signal_event[ARRAY_SIZE(hook_signal)];
+
+static void signal_init(void)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(hook_signal); i++)
+		ev_signal_init(&signal_event[i], handle_signal_cb,
+			       hook_signal[i]);
 }
 
 static int read_word(FILE *in, int *lineno, size_t len, char *word)
@@ -285,6 +318,8 @@ static int daemonize(void)
 		goto err;
 	}
 
+	ev_default_fork();
+
 	return TRUE;
 
 err:
@@ -361,8 +396,8 @@ int main(int argc, char **argv)
 
 	nhrp_info("%s starting", nhrp_version_string);
 
-	if (!signal_init())
-		return 2;
+	ev_default_loop(0);
+	signal_init();
 	if (!nhrp_address_init())
 		return 3;
 	if (!load_config(nhrp_config_file))
@@ -380,7 +415,9 @@ int main(int argc, char **argv)
 	}
 
 	write_pid();
-	nhrp_task_run();
+
+	nhrp_running = TRUE;
+	ev_loop(0);
 
 	return 0;
 }

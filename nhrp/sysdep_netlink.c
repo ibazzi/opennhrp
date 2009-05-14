@@ -1,6 +1,6 @@
 /* sysdep_netlink.c - Linux netlink glue
  *
- * Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
+ * Copyright (C) 2007-2009 Timo Teräs <timo.teras@iki.fi>
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@
 #include <linux/if_arp.h>
 #include <linux/if_tunnel.h>
 
+#include "libev.h"
 #include "nhrp_common.h"
 #include "nhrp_interface.h"
 #include "nhrp_peer.h"
@@ -48,13 +49,14 @@ typedef void (*netlink_dispatch_f)(struct nlmsghdr *msg);
 struct netlink_fd {
 	int fd;
 	__u32 seq;
+	struct ev_io io;
 
 	int dispatch_size;
 	const netlink_dispatch_f *dispatch;
 };
 
 static struct netlink_fd netlink_fd;
-static int packet_fd;
+static struct ev_io packet_io;
 
 static u_int16_t translate_mtu(u_int16_t mtu)
 {
@@ -224,7 +226,7 @@ static int do_get_ioctl(const char *basedev, struct ip_tunnel_parm *p)
 
 	strncpy(ifr.ifr_name, basedev, IFNAMSIZ);
 	ifr.ifr_ifru.ifru_data = (void *) p;
-	if (ioctl(packet_fd, SIOCGETTUNNEL, &ifr)) {
+	if (ioctl(packet_io.fd, SIOCGETTUNNEL, &ifr)) {
 		nhrp_perror("ioctl(SIOCGETTUNNEL)");
 		return FALSE;
 	}
@@ -296,13 +298,13 @@ static int netlink_link_arp_on(struct nhrp_interface *iface)
 	struct ifreq ifr;
 
 	strncpy(ifr.ifr_name, iface->name, IFNAMSIZ);
-	if (ioctl(packet_fd, SIOCGIFFLAGS, &ifr)) {
+	if (ioctl(packet_io.fd, SIOCGIFFLAGS, &ifr)) {
 		nhrp_perror("ioctl(SIOCGIFFLAGS)");
 		return FALSE;
 	}
 	if (ifr.ifr_flags & IFF_NOARP) {
 		ifr.ifr_flags &= ~IFF_NOARP;
-		if (ioctl(packet_fd, SIOCSIFFLAGS, &ifr)) {
+		if (ioctl(packet_io.fd, SIOCSIFFLAGS, &ifr)) {
 			nhrp_perror("ioctl(SIOCSIFFLAGS)");
 			return FALSE;
 		}
@@ -714,20 +716,18 @@ static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
 	[RTM_DELROUTE] = netlink_route_del,
 };
 
-static int netlink_read(void *ctx, int fd, short events)
+static void netlink_read_cb(struct ev_io *w, int revents)
 {
-	struct netlink_fd *nfd = (struct netlink_fd *) ctx;
+	struct netlink_fd *nfd = container_of(w, struct netlink_fd, io);
 
-	if (events & POLLIN)
+	if (revents & EV_READ)
 		netlink_receive(nfd, NULL);
-
-	return 0;
 }
 
 static void netlink_close(struct netlink_fd *fd)
 {
 	if (fd->fd >= 0) {
-		nhrp_task_unpoll_fd(fd->fd);
+		ev_io_stop(&fd->io);
 		close(fd->fd);
 		fd->fd = 0;
 	}
@@ -764,6 +764,9 @@ static int netlink_open(struct netlink_fd *fd, int protocol, int groups)
 		goto error;
 	}
 
+	ev_io_init(&fd->io, netlink_read_cb, fd->fd, EV_READ);
+	ev_io_start(&fd->io);
+
 	return TRUE;
 
 error:
@@ -771,7 +774,7 @@ error:
 	return FALSE;
 }
 
-static int pfpacket_read(void *ctx, int fd, short events)
+static void pfpacket_read_cb(struct ev_io *w, int revents)
 {
 	struct sockaddr_ll lladdr;
 	struct nhrp_interface *iface;
@@ -784,6 +787,7 @@ static int pfpacket_read(void *ctx, int fd, short events)
 	};
 	uint8_t buf[1500];
 	struct nhrp_address from;
+	int fd = w->fd;
 	int i;
 
 	iov.iov_base = buf;
@@ -796,14 +800,14 @@ static int pfpacket_read(void *ctx, int fd, short events)
 			if (errno == EINTR)
 				continue;
 			if (errno == EAGAIN)
-				return 0;
+				return;
 			nhrp_perror("PF_PACKET overrun");
 			continue;
 		}
 
 		if (status == 0) {
 			nhrp_error("PF_PACKET returned EOF");
-			return 0;
+			return;
 		}
 
 		iface = nhrp_interface_get_by_index(lladdr.sll_ifindex, FALSE);
@@ -815,8 +819,6 @@ static int pfpacket_read(void *ctx, int fd, short events)
 			nhrp_address_set_type(&from, PF_UNSPEC);
 		nhrp_packet_receive(buf, status, iface, &from);
 	}
-
-	return 0;
 }
 
 int kernel_init(void)
@@ -824,43 +826,38 @@ int kernel_init(void)
 	const int groups =
 		RTMGRP_NEIGH | RTMGRP_LINK |
 		RTMGRP_IPV4_IFADDR | RTMGRP_IPV4_ROUTE;
+	int fd;
 
-	packet_fd = socket(PF_PACKET, SOCK_DGRAM, ETHPROTO_NHRP);
-	if (packet_fd < 0) {
+	fd = socket(PF_PACKET, SOCK_DGRAM, ETHPROTO_NHRP);
+	if (fd < 0) {
 		nhrp_error("Unable to create PF_PACKET socket");
 		return FALSE;
 	}
 
-	fcntl(packet_fd, F_SETFD, FD_CLOEXEC);
-	if (!nhrp_task_poll_fd(packet_fd, POLLIN, pfpacket_read, NULL))
-		goto err_close_packetfd;
-
-	if (!netlink_open(&netlink_fd, NETLINK_ROUTE, groups))
-		goto err_remove_packetfd;
+	fcntl(fd, F_SETFD, FD_CLOEXEC);
+	ev_io_init(&packet_io, pfpacket_read_cb, fd, EV_READ);
+	ev_io_start(&packet_io);
 
 	netlink_fd.dispatch_size = sizeof(route_dispatch) / sizeof(route_dispatch[0]);
 	netlink_fd.dispatch = route_dispatch;
-
-	if (!nhrp_task_poll_fd(netlink_fd.fd, POLLIN, netlink_read, &netlink_fd))
-		goto err_close_netlink;
+	if (!netlink_open(&netlink_fd, NETLINK_ROUTE, groups))
+		goto err_remove_packetfd;
 
 	netlink_enumerate(&netlink_fd, PF_UNSPEC, RTM_GETLINK);
-	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
+	netlink_read_cb(&netlink_fd.io, EV_READ);
 
 	netlink_enumerate(&netlink_fd, PF_UNSPEC, RTM_GETADDR);
-	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
+	netlink_read_cb(&netlink_fd.io, EV_READ);
 
 	netlink_enumerate(&netlink_fd, PF_UNSPEC, RTM_GETROUTE);
-	netlink_read(&netlink_fd, netlink_fd.fd, POLLIN);
+	netlink_read_cb(&netlink_fd.io, EV_READ);
 
 	return TRUE;
 
-err_close_netlink:
-	netlink_close(&netlink_fd);
 err_remove_packetfd:
-	nhrp_task_unpoll_fd(packet_fd);
-err_close_packetfd:
-	close(packet_fd);
+	ev_io_stop(&packet_io);
+	close(fd);
+
 	return FALSE;
 }
 
@@ -966,7 +963,7 @@ int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 	lladdr.sll_halen = to->addr_len;
 	memcpy(lladdr.sll_addr, to->addr, to->addr_len);
 
-	status = sendmsg(packet_fd, &msg, 0);
+	status = sendmsg(packet_io.fd, &msg, 0);
 	if (status < 0) {
 		nhrp_error("Cannot send packet to %s(%d): %s",
 			   out->name, out->index, strerror(errno));

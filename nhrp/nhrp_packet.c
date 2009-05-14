@@ -1,6 +1,6 @@
 /* nhrp_packet.c - NHRP packet marshalling and tranceiving
  *
- * Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
+ * Copyright (C) 2007-2009 Timo Teräs <timo.teras@iki.fi>
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -15,10 +15,12 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <netinet/in.h>
+
+#include "libev.h"
+#include "nhrp_common.h"
 #include "nhrp_packet.h"
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
-#include "nhrp_common.h"
 
 #define PACKET_RETRIES			6
 #define PACKET_RETRY_INTERVAL		5000
@@ -33,7 +35,7 @@ struct nhrp_rate_limit {
 	LIST_ENTRY(nhrp_rate_limit) hash_entry;
 	struct nhrp_address src;
 	struct nhrp_address dst;
-	struct timeval rate_last;
+	ev_tstamp rate_last;
 	int rate_tokens;
 };
 
@@ -45,12 +47,12 @@ static struct nhrp_packet_list_head pending_requests =
 	TAILQ_HEAD_INITIALIZER(pending_requests);
 
 static struct nhrp_rate_limit_list_head rate_limit_hash[RATE_LIMIT_HASH_SIZE];
-static struct nhrp_task rate_limit_task;
+static ev_timer rate_limit_timer;
 static int num_rate_limit_entries = 0;
 
-static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize, struct nhrp_packet *packet);
-
-NHRP_TASK(prune_rate_limit_entries);
+static void nhrp_packet_xmit_timeout_cb(struct ev_timer *w, int revents);
+static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize,
+				    struct nhrp_packet *packet);
 
 static void nhrp_rate_limit_delete(struct nhrp_rate_limit *rl)
 {
@@ -79,43 +81,32 @@ int nhrp_rate_limit_clear(struct nhrp_address *a, int pref)
 	}
 
 	if (num_rate_limit_entries == 0)
-		nhrp_task_cancel(&rate_limit_task);
+		ev_timer_stop(&rate_limit_timer);
 
 	return ret;
 }
 
-static void prune_rate_limit_entries_callback(struct nhrp_task *task)
+static void prune_rate_limit_entries_cb(struct ev_timer *w, int revents)
 {
 	struct nhrp_rate_limit *rl, *next;
-	struct timeval now, tv;
 	int i;
 
-	nhrp_time_monotonic(&now);
 	for (i = 0; i < RATE_LIMIT_HASH_SIZE; i++) {
 		for (rl = LIST_FIRST(&rate_limit_hash[i]);
 		     rl != NULL; rl = next) {
 			next = LIST_NEXT(rl, hash_entry);
 
-			tv = rl->rate_last;
-			tv.tv_sec += 2 * RATE_LIMIT_SILENCE;
-			if (timercmp(&now, &tv, >))
+			if (ev_now() > rl->rate_last + 2 * RATE_LIMIT_SILENCE)
 				nhrp_rate_limit_delete(rl);
 		}
 	}
 
-	if (num_rate_limit_entries)
-		nhrp_task_schedule(&rate_limit_task,
-				   RATE_LIMIT_PURGE_INTERVAL * 1000,
-				   &prune_rate_limit_entries);
+	if (num_rate_limit_entries == 0)
+		ev_timer_stop(&rate_limit_timer);
 }
 
-static char *prune_rate_limit_entries_describe(struct nhrp_task *task, size_t buflen, char *buf)
-{
-	snprintf(buf, buflen, "Prune rate limit tokens");
-	return buf;
-}
-
-static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src, struct nhrp_address *dst)
+static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src,
+					      struct nhrp_address *dst)
 {
 	unsigned int key;
 	struct nhrp_rate_limit *e;
@@ -134,10 +125,13 @@ static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src, struct n
 	e->dst = *dst;
 	LIST_INSERT_HEAD(&rate_limit_hash[key], e, hash_entry);
 
-	if (num_rate_limit_entries == 0)
-		nhrp_task_schedule(&rate_limit_task,
-				   RATE_LIMIT_PURGE_INTERVAL * 1000,
-				   &prune_rate_limit_entries);
+	if (num_rate_limit_entries == 0) {
+		ev_timer_init(&rate_limit_timer, prune_rate_limit_entries_cb,
+			      RATE_LIMIT_PURGE_INTERVAL,
+			      RATE_LIMIT_PURGE_INTERVAL);
+		ev_timer_start(&rate_limit_timer);
+	}
+
 	num_rate_limit_entries++;
 
 	return e;
@@ -278,6 +272,8 @@ struct nhrp_packet *nhrp_packet_alloc(void)
 	struct nhrp_packet *packet;
 	packet = calloc(1, sizeof(struct nhrp_packet));
 	packet->ref = 1;
+	ev_timer_init(&packet->timeout, nhrp_packet_xmit_timeout_cb,
+		      PACKET_RETRY_INTERVAL, PACKET_RETRY_INTERVAL);
 	return packet;
 }
 
@@ -352,7 +348,7 @@ static int nhrp_packet_reroute(struct nhrp_packet *packet,
 
 static void nhrp_packet_dequeue(struct nhrp_packet *packet)
 {
-	nhrp_task_cancel(&packet->timeout);
+	ev_timer_stop(&packet->timeout);
 	TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
 	nhrp_packet_put(packet);
 }
@@ -447,10 +443,8 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	struct nhrp_cie *cie;
 	struct nhrp_peer *peer, *rpeer = NULL;
 	struct nhrp_peer_selector sel;
-	struct timeval now;
 	int natted = 0;
 
-	nhrp_time_monotonic(&now);
 	nhrp_info("Received Registration Request from proto src %s to %s",
 		nhrp_address_format(&packet->src_protocol_address,
 			sizeof(tmp), tmp),
@@ -500,8 +494,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 		peer->type = NHRP_PEER_TYPE_DYNAMIC;
 		peer->afnum = packet->hdr.afnum;
 		peer->protocol_type = packet->hdr.protocol_type;
-		peer->expire_time = now;
-		peer->expire_time.tv_sec += ntohs(cie->hdr.holding_time);
+		peer->expire_time = ev_now() + ntohs(cie->hdr.holding_time);
 		peer->mtu = ntohs(cie->hdr.mtu);
 
 		if (cie->nbma_address.addr_len != 0)
@@ -1436,11 +1429,10 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	return nhrp_packet_route_and_send(packet);
 }
 
-NHRP_TASK(nhrp_packet_xmit_timeout);
-
-static void nhrp_packet_xmit_timeout_callback(struct nhrp_task *task)
+static void nhrp_packet_xmit_timeout_cb(struct ev_timer *w, int revents)
 {
-	struct nhrp_packet *packet = container_of(task, struct nhrp_packet, timeout);
+	struct nhrp_packet *packet =
+		container_of(w, struct nhrp_packet, timeout);
 
 	TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
 
@@ -1450,26 +1442,14 @@ static void nhrp_packet_xmit_timeout_callback(struct nhrp_task *task)
 
 		TAILQ_INSERT_TAIL(&pending_requests, packet,
 				  request_list_entry);
-		nhrp_task_schedule(&packet->timeout, PACKET_RETRY_INTERVAL,
-				   &nhrp_packet_xmit_timeout);
 	} else {
+		ev_timer_stop(&packet->timeout);
 		if (packet->dst_peer == NULL)
 			nhrp_error("nhrp_packet_xmit_timeout: no destination peer!");
 		if (packet->handler != NULL)
 			packet->handler(packet->handler_ctx, NULL);
 		nhrp_packet_dequeue(packet);
 	}
-}
-
-static char *nhrp_packet_xmit_timeout_describe(struct nhrp_task *task, size_t buflen, char *buf)
-{
-	struct nhrp_packet *packet = container_of(task, struct nhrp_packet, timeout);
-	char to[64];
-
-	snprintf(buf, buflen, "Timeout handler: packet %d (to %s)",
-		 packet->hdr.type,
-		 nhrp_address_format(&packet->dst_protocol_address, sizeof(to), to));
-	return buf;
 }
 
 int nhrp_packet_send_request(struct nhrp_packet *pkt,
@@ -1489,7 +1469,7 @@ int nhrp_packet_send_request(struct nhrp_packet *pkt,
 	packet->handler = handler;
 	packet->handler_ctx = ctx;
 	TAILQ_INSERT_TAIL(&pending_requests, packet, request_list_entry);
-	nhrp_task_schedule(&packet->timeout, 5000, &nhrp_packet_xmit_timeout);
+	ev_timer_again(&packet->timeout);
 
 	return nhrp_packet_send(packet);
 }
@@ -1547,7 +1527,6 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
 	struct nhrp_address src, dst;
 	char tmp1[64], tmp2[64];
 	int r;
-	struct timeval now, tv;
 
 	if (!(iface->flags & NHRP_INTERFACE_FLAG_REDIRECT))
 		return FALSE;
@@ -1559,28 +1538,23 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
 	if (rl == NULL)
 		return FALSE;
 
-	nhrp_time_monotonic(&now);
-	tv = rl->rate_last;
-	tv.tv_sec += RATE_LIMIT_SILENCE;
-
 	/* If silence period has elapsed, reset algorithm */
-	if (timercmp(&now, &tv, >))
+	if (ev_now() > rl->rate_last + RATE_LIMIT_SILENCE)
 		rl->rate_tokens = 0;
 
 	/* Too many ignored redirects; just update time of last packet */
 	if (rl->rate_tokens >= RATE_LIMIT_MAX_TOKENS) {
-		rl->rate_last = now;
+		rl->rate_last = ev_now();
 		return FALSE;
 	}
 
 	/* Check for load limit; set rate_last to last sent redirect */
-	tv = rl->rate_last;
-	tv.tv_sec += RATE_LIMIT_SEND_INTERVAL;
-	if (rl->rate_tokens != 0 && timercmp(&now, &tv, <))
+	if (rl->rate_tokens != 0 &&
+	    ev_now() < rl->rate_last + RATE_LIMIT_SEND_INTERVAL)
 		return FALSE;
 
 	rl->rate_tokens++;
-	rl->rate_last = now;
+	rl->rate_last = ev_now();
 
 	p = nhrp_packet_alloc();
 	p->hdr = (struct nhrp_packet_header) {

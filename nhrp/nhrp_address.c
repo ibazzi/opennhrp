@@ -1,6 +1,6 @@
 /* nhrp_address.c - NHRP address conversion functions
  *
- * Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
+ * Copyright (C) 2007-2009 Timo Teräs <timo.teras@iki.fi>
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -26,35 +26,81 @@
 #include "nhrp_packet.h"
 #include "nhrp_common.h"
 
-ares_channel nhrp_ares_resolver;
+struct nhrp_resolver {
+	ares_channel channel;
+	struct ev_prepare prepare;
+	struct ev_timer timeout;
+	struct ev_io fds[4];
+};
 
-static int ares_poll_cb(void *ctx, int fd, short events)
+static struct nhrp_resolver resolver;
+
+static void ares_timeout_cb(struct ev_timer *w, int revents)
+{
+	struct nhrp_resolver *r =
+		container_of(w, struct nhrp_resolver, timeout);
+
+	ares_process(r->channel, NULL, NULL);
+}
+
+static void ares_prepare_cb(struct ev_prepare *w, int revents)
+{
+	struct nhrp_resolver *r =
+		container_of(w, struct nhrp_resolver, prepare);
+	struct timeval *tv, tvbuf;
+
+	tv = ares_timeout(r->channel, NULL, &tvbuf);
+	if (tv != NULL) {
+		r->timeout.repeat = tv->tv_sec + tv->tv_usec * 1e-6;
+		ev_timer_again(&r->timeout);
+	} else {
+		ev_timer_stop(&r->timeout);
+	}
+}
+
+static void ares_io_cb(struct ev_io *w, int revents)
 {
 	ares_socket_t rfd = ARES_SOCKET_BAD, wfd = ARES_SOCKET_BAD;
 
-	if (events & POLLIN)
-		rfd = fd;
-	if (events & POLLOUT)
-		wfd = fd;
-	ares_process_fd(*(ares_channel *) ctx, rfd, wfd);
+	if (revents & EV_READ)
+		rfd = w->fd;
+	if (revents & EV_WRITE)
+		wfd = w->fd;
 
-	return 0;
+	ares_process_fd(resolver.channel, rfd, wfd);
 }
 
 static void ares_socket_cb(void *data, ares_socket_t fd,
 			   int readable, int writable)
 {
-	short events = 0;
+	struct nhrp_resolver *r = (struct nhrp_resolver *) data;
+	int i, fi = -1, events = 0;
 
 	if (readable)
-		events |= POLLIN;
+		events |= EV_READ;
 	if (writable)
-		events |= POLLOUT;
+		events |= EV_WRITE;
 
-	if (events)
-		nhrp_task_poll_fd(fd, events, ares_poll_cb, data);
-	else
-		nhrp_task_unpoll_fd(fd);
+	for (i = 0; i < ARRAY_SIZE(r->fds); i++) {
+		if (r->fds[i].fd == fd)
+			break;
+		if (fi < 0 && r->fds[i].fd == 0)
+			fi = i;
+	}
+
+	if (events) {
+		if (i >= ARRAY_SIZE(r->fds)) {
+			NHRP_BUG_ON(fi == -1);
+			i = fi;
+		} else {
+			ev_io_stop(&r->fds[fi]);
+		}
+		ev_io_set(&r->fds[i], fd, events);
+		ev_io_start(&r->fds[i]);
+	} else if (i < ARRAY_SIZE(r->fds)) {
+		ev_io_stop(&r->fds[i]);
+		ev_io_set(&r->fds[i], 0, 0);
+	}
 }
 
 static int bitcmp(uint8_t *a, uint8_t *b, int len)
@@ -195,7 +241,7 @@ void nhrp_address_resolve(struct nhrp_address_query *query,
 	}
 
 	query->callback = callback;
-	ares_gethostbyname(nhrp_ares_resolver, hostname, AF_INET,
+	ares_gethostbyname(resolver.channel, hostname, AF_INET,
 			   ares_address_cb, query);
 }
 
@@ -206,7 +252,7 @@ void nhrp_address_resolve_cancel(struct nhrp_address_query *query)
 	 * anyway, it is not a problem for now. */
 
 	if (query->callback != NULL)
-		ares_cancel(nhrp_ares_resolver);
+		ares_cancel(resolver.channel);
 }
 
 void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type)
@@ -340,16 +386,23 @@ int nhrp_address_match_cie_list(struct nhrp_address *nbma_address,
 int nhrp_address_init(void)
 {
 	struct ares_options ares_opts;
+	int i;
 
 	memset(&ares_opts, 0, sizeof(ares_opts));
 	ares_opts.sock_state_cb = &ares_socket_cb;
-	ares_opts.sock_state_cb_data = &nhrp_ares_resolver;
+	ares_opts.sock_state_cb_data = &resolver;
 	ares_opts.timeout = 2;
 	ares_opts.tries = 3;
-	if (ares_init_options(&nhrp_ares_resolver, &ares_opts,
+	if (ares_init_options(&resolver.channel, &ares_opts,
 			      ARES_OPT_SOCK_STATE_CB | ARES_OPT_TIMEOUT |
 			      ARES_OPT_TRIES) != ARES_SUCCESS)
 		return FALSE;
+
+	ev_timer_init(&resolver.timeout, ares_timeout_cb, 0.0, 0.0);
+	ev_prepare_init(&resolver.prepare, ares_prepare_cb);
+	ev_prepare_start(&resolver.prepare);
+	for (i = 0; i < ARRAY_SIZE(resolver.fds); i++)
+		ev_init(&resolver.fds[i], ares_io_cb);
 
 	return TRUE;
 }

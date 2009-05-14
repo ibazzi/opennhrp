@@ -1,6 +1,6 @@
 /* nhrp_packet.h - In-memory NHRP packet definitions
  *
- * Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
+ * Copyright (C) 2007-2009 Timo Teräs <timo.teras@iki.fi>
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -14,9 +14,9 @@
 #define NHRP_PACKET_H
 
 #include <sys/queue.h>
+#include "libev.h"
 #include "nhrp_protocol.h"
 #include "nhrp_address.h"
-#include "nhrp_common.h"
 
 #define NHRP_MAX_EXTENSIONS		10
 
@@ -63,7 +63,7 @@ struct nhrp_packet {
 	struct nhrp_payload *		extension_by_type[NHRP_MAX_EXTENSIONS];
 
 	TAILQ_ENTRY(nhrp_packet)	request_list_entry;
-	struct nhrp_task		timeout;
+	struct ev_timer			timeout;
 	void				(*handler)(void *ctx, struct nhrp_packet *packet);
 	void *				handler_ctx;
 	int				retry;

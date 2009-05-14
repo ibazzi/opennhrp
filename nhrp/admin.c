@@ -1,6 +1,6 @@
 /* admin.c - OpenNHRP administrative interface implementation
  *
- * Copyright (C) 2007 Timo Teräs <timo.teras@iki.fi>
+ * Copyright (C) 2007-2009 Timo Teräs <timo.teras@iki.fi>
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -26,12 +26,13 @@
 #include "nhrp_address.h"
 #include "nhrp_interface.h"
 
-struct admin_remote {
-	int			fd;
-	struct nhrp_task	timeout;
+static struct ev_io accept_io;
 
-	int                     num_read;
-	char                    cmd[512];
+struct admin_remote {
+	struct ev_timer timeout;
+	struct ev_io io;
+	int num_read;
+	char cmd[512];
 };
 
 static int parse_word(const char **bufptr, size_t len, char *word)
@@ -65,15 +66,25 @@ static void admin_write(void *ctx, const char *format, ...)
 	len = vsnprintf(msg, sizeof(msg), format, ap);
 	va_end(ap);
 
-	if (write(rmt->fd, msg, len) != len) {
+	if (write(rmt->io.fd, msg, len) != len) {
 	}
+}
+
+static void admin_free_remote(struct admin_remote *rm)
+{
+	int fd = rm->io.fd;
+
+	ev_io_stop(&rm->io);
+	ev_timer_stop(&rm->timeout);
+	shutdown(fd, SHUT_RDWR);
+	close(fd);
+	free(rm);
 }
 
 static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 {
 	char buf[512], tmp[32];
 	size_t len = sizeof(buf);
-	struct timeval now;
 	int i = 0, rel;
 
 	i += snprintf(&buf[i], len - i,
@@ -89,11 +100,13 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 		i += snprintf(&buf[i], len - i, "%s: %s\n",
 			peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ?
 			"Next-hop-Address" : "NBMA-Address",
-			nhrp_address_format(&peer->next_hop_address, sizeof(tmp), tmp));
+			nhrp_address_format(&peer->next_hop_address,
+					    sizeof(tmp), tmp));
 	}
 	if (peer->next_hop_nat_oa.type != PF_UNSPEC) {
 		i += snprintf(&buf[i], len - i, "NBMA-NAT-OA-Address: %s\n",
-			nhrp_address_format(&peer->next_hop_nat_oa, sizeof(tmp), tmp));
+			nhrp_address_format(&peer->next_hop_nat_oa,
+					    sizeof(tmp), tmp));
 	}
 	if (peer->flags & (NHRP_PEER_FLAG_USED | NHRP_PEER_FLAG_UNIQUE |
 			   NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP)) {
@@ -109,9 +122,8 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 			i += snprintf(&buf[i], len - i, " lower-up");
 		i += snprintf(&buf[i], len - i, "\n");
 	}
-	if (peer->expire_time.tv_sec && peer->expire_time.tv_usec) {
-		nhrp_time_monotonic(&now);
-		rel = peer->expire_time.tv_sec - now.tv_sec;
+	if (peer->expire_time) {
+		rel = (int) (peer->expire_time - ev_now());
 		if (rel >= 0) {
 			i += snprintf(&buf[i], len - i, "Expires-In: %d:%02d\n",
 				      rel / 60, rel % 60);
@@ -285,22 +297,6 @@ static void admin_redirect_purge(void *ctx, const char *cmd)
 		    count);
 }
 
-static void admin_schedule(void *ctx, const char *cmd)
-{
-	struct nhrp_task *task;
-	struct timeval now;
-	char tmp[256];
-
-	admin_write(ctx, "Status: ok\n\n");
-
-	nhrp_time_monotonic(&now);
-	LIST_FOREACH(task, &nhrp_all_tasks, task_list) {
-		admin_write(ctx, "Timeout: %d\nDescription: %s\n\n",
-			    task->execute_time.tv_sec - now.tv_sec,
-			    task->ops->describe(task, sizeof(tmp), tmp));
-	}
-}
-
 static struct {
 	const char *command;
 	void (*handler)(void *ctx, const char *cmd);
@@ -312,18 +308,18 @@ static struct {
 	{ "purge",		admin_cache_purge },
 	{ "cache purge",	admin_cache_purge },
 	{ "redirect purge",	admin_redirect_purge },
-	{ "schedule",		admin_schedule },
 };
 
-static int admin_receive(void *ctx, int fd, short events)
+static void admin_receive_cb(struct ev_io *w, int revents)
 {
-	struct admin_remote *rm = (struct admin_remote *) ctx;
+	struct admin_remote *rm = container_of(w, struct admin_remote, io);
+	int fd = rm->io.fd;
 	ssize_t len;
 	int i, cmdlen;
 
 	len = recv(fd, rm->cmd, sizeof(rm->cmd) - rm->num_read, MSG_DONTWAIT);
 	if (len < 0 && errno == EAGAIN)
-		return 0;
+		return;
 	if (len <= 0)
 		goto err;
 
@@ -332,7 +328,7 @@ static int admin_receive(void *ctx, int fd, short events)
 		goto err;
 
 	if (rm->cmd[rm->num_read-1] != '\n')
-		return 0;
+		return;
 	rm->cmd[--rm->num_read] = 0;
 
 	for (i = 0; i < ARRAY_SIZE(admin_handler); i++) {
@@ -340,70 +336,43 @@ static int admin_receive(void *ctx, int fd, short events)
 		if (rm->num_read >= cmdlen &&
 		    strncasecmp(rm->cmd, admin_handler[i].command, cmdlen) == 0) {
 			nhrp_debug("Admin: %s", rm->cmd);
-			admin_handler[i].handler(ctx, &rm->cmd[cmdlen]);
+			admin_handler[i].handler(rm, &rm->cmd[cmdlen]);
 			break;
 		}
 	}
 	if (i >= ARRAY_SIZE(admin_handler)) {
-		admin_write(ctx,
+		admin_write(rm,
 			    "Status: error\n"
 			    "Reason: unrecognized command\n");
 	}
 
 err:
-	nhrp_task_cancel(&rm->timeout);
-	shutdown(fd, SHUT_RDWR);
-	close(fd);
-	free(rm);
-
-	return -1;
+	admin_free_remote(rm);
 }
 
-NHRP_TASK(admin_timeout);
-
-static void admin_timeout_callback(struct nhrp_task *task)
+static void admin_timeout_cb(struct ev_timer *t, int revents)
 {
-	struct admin_remote *rm = container_of(task, struct admin_remote, timeout);
-
-	nhrp_task_unpoll_fd(rm->fd);
-	shutdown(rm->fd, SHUT_RDWR);
-	close(rm->fd);
-	free(rm);
+	admin_free_remote(container_of(t, struct admin_remote, timeout));
 }
 
-static char *admin_timeout_describe(struct nhrp_task *task, size_t buflen, char *buf)
-{
-	struct admin_remote *rm = container_of(task, struct admin_remote, timeout);
-
-	snprintf(buf, buflen, "Admin connection timeout for fd %d",
-		 rm->fd);
-	return buf;
-}
-
-static int admin_accept(void *ctx, int fd, short events)
+static void admin_accept_cb(ev_io *w, int revents)
 {
 	struct admin_remote *rm;
 	struct sockaddr_storage from;
 	socklen_t fromlen = sizeof(from);
 	int cnx;
 
-	cnx = accept(fd, (struct sockaddr *) &from, &fromlen);
+	cnx = accept(w->fd, (struct sockaddr *) &from, &fromlen);
 	if (cnx < 0)
-		return 0;
+		return;
 	fcntl(cnx, F_SETFD, FD_CLOEXEC);
 
 	rm = calloc(1, sizeof(struct admin_remote));
-	rm->fd = cnx;
 
-	if (!nhrp_task_poll_fd(cnx, POLLIN, admin_receive, rm)) {
-		close(cnx);
-		free(rm);
-		return 0;
-	}
-
-	nhrp_task_schedule(&rm->timeout, 10000, &admin_timeout);
-
-	return 0;
+	ev_io_init(&rm->io, admin_receive_cb, cnx, EV_READ);
+	ev_io_start(&rm->io);
+	ev_timer_init(&rm->timeout, admin_timeout_cb, 10.0, 0.);
+	ev_timer_start(&rm->timeout);
 }
 
 int admin_init(const char *opennhrp_socket)
@@ -427,8 +396,8 @@ int admin_init(const char *opennhrp_socket)
 	if (listen(fd, 5) != 0)
 		goto err_close;
 
-	if (!nhrp_task_poll_fd(fd, POLLIN, admin_accept, NULL))
-		goto err_close;
+	ev_io_init(&accept_io, admin_accept_cb, fd, EV_READ);
+	ev_io_start(&accept_io);
 
 	return 1;
 
