@@ -56,5 +56,6 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor,
 
 int log_init(void);
 int admin_init(const char *socket);
+void server_init(void);
 
 #endif

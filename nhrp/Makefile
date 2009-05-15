@@ -1,6 +1,6 @@
 progs-y			+= opennhrp
 opennhrp-objs		+= libev.o opennhrp.o nhrp_address.o nhrp_packet.o \
-			   nhrp_peer.o nhrp_interface.o admin.o \
+			   nhrp_peer.o nhrp_server.o nhrp_interface.o admin.o \
 			   sysdep_netlink.o sysdep_pfpacket.o \
 			   sysdep_syslog.o
 

@@ -398,6 +398,7 @@ int main(int argc, char **argv)
 
 	ev_default_loop(0);
 	signal_init();
+	server_init();
 	if (!nhrp_address_init())
 		return 3;
 	if (!load_config(nhrp_config_file))

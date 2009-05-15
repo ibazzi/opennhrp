@@ -1354,6 +1354,7 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 		   nhrp_peer_format(peer, sizeof(tmp), tmp));
 
 	peer->flags |= NHRP_PEER_FLAG_REMOVED;
+	nhrp_peer_cancel_async(peer);
 	nhrp_peer_schedule(peer, 0, nhrp_peer_remove_cb);
 }
 

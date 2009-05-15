@@ -94,6 +94,7 @@ void nhrp_payload_set_type(struct nhrp_payload *payload, int type);
 void nhrp_payload_set_raw(struct nhrp_payload *payload, struct nhrp_buffer *buf);
 void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie);
 struct nhrp_cie *nhrp_payload_get_cie(struct nhrp_payload *payload, int index);
+void nhrp_payload_free(struct nhrp_payload *payload);
 
 struct nhrp_packet *nhrp_packet_alloc(void);
 struct nhrp_packet *nhrp_packet_get(struct nhrp_packet *packet);
@@ -106,6 +107,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,
 			struct nhrp_address *from);
 int nhrp_packet_route(struct nhrp_packet *packet);
+int nhrp_packet_reroute(struct nhrp_packet *packet, struct nhrp_peer *dst_peer);
 int nhrp_packet_marshall_and_send(struct nhrp_packet *packet);
 int nhrp_packet_route_and_send(struct nhrp_packet *packet);
 int nhrp_packet_send(struct nhrp_packet *packet);
@@ -116,5 +118,8 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 			   uint16_t indication_code, uint16_t offset);
 int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
 			     uint8_t *pdu, size_t pdulen);
+
+void nhrp_packet_hook_request(int request,
+			      int (*handler)(struct nhrp_packet *packet));
 
 #endif
