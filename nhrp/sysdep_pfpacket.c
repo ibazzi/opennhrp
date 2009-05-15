@@ -35,13 +35,13 @@
 static struct ev_io packet_io;
 static struct ev_timer install_filter_timer;
 
-
 enum {
 	LABEL_NEXT = 0,
 	LABEL_SKIP1,
 	LABEL_SKIPN,
 	LABEL_DROP,
-	LABEL_ACCEPT,
+	LABEL_ACCEPT_MC,
+	LABEL_ACCEPT_IND,
 	LABEL_IF_OK,
 	LABEL_NOT_IPV4,
 	NUM_LABELS
@@ -75,16 +75,14 @@ static void emit_jump(struct filter *f, __u16 code, __u32 k, __u8 jt, __u8 jf)
 	f->numops++;
 }
 
-static int patch_jump(struct filter *f, int new_label)
+static void patch_jump(struct filter *f, int new_label)
 {
-	if (BPF_CLASS(f->code[f->numops-1].code) != BPF_JMP)
-		return FALSE;
+	NHRP_BUG_ON(BPF_CLASS(f->code[f->numops-1].code) != BPF_JMP);
 
 	if (f->code[f->numops-1].jf == LABEL_NEXT)
 		f->code[f->numops-1].jf = new_label;
 	if (f->code[f->numops-1].jt == LABEL_NEXT)
 		f->code[f->numops-1].jt = new_label;
-	return TRUE;
 }
 
 static void mark(struct filter *f, int label)
@@ -141,8 +139,7 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 	/* Check for valid interface */
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_IFINDEX);
 	nhrp_interface_foreach(check_interface, &f);
-	if (!patch_jump(&f, LABEL_DROP))
-		return;
+	patch_jump(&f, LABEL_DROP);
 	mark(&f, LABEL_IF_OK);
 
 	/* Check for IPv4 */
@@ -152,7 +149,7 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 	/* Check for multicast IPv4 destination */
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, daddr));
 	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xe0000000, LABEL_NEXT, LABEL_SKIP1);
-	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xf0000000, LABEL_NEXT, LABEL_ACCEPT);
+	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xf0000000, LABEL_NEXT, LABEL_ACCEPT_MC);
 
 	/* Check for non-local IPv4 source */
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, saddr));
@@ -160,14 +157,19 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 	memset(&sel, 0, sizeof(sel));
 	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL);
 	nhrp_peer_foreach(check_ipv4, &f, &sel);
-	emit_stmt(&f, BPF_RET|BPF_K, 65535);
+
+	/* A packet we send Traffic Indication about: snap only start */
+	mark(&f, LABEL_ACCEPT_IND);
+	emit_stmt(&f, BPF_RET|BPF_K, 68);
 
 	mark(&f, LABEL_NOT_IPV4);
 
 	/* Exit */
 	mark(&f, LABEL_DROP);
 	emit_stmt(&f, BPF_RET|BPF_K, 0);
-	mark(&f, LABEL_ACCEPT);
+
+	/* Multicast packets need to be captured fully as we resend them */
+	mark(&f, LABEL_ACCEPT_MC);
 	emit_stmt(&f, BPF_RET|BPF_K, 65535);
 
 	/* All ok so far? */
