@@ -71,8 +71,7 @@ struct nhrp_packet;
 struct nhrp_cie_list_head;
 
 struct nhrp_peer {
-	unsigned short ref;
-	unsigned short list_count;
+	unsigned int ref;
 	unsigned int flags;
 
 	CIRCLEQ_ENTRY(nhrp_peer) peer_list;

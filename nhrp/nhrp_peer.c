@@ -676,8 +676,8 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
 	char tmp[NHRP_PEER_FORMAT_LEN];
 	int ec = -1;
 
-	if (nhrp_peer_put(peer))
-		return;
+	if (peer->flags & NHRP_PEER_FLAG_REMOVED)
+		goto ret;
 
 	if (reply == NULL ||
 	    reply->hdr.type != NHRP_PACKET_REGISTRATION_REPLY) {
@@ -693,7 +693,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
 		} else {
 			nhrp_peer_restart_error(peer);
 		}
-		return;
+		goto ret;
 	}
 
 	/* Check result */
@@ -714,11 +714,11 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
 		break;
 	case NHRP_CODE_UNIQUE_ADDRESS_REGISTERED:
 		nhrp_peer_send_protocol_purge(peer);
-		return;
+		goto ret;
 	default:
 		nhrp_peer_schedule(peer, NHRP_RETRY_REGISTER_TIME,
 				   nhrp_peer_send_register_cb);
-		return;
+		goto ret;
 	}
 
 	/* Check for NAT */
@@ -779,6 +779,8 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
 
 	/* Re-register after holding time expires */
 	nhrp_peer_is_up(peer);
+ret:
+	nhrp_peer_put(peer);
 }
 
 static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents)
@@ -892,8 +894,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 	char dst[64], tmp[64], nbma[64];
 	int ec;
 
-	if (nhrp_peer_put(peer))
-		return;
+	if (peer->flags & NHRP_PEER_FLAG_REMOVED)
+		goto ret;
 
 	if (reply == NULL ||
 	    reply->hdr.type != NHRP_PACKET_RESOLUTION_REPLY) {
@@ -908,13 +910,13 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 		 * use static routes to send stuff to this address */
 		peer->flags |= NHRP_PEER_FLAG_UP;
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
-		return;
+		goto ret;
 	}
 
 	payload = nhrp_packet_payload(reply, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	cie = TAILQ_FIRST(&payload->u.cie_list_head);
 	if (cie == NULL)
-		return;
+		goto ret;
 
 	nhrp_info("Received Resolution Reply %s/%d is at proto %s nbma %s",
 		  nhrp_address_format(&peer->protocol_address,
@@ -955,7 +957,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 		peer->expire_time = ev_now() + ntohs(cie->hdr.holding_time);
 		nhrp_address_mask(&peer->protocol_address, peer->prefix_length);
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED);
-		return;
+		goto ret;
 	}
 
 	/* Check that we won't replace a local route */
@@ -973,7 +975,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 			   cie->hdr.prefix_length);
 		peer->flags |= NHRP_PEER_FLAG_UP;
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
-		return;
+		goto ret;
 	}
 
 	/* Update the received NBMA address to nexthop */
@@ -1011,6 +1013,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 
 	/* Delete the incomplete entry */
 	nhrp_peer_remove(peer);
+ret:
+	nhrp_peer_put(peer);
 }
 
 static void nhrp_peer_send_resolve(struct nhrp_peer *peer)
@@ -1193,50 +1197,6 @@ int nhrp_peer_authorize_registration(struct nhrp_peer *peer)
 	return FALSE;
 }
 
-
-static struct nhrp_peer *nhrp_peer_list_get(struct nhrp_peer *peer)
-{
-	if (peer->list_count == 0) {
-		peer = nhrp_peer_get(peer);
-		if (peer->type == NHRP_PEER_TYPE_LOCAL)
-			CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
-		else
-			CIRCLEQ_INSERT_HEAD(&peer->interface->peer_cache,
-					    peer, peer_list);
-		peer->flags &= ~NHRP_PEER_FLAG_REMOVED;
-	}
-	peer->list_count++;
-	nhrp_peer_debug_refcount(__FUNCTION__, peer);
-
-	return peer;
-}
-
-static int nhrp_peer_list_put(struct nhrp_peer *peer)
-{
-	struct nhrp_interface *iface = peer->interface;
-	int type;
-
-	NHRP_BUG_ON(peer->list_count == 0);
-
-	peer->list_count--;
-	nhrp_peer_debug_refcount(__FUNCTION__, peer);
-
-	if (peer->list_count > 0)
-		return FALSE;
-
-	if (peer->type == NHRP_PEER_TYPE_LOCAL)
-		CIRCLEQ_REMOVE(&local_peer_cache, peer, peer_list);
-	else
-		CIRCLEQ_REMOVE(&iface->peer_cache, peer, peer_list);
-	type = peer->type;
-	nhrp_peer_put(peer);
-
-	if (type == NHRP_PEER_TYPE_LOCAL)
-		forward_local_addresses_changed();
-
-	return TRUE;
-}
-
 static void nhrp_peer_insert_cb(struct ev_timer *w, int revents)
 {
 	struct nhrp_peer *peer = container_of(w, struct nhrp_peer, timer);
@@ -1284,6 +1244,7 @@ static void nhrp_peer_reinsert(struct nhrp_peer *peer, int type)
 	NHRP_BUG_ON((peer->type == NHRP_PEER_TYPE_LOCAL) !=
 		    (type == NHRP_PEER_TYPE_LOCAL));
 
+	peer->flags &= ~NHRP_PEER_FLAG_REMOVED;
 	peer->type = type;
 	nhrp_peer_insert_cb(&peer->timer, 0);
 }
@@ -1293,8 +1254,6 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 	struct nhrp_peer_selector sel;
 	struct nhrp_peer *peer;
 	char tmp[NHRP_PEER_FORMAT_LEN];
-
-	NHRP_BUG_ON(ins->list_count != 0);
 
 	/* First, prune all duplicates */
 	memset(&sel, 0, sizeof(sel));
@@ -1312,12 +1271,18 @@ void nhrp_peer_insert(struct nhrp_peer *ins)
 	sel.prefix_length = ins->prefix_length;
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 
-	peer = nhrp_peer_list_get(ins);
-
 	nhrp_debug("Adding %s %s",
 		   nhrp_peer_type[peer->type],
 		   nhrp_peer_format(peer, sizeof(tmp), tmp));
 
+	/* Add to list */
+	if (peer->type == NHRP_PEER_TYPE_LOCAL)
+		CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
+	else
+		CIRCLEQ_INSERT_HEAD(&peer->interface->peer_cache,
+				    peer, peer_list);
+
+	/* Start peers life */
 	if (nhrp_running || peer->type == NHRP_PEER_TYPE_LOCAL)
 		nhrp_peer_insert_cb(&peer->timer, 0);
 	else
@@ -1360,7 +1325,21 @@ int nhrp_peer_purge_matching(void *ctx, struct nhrp_peer *peer)
 
 static void nhrp_peer_remove_cb(struct ev_timer *w, int revents)
 {
-	nhrp_peer_remove(container_of(w, struct nhrp_peer, timer));
+	struct nhrp_peer *peer = container_of(w, struct nhrp_peer, timer);
+	struct nhrp_interface *iface = peer->interface;
+	int type;
+
+	peer->flags |= NHRP_PEER_FLAG_REMOVED;
+	if (peer->type == NHRP_PEER_TYPE_LOCAL)
+		CIRCLEQ_REMOVE(&local_peer_cache, peer, peer_list);
+	else
+		CIRCLEQ_REMOVE(&iface->peer_cache, peer, peer_list);
+
+	type = peer->type;
+	nhrp_peer_put(peer);
+
+	if (type == NHRP_PEER_TYPE_LOCAL)
+		forward_local_addresses_changed();
 }
 
 void nhrp_peer_remove(struct nhrp_peer *peer)
@@ -1375,7 +1354,7 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 		   nhrp_peer_format(peer, sizeof(tmp), tmp));
 
 	peer->flags |= NHRP_PEER_FLAG_REMOVED;
-	nhrp_peer_list_put(peer);
+	nhrp_peer_schedule(peer, 0, nhrp_peer_remove_cb);
 }
 
 int nhrp_peer_remove_matching(void *ctx, struct nhrp_peer *peer)
@@ -1463,26 +1442,19 @@ static int enumerate_peer_cache(struct nhrp_peer_list *peer_cache,
 				nhrp_peer_enumerator e, void *ctx,
 				struct nhrp_peer_selector *sel)
 {
-	struct nhrp_peer *p, *kept_curr = NULL, *kept_prev;
+	struct nhrp_peer *p;
 	int rc = 0;
 
 	CIRCLEQ_FOREACH(p, peer_cache, peer_list) {
-		kept_prev = kept_curr;
-		kept_curr = nhrp_peer_list_get(p);
-		if (kept_prev != NULL)
-			nhrp_peer_list_put(kept_prev);
-
 		if (p->flags & NHRP_PEER_FLAG_REMOVED)
 			continue;
 
 		if (sel == NULL || nhrp_peer_match(p, sel)) {
-			rc = e(ctx, kept_curr);
+			rc = e(ctx, p);
 			if (rc != 0)
 				break;
 		}
 	}
-	if (kept_curr != NULL)
-		nhrp_peer_list_put(kept_curr);
 
 	return rc;
 }
