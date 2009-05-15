@@ -3,16 +3,6 @@ Open items that need work on OpenNHRP:
 - config directive to specify the shortcut subnet in addition / instead
   of the automatic route detection and interface specifications
 
-- processing of registration script is currently synchronous; it
-  could cause bad things to happen if too many registration requests
-  got queued (e.g. timers/signals not handled properly). fix the
-  registration script hook to be asynchronous. this implies having
-  a list of pending registration requests.
-
-- Limit the amount of simultanous opennhrp-script spawns. There are
-  situations where a script storm arises: e.g. hub node is rebooted and all
-  leafs try to connect about the same time.
-  
 - "dns-map" directive, to map multiple GRE IP:s based on DNS
    e.g. "dns-map N 172.16.0.0/16 core.foo.example register" or similar
      would automatically get A records for core.foo.example, and

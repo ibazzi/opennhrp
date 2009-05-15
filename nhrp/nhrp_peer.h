@@ -116,7 +116,6 @@ struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface);
 struct nhrp_peer *nhrp_peer_get(struct nhrp_peer *peer);
 int nhrp_peer_put(struct nhrp_peer *peer);
 
-int nhrp_peer_authorize_registration(struct nhrp_peer *peer);
 void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
 void nhrp_peer_purge(struct nhrp_peer *peer);
@@ -128,6 +127,9 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 int nhrp_peer_remove_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_purge_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_set_used_matching(void *ctx, struct nhrp_peer *peer);
+void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
+			  void (*cb)(struct ev_child *, int),
+			  struct ev_child *child);
 
 struct nhrp_peer *nhrp_peer_route_full(struct nhrp_interface *iface,
 				       struct nhrp_address *dest,

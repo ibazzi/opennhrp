@@ -816,6 +816,9 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	else
 		ret = nhrp_packet_forward(packet);
 
+	packet->req_pdu = NULL;
+	packet->req_pdulen = 0;
+
 error:
 	nhrp_packet_put(packet);
 	return ret;

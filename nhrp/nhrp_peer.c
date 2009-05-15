@@ -255,8 +255,9 @@ static char *env(const char *key, const char *value)
 	return buf;
 }
 
-static pid_t nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
-				  void (*cb)(struct ev_child *, int))
+void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
+			  void (*cb)(struct ev_child *, int),
+			  struct ev_child *child)
 {
 	struct nhrp_interface *iface = peer->interface;
 	const char *argv[] = { nhrp_script_file, action, NULL };
@@ -264,6 +265,9 @@ static pid_t nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 	char tmp[64];
 	pid_t pid;
 	int i = 0;
+
+	if (child == NULL)
+		child = &peer->child;
 
 	/* Resolve own NBMA address before forking if required
 	 * since it requires traversing peer cache and can trigger
@@ -273,16 +277,17 @@ static pid_t nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 
 	/* Fork and execute script */
 	pid = fork();
-	if (pid == -1)
-		return -1;
-	if (pid > 0) {
-		if (cb == NULL)
-			return pid;
-
-		ev_child_stop(&peer->child);
-		ev_child_init(&peer->child, cb, pid, 0);
-		ev_child_start(&peer->child);
-		return pid;
+	if (pid == -1) {
+		if (cb != NULL)
+			cb(child, -1);
+		return;
+	} else if (pid > 0) {
+		if (cb != NULL) {
+			ev_child_stop(child);
+			ev_child_init(child, cb, pid, 0);
+			ev_child_start(child);
+		}
+		return;
 	}
 
 	envp[i++] = env("NHRP_TYPE", nhrp_peer_type[peer->type]);
@@ -386,7 +391,7 @@ static int nhrp_peer_routes_up(void *ctx, struct nhrp_peer *peer)
 {
 	if (!(peer->flags & NHRP_PEER_FLAG_UP))
 		nhrp_peer_run_script(peer, "route-up",
-				     nhrp_peer_script_route_up_done);
+				     nhrp_peer_script_route_up_done, NULL);
 
 	return 0;
 }
@@ -540,7 +545,8 @@ static void nhrp_peer_script_peer_up_done(struct ev_child *w, int revents)
 
 static void nhrp_peer_run_up_script(struct nhrp_peer *peer)
 {
-	nhrp_peer_run_script(peer, "peer-up", nhrp_peer_script_peer_up_done);
+	nhrp_peer_run_script(peer, "peer-up",
+			     nhrp_peer_script_peer_up_done, NULL);
 }
 
 static void nhrp_peer_address_query_callback(struct nhrp_address_query *query,
@@ -1119,7 +1125,7 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
 		if ((peer->flags & NHRP_PEER_FLAG_UP) &&
 		    !(peer->flags & NHRP_PEER_FLAG_REPLACED))
-			nhrp_peer_run_script(peer, "route-down", NULL);
+			nhrp_peer_run_script(peer, "route-down", NULL, NULL);
 		break;
 	case NHRP_PEER_TYPE_CACHED:
 	case NHRP_PEER_TYPE_DYNAMIC:
@@ -1135,7 +1141,8 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 
 			/* Execute peer-down */
 			if (peer->flags & NHRP_PEER_FLAG_UP)
-				nhrp_peer_run_script(peer, "peer-down", NULL);
+				nhrp_peer_run_script(peer, "peer-down",
+						     NULL, NULL);
 		}
 
 		/* Fall-through */
@@ -1173,30 +1180,6 @@ int nhrp_peer_put(struct nhrp_peer *peer)
 	return TRUE;
 }
 
-int nhrp_peer_authorize_registration(struct nhrp_peer *peer)
-{
-	char tmp[64];
-	pid_t pid;
-	int status;
-
-	pid = nhrp_peer_run_script(peer, "peer-register", NULL);
-	if (pid < 0)
-		return FALSE;
-
-	if (waitpid(pid, &status, 0) < 0)
-		return FALSE;
-
-	if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
-		return TRUE;
-
-	nhrp_error("[%s] Peer registration script failed with status %x",
-		   nhrp_address_format(&peer->protocol_address,
-				       sizeof(tmp), tmp),
-		   status);
-
-	return FALSE;
-}
-
 static void nhrp_peer_insert_cb(struct ev_timer *w, int revents)
 {
 	struct nhrp_peer *peer = container_of(w, struct nhrp_peer, timer);
@@ -1222,7 +1205,8 @@ static void nhrp_peer_insert_cb(struct ev_timer *w, int revents)
 				    NHRP_PEER_FIND_UP | NHRP_PEER_FIND_EXACT,
 				    NHRP_PEER_TYPEMASK_ADJACENT) != NULL)
 			nhrp_peer_run_script(peer, "route-up",
-					     nhrp_peer_script_route_up_done);
+					     nhrp_peer_script_route_up_done,
+					     NULL);
 
 		nhrp_peer_schedule(peer, peer->expire_time - NHRP_EXPIRY_TIME
 				   - 1 - ev_now(), nhrp_peer_expire_cb);
@@ -1303,7 +1287,7 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 		peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
 		nhrp_peer_cancel_async(peer);
 		nhrp_peer_run_script(peer, "peer-down",
-				     nhrp_peer_script_peer_down_done);
+				     nhrp_peer_script_peer_down_done, NULL);
 		nhrp_address_set_type(&peer->my_nbma_address, PF_UNSPEC);
 		break;
 	default:
