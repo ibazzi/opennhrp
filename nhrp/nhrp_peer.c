@@ -1249,33 +1249,33 @@ static void nhrp_peer_reinsert(struct nhrp_peer *peer, int type)
 	nhrp_peer_insert_cb(&peer->timer, 0);
 }
 
-void nhrp_peer_insert(struct nhrp_peer *ins)
+void nhrp_peer_insert(struct nhrp_peer *peer)
 {
 	struct nhrp_peer_selector sel;
-	struct nhrp_peer *peer;
 	char tmp[NHRP_PEER_FORMAT_LEN];
 
 	/* First, prune all duplicates */
 	memset(&sel, 0, sizeof(sel));
-	if (ins->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
+	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
 		/* remove all existing shortcuts with same nexthop */
 		sel.flags = NHRP_PEER_FIND_SUBNET;
-		sel.next_hop_address = ins->next_hop_address;
+		sel.next_hop_address = peer->next_hop_address;
 	} else {
 		/* remove exact nbma protocol address matches */
 		sel.flags = NHRP_PEER_FIND_EXACT;
 	}
 	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
-	sel.interface = ins->interface;
-	sel.protocol_address = ins->protocol_address;
-	sel.prefix_length = ins->prefix_length;
+	sel.interface = peer->interface;
+	sel.protocol_address = peer->protocol_address;
+	sel.prefix_length = peer->prefix_length;
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 
+	/* Keep a reference as long as we are on the list */
+	peer = nhrp_peer_get(peer);
 	nhrp_debug("Adding %s %s",
 		   nhrp_peer_type[peer->type],
 		   nhrp_peer_format(peer, sizeof(tmp), tmp));
 
-	/* Add to list */
 	if (peer->type == NHRP_PEER_TYPE_LOCAL)
 		CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
 	else
