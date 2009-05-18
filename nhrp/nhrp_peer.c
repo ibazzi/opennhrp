@@ -1355,7 +1355,7 @@ int nhrp_peer_remove_matching(void *ctx, struct nhrp_peer *peer)
 
 int nhrp_peer_set_used_matching(void *ctx, struct nhrp_peer *peer)
 {
-	int used = (int) ctx;
+	int used = (int) (intptr_t) ctx;
 
 	if (used) {
 		peer->flags |= NHRP_PEER_FLAG_USED;

@@ -406,7 +406,8 @@ static void netlink_neigh_update(struct nlmsghdr *msg)
 	if (msg->nlmsg_type == RTM_NEWNEIGH && (ndm->ndm_state & NUD_REACHABLE))
 		used = TRUE;
 
-	nhrp_peer_foreach(nhrp_peer_set_used_matching, (void*) used, &sel);
+	nhrp_peer_foreach(nhrp_peer_set_used_matching,
+			  (void*) (intptr_t) used, &sel);
 }
 
 static void netlink_link_new(struct nlmsghdr *msg)
