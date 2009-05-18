@@ -28,8 +28,6 @@ struct nhrp_pending_request {
 	struct nhrp_payload *payload;
 	struct nhrp_peer *peer, *rpeer;
 	ev_tstamp now;
-	struct ev_timer timeout;
-	struct ev_child child;
 };
 LIST_HEAD(nhrp_pending_request_head, nhrp_pending_request);
 
@@ -50,7 +48,6 @@ nhrp_server_record_request(struct nhrp_packet *packet)
 		LIST_INSERT_HEAD(&pending_requests, pr, request_list);
 		pr->packet = nhrp_packet_get(packet);
 		pr->now = ev_now();
-		ev_child_init(&pr->child, NULL, 0, 0);
 	}
 	return pr;
 }
@@ -58,7 +55,6 @@ nhrp_server_record_request(struct nhrp_packet *packet)
 static void nhrp_server_finish_request(struct nhrp_pending_request *pr)
 {
 	LIST_REMOVE(pr, request_list);
-	ev_child_stop(&pr->child);
 	if (pr->rpeer != NULL)
 		nhrp_peer_put(pr->rpeer);
 	if (pr->packet != NULL)
@@ -197,22 +193,18 @@ static void nhrp_server_finish_reg(struct nhrp_pending_request *pr)
 	nhrp_server_finish_request(pr);
 }
 
-static void nhrp_server_finish_cie_reg_cb(struct ev_child *w, int revents)
+static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e, int revents)
 {
-	struct nhrp_pending_request *pr =
-		container_of(w, struct nhrp_pending_request, child);
+	struct nhrp_peer *peer = nhrp_peer_from_event(e, revents);
+	struct nhrp_pending_request *pr = peer->request;
 	struct nhrp_packet *packet = pr->packet;
-	struct nhrp_peer *peer = pr->peer;
 	struct nhrp_cie *cie = pr->cie;
 	struct nhrp_peer_selector sel;
-	char tmp[64];
-	int status = -1;
+	char tmp[64], reason[32];
 
-	if (revents)
-		status = w->rstatus;
-
+	peer->request = NULL;
 	nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp);
-	if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+	if (revents != 0 && nhrp_peer_event_ok(e, revents)) {
 		nhrp_debug("[%s] Peer registration authorized", tmp);
 
 		/* Remove all old stuff and accept registration */
@@ -226,14 +218,21 @@ static void nhrp_server_finish_cie_reg_cb(struct ev_child *w, int revents)
 
 		cie->hdr.code = NHRP_CODE_SUCCESS;
 		nhrp_peer_insert(peer);
-		if (pr->rpeer == NULL)
-			pr->rpeer = nhrp_peer_get(peer);
-	} else if (status != -1) {
-		nhrp_error("[%s] Peer registration script failed: code %x",
-			   tmp, status);
+	} else {
+		if (revents == 0)
+			nhrp_error("[%s] Peer registration failed: "
+				   "static entry exists", tmp);
+		else
+			nhrp_error("[%s] Peer registration failed: %s",
+				   tmp,
+				   nhrp_peer_event_reason(e, revents,
+							  sizeof(reason),
+							  reason));
 		cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
 		peer->flags |= NHRP_PEER_FLAG_REPLACED;
 	}
+	if (pr->rpeer == NULL)
+		pr->rpeer = nhrp_peer_get(peer);
 	nhrp_peer_put(peer);
 	pr->peer = NULL;
 
@@ -257,8 +256,14 @@ static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr)
 
 	peer = nhrp_peer_alloc(packet->src_iface);
 	if (peer == NULL) {
+		/* Mark all remaining registration requests as failed
+		 * due to lack of memory, and send reply */
+		for (; cie != TAILQ_LAST(&pr->payload->u.cie_list_head,
+					 nhrp_cie_list_head);
+		     cie = TAILQ_NEXT(cie, cie_list_entry))
+			cie->hdr.code = NHRP_CODE_INSUFFICIENT_RESOURCES;
 		cie->hdr.code = NHRP_CODE_INSUFFICIENT_RESOURCES;
-		nhrp_server_finish_cie_reg_cb(&pr->child, 0);
+		nhrp_server_finish_reg(pr);
 		return;
 	}
 
@@ -293,17 +298,18 @@ static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr)
 	sel.protocol_address = peer->protocol_address;
 	sel.prefix_length = peer->prefix_length;
 
+	/* Link the created peer and pending request structures */
+	pr->peer = peer;
+	peer->request = pr;
+
 	/* Check that there is no conflicting peers */
 	if (nhrp_peer_foreach(find_one, peer, &sel) != 0) {
 		cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
 		peer->flags |= NHRP_PEER_FLAG_REPLACED;
-		nhrp_peer_put(peer);
-		nhrp_server_finish_cie_reg_cb(&pr->child, 0);
+		nhrp_server_finish_cie_reg_cb(&peer->child, 0);
 	} else {
-		pr->peer = peer;
 		nhrp_peer_run_script(peer, "peer-register",
-				     nhrp_server_finish_cie_reg_cb,
-				     &pr->child);
+				     nhrp_server_finish_cie_reg_cb);
 	}
 }
 

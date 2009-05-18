@@ -70,13 +70,21 @@ struct nhrp_interface;
 struct nhrp_packet;
 struct nhrp_cie_list_head;
 
+union __attribute__ ((__transparent_union__)) nhrp_peer_event {
+	struct ev_timer *timer;
+	struct ev_child *child;
+};
+
 struct nhrp_peer {
 	unsigned int ref;
 	unsigned int flags;
 
 	CIRCLEQ_ENTRY(nhrp_peer) peer_list;
 	struct nhrp_interface *interface;
-	struct nhrp_packet *queued_packet;
+	union {
+		struct nhrp_packet *queued_packet;
+		struct nhrp_pending_request *request;
+	};
 
 	struct ev_timer timer;
 	struct ev_child child;
@@ -127,9 +135,13 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 int nhrp_peer_remove_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_purge_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_set_used_matching(void *ctx, struct nhrp_peer *peer);
+
+int nhrp_peer_event_ok(union nhrp_peer_event e, int revents);
+char *nhrp_peer_event_reason(union nhrp_peer_event e, int revents,
+			     size_t buflen, char *buf);
+struct nhrp_peer *nhrp_peer_from_event(union nhrp_peer_event e, int revents);
 void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
-			  void (*cb)(struct ev_child *, int),
-			  struct ev_child *child);
+			  void (*cb)(union nhrp_peer_event, int));
 
 struct nhrp_peer *nhrp_peer_route_full(struct nhrp_interface *iface,
 				       struct nhrp_address *dest,
