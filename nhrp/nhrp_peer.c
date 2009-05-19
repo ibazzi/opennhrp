@@ -1507,6 +1507,9 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 				     nhrp_peer_script_peer_down_done);
 		nhrp_address_set_type(&peer->my_nbma_address, PF_UNSPEC);
 		break;
+	case NHRP_PEER_TYPE_STATIC_DNS:
+		nhrp_peer_schedule(peer, 0, nhrp_peer_dnsmap_restart_cb);
+		break;
 	default:
 		nhrp_peer_remove(peer);
 		break;
