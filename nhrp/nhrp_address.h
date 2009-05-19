@@ -23,7 +23,8 @@ struct nhrp_address;
 struct nhrp_address_query;
 
 typedef void (*nhrp_address_query_callback)(struct nhrp_address_query *query,
-					    struct nhrp_address *result);
+					    int num_addr,
+					    struct nhrp_address *addrs);
 
 struct nhrp_address {
 	uint16_t type;
@@ -42,20 +43,30 @@ uint16_t nhrp_afnum_from_pf(uint16_t pf);
 uint16_t nhrp_pf_from_afnum(uint16_t afnum);
 
 int nhrp_address_init(void);
-int nhrp_address_parse_packet(uint16_t protocol, size_t len, uint8_t *packet, struct nhrp_address *src, struct nhrp_address *dst);
-int nhrp_address_parse(const char *string, struct nhrp_address *addr, uint8_t *prefix_len);
+int nhrp_address_parse_packet(uint16_t protocol, size_t len, uint8_t *packet,
+			      struct nhrp_address *src,
+			      struct nhrp_address *dst);
+int nhrp_address_parse(const char *string, struct nhrp_address *addr,
+		       uint8_t *prefix_len);
 void nhrp_address_resolve(struct nhrp_address_query *query,
 			  const char *hostname,
 			  nhrp_address_query_callback callback);
 void nhrp_address_resolve_cancel(struct nhrp_address_query *query);
 void nhrp_address_set_type(struct nhrp_address *addr, uint16_t type);
-int nhrp_address_set(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes);
-int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type, uint8_t len, uint8_t *bytes, uint8_t sublen, uint8_t *subbytes);
+int nhrp_address_set(struct nhrp_address *addr, uint16_t type,
+		     uint8_t len, uint8_t *bytes);
+int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type,
+			  uint8_t len, uint8_t *bytes,
+			  uint8_t sublen, uint8_t *subbytes);
 int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b);
-int nhrp_address_prefix_cmp(struct nhrp_address *a, struct nhrp_address *b, int prefix);
+int nhrp_address_prefix_cmp(struct nhrp_address *a, struct nhrp_address *b,
+			    int prefix);
 int nhrp_address_is_multicast(struct nhrp_address *addr);
 unsigned int nhrp_address_hash(struct nhrp_address *addr);
-void nhrp_address_mask(struct nhrp_address *addr, int prefix);
+void nhrp_address_set_network(struct nhrp_address *addr, int prefix);
+void nhrp_address_set_broadcast(struct nhrp_address *addr, int prefix);
+int nhrp_address_is_network(struct nhrp_address *addr, int prefix);
+int nhrp_address_is_broadcast(struct nhrp_address *addr, int prefix);
 const char *nhrp_address_format(struct nhrp_address *addr,
 				size_t buflen, char *buffer);
 

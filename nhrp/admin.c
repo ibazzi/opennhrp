@@ -98,10 +98,15 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 
 	if (peer->next_hop_address.type != PF_UNSPEC) {
 		i += snprintf(&buf[i], len - i, "%s: %s\n",
-			peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ?
-			"Next-hop-Address" : "NBMA-Address",
+			peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ? "Next-hop-Address" :
+			peer->type == NHRP_PEER_TYPE_LOCAL ? "Alias-Address" :
+			"NBMA-Address",
 			nhrp_address_format(&peer->next_hop_address,
 					    sizeof(tmp), tmp));
+	}
+	if (peer->nbma_hostname) {
+		i += snprintf(&buf[i], len - i, "Hostname: %s\n",
+			      peer->nbma_hostname);
 	}
 	if (peer->next_hop_nat_oa.type != PF_UNSPEC) {
 		i += snprintf(&buf[i], len - i, "NBMA-NAT-OA-Address: %s\n",

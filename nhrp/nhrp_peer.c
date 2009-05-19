@@ -35,8 +35,10 @@ const char * const nhrp_peer_type[] = {
 	[NHRP_PEER_TYPE_CACHED]		= "cached",
 	[NHRP_PEER_TYPE_CACHED_ROUTE]	= "route",
 	[NHRP_PEER_TYPE_DYNAMIC]	= "dynamic",
-	[NHRP_PEER_TYPE_LOCAL]		= "local",
+	[NHRP_PEER_TYPE_DYNAMIC_NHS]	= "dynamic-nhs",
 	[NHRP_PEER_TYPE_STATIC]		= "static",
+	[NHRP_PEER_TYPE_STATIC_DNS]	= "dynamic-map",
+	[NHRP_PEER_TYPE_LOCAL]		= "local",
 };
 
 static struct nhrp_peer_list local_peer_cache =
@@ -55,10 +57,10 @@ static struct nhrp_peer_list local_peer_cache =
  * NEGATIVE:
  * 1. nhrp_peer_insert_cb: schedule task remove
  *
- * CACHED, STATIC, DYNAMIC:
+ * CACHED, STATIC, DYNAMIC, DYNAMIC_NHS:
  * 1. nhrp_peer_insert_cb: calls nhrp_peer_restart_cb
  * 2. nhrp_peer_restart_cb: resolves dns name, or calls nhrp_run_up_script()
- * 3. nhrp_peer_address_query_callback: calls nhrp_peer_run_up_script()
+ * 3. nhrp_peer_address_query_cb: calls nhrp_peer_run_up_script()
  * 4. nhrp_peer_run_up_script: spawns script, or goes to nhrp_peer_lower_is_up()
  * 5. nhrp_peer_script_peer_up_done: calls nhrp_peer_lower_is_up()
  * 6. nhrp_peer_lower_is_up: sends registration, or goes to nhrp_peer_is_up()
@@ -83,12 +85,19 @@ static struct nhrp_peer_list local_peer_cache =
  * CACHED_ROUTE:
  * 1. nhrp_peer_insert_cb: spawns route-up script, or schedules EXPIRE
  *
+ * STATIC_DNS:
+ * 1. nhrp_peer_insert_cb: calls nhrp_peer_dnsmap_restart_cb
+ * 2. nhrp_peer_dnsmap_restart_cb: resolves dns name
+ * 3. nhrp_peer_dnsmap_query_cb: create new peer entries,
+ *      renew existing and delete expired, schedule restart
+ *
  * LOCAL:
  * nothing, only netlink code modifies these
  */
 
 static void nhrp_peer_reinsert(struct nhrp_peer *peer, int type);
 static void nhrp_peer_restart_cb(struct ev_timer *w, int revents);
+static void nhrp_peer_dnsmap_restart_cb(struct ev_timer *w, int revents);
 static void nhrp_peer_remove_cb(struct ev_timer *w, int revents);
 static void nhrp_peer_send_resolve(struct nhrp_peer *peer);
 static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents);
@@ -168,19 +177,17 @@ static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len,
 
 	if (peer->next_hop_address.type != PF_UNSPEC) {
 		i += snprintf(&buf[i], len - i, " %s",
-			peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ?
-			"nexthop" : "nbma");
+			peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ? "nexthop" :
+			peer->type == NHRP_PEER_TYPE_LOCAL ? "alias" :
+			"nbma");
 
-		if (peer->nbma_hostname != NULL) {
-			i += snprintf(&buf[i], len - i, " %s[%s]",
-				peer->nbma_hostname,
-				nhrp_address_format(&peer->next_hop_address,
-						    sizeof(tmp), tmp));
-		} else {
-			i += snprintf(&buf[i], len - i, " %s",
-				nhrp_address_format(&peer->next_hop_address,
-						    sizeof(tmp), tmp));
-		}
+		i += snprintf(&buf[i], len - i, " %s",
+			nhrp_address_format(&peer->next_hop_address,
+			sizeof(tmp), tmp));
+	}
+	if (peer->nbma_hostname != NULL) {
+		i += snprintf(&buf[i], len - i, " hostname %s",
+			peer->nbma_hostname);
 	}
 	if (peer->next_hop_nat_oa.type != PF_UNSPEC) {
 		i += snprintf(&buf[i], len - i, " nbma-nat-oa %s",
@@ -367,6 +374,7 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 	case NHRP_PEER_TYPE_LOCAL:
 	case NHRP_PEER_TYPE_STATIC:
 	case NHRP_PEER_TYPE_DYNAMIC:
+	case NHRP_PEER_TYPE_DYNAMIC_NHS:
 		envp[i++] = env("NHRP_DESTNBMA",
 			nhrp_address_format(&peer->next_hop_address,
 					    sizeof(tmp), tmp));
@@ -384,6 +392,8 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 			nhrp_address_format(&peer->next_hop_address,
 					    sizeof(tmp), tmp));
 		break;
+	default:
+		NHRP_BUG_ON("invalid peer type");
 	}
 	envp[i++] = env("NHRP_INTERFACE", peer->interface->name);
 	envp[i++] = NULL;
@@ -412,10 +422,15 @@ static void nhrp_peer_schedule(struct nhrp_peer *peer, ev_tstamp timeout,
 
 static void nhrp_peer_restart_error(struct nhrp_peer *peer)
 {
-	if (peer->type == NHRP_PEER_TYPE_STATIC)
+	switch (peer->type) {
+	case NHRP_PEER_TYPE_STATIC:
+	case NHRP_PEER_TYPE_DYNAMIC_NHS:
 		nhrp_peer_schedule(peer, 10, nhrp_peer_restart_cb);
-	else
+		break;
+	default:
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
+		break;
+	}
 }
 
 static void nhrp_peer_script_route_up_done(union nhrp_peer_event e, int revents)
@@ -551,11 +566,15 @@ static void nhrp_peer_is_up(struct nhrp_peer *peer)
 			nhrp_peer_expire_cb);
 		break;
 	case NHRP_PEER_TYPE_STATIC:
+	case NHRP_PEER_TYPE_DYNAMIC_NHS:
 		if (peer->flags & NHRP_PEER_FLAG_REGISTER) {
 			nhrp_peer_schedule(
 				peer, iface->holding_time - NHRP_EXPIRY_TIME,
 				nhrp_peer_send_register_cb);
 		}
+		break;
+	default:
+		NHRP_BUG_ON("invalid peer type");
 		break;
 	}
 }
@@ -600,24 +619,24 @@ static void nhrp_peer_run_up_script(struct nhrp_peer *peer)
 			     nhrp_peer_script_peer_up_done);
 }
 
-static void nhrp_peer_address_query_callback(struct nhrp_address_query *query,
-					     struct nhrp_address *result)
+static void nhrp_peer_address_query_cb(struct nhrp_address_query *query,
+				       int num_addr, struct nhrp_address *addrs)
 {
 	struct nhrp_peer *peer = container_of(query, struct nhrp_peer,
 					      address_query);
 	char host[64];
 
-	if (result->type != AF_UNSPEC) {
-		nhrp_info("Resolved '%s' as %s",
-			  peer->nbma_hostname,
-			  nhrp_address_format(result, sizeof(host), host));
-		peer->next_hop_address = *result;
-		peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
-		nhrp_peer_run_up_script(peer);
-	} else {
+	if (num_addr <= 0) {
 		nhrp_error("Failed to resolve '%s'", peer->nbma_hostname);
 		nhrp_peer_restart_error(peer);
 	}
+
+	nhrp_info("Resolved '%s' as %s",
+		  peer->nbma_hostname,
+		  nhrp_address_format(&addrs[0], sizeof(host), host));
+	peer->next_hop_address = addrs[0];
+	peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
+	nhrp_peer_run_up_script(peer);
 }
 
 static void nhrp_peer_restart_cb(struct ev_timer *w, int revents)
@@ -627,7 +646,7 @@ static void nhrp_peer_restart_cb(struct ev_timer *w, int revents)
 	if (peer->nbma_hostname != NULL) {
 		nhrp_address_resolve(&peer->address_query,
 				     peer->nbma_hostname,
-				     nhrp_peer_address_query_callback);
+				     nhrp_peer_address_query_cb);
 	} else {
 		nhrp_peer_resolve_nbma(peer);
 
@@ -723,6 +742,42 @@ static int nhrp_add_local_route_cie(void *ctx, struct nhrp_peer *route)
 	return 0;
 }
 
+static int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
+				  struct nhrp_address *newaddr)
+{
+	char tmp[32], tmp2[32];
+
+	if (nhrp_address_cmp(&peer->protocol_address, newaddr) == 0)
+		return TRUE;
+
+	if (peer->type != NHRP_PEER_TYPE_DYNAMIC_NHS ||
+	    !nhrp_address_is_network(&peer->protocol_address,
+				     peer->prefix_length)) {
+		nhrp_error("Unexpected NHS protocol address change %s -> %s",
+			   nhrp_address_format(&peer->protocol_address,
+					       sizeof(tmp2), tmp2),
+			   nhrp_address_format(newaddr, sizeof(tmp), tmp));
+		return FALSE;
+	}
+
+	if (nhrp_address_prefix_cmp(&peer->protocol_address, newaddr,
+				    peer->prefix_length) != 0) {
+		nhrp_error("Protocol address change to %s is not within %s/%d",
+			   nhrp_address_format(newaddr, sizeof(tmp), tmp),
+			   nhrp_address_format(&peer->protocol_address,
+					       sizeof(tmp2), tmp2),
+			   peer->prefix_length);
+		return FALSE;
+	}
+
+	/* Refresh server's protocol address */
+	/* FIXME: should delete overlapping peers, or reject this if there's
+	 * fixed entries for this protocol address */
+	peer->protocol_address = *newaddr;
+
+	return TRUE;
+}
+
 static void nhrp_peer_handle_registration_reply(void *ctx,
 						struct nhrp_packet *reply)
 {
@@ -750,6 +805,12 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
 		} else {
 			nhrp_peer_restart_error(peer);
 		}
+		goto ret;
+	}
+
+	/* Check servers protocol address */
+	if (!nhrp_peer_discover_nhs(peer, &reply->dst_protocol_address)) {
+		nhrp_peer_restart_error(peer);
 		goto ret;
 	}
 
@@ -869,6 +930,19 @@ static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents)
 			nhrp_address_hash(&peer->interface->protocol_address);
 	}
 	packet->dst_protocol_address = peer->protocol_address;
+
+	if (peer->type == NHRP_PEER_TYPE_DYNAMIC_NHS &&
+	    nhrp_address_is_network(&peer->protocol_address,
+				    peer->prefix_length)) {
+		/* We are not yet sure of the protocol address of the NHS -
+		 * send registration to the broadcast address with one hop
+		 * limit. Except the NHS to reply with it's real protocol
+		 * address. */
+		nhrp_address_set_broadcast(&packet->dst_protocol_address,
+					   peer->prefix_length);
+		packet->hdr.hop_count = 1;
+	}
+
 
 	/* Payload CIE */
 	cie = nhrp_cie_alloc();
@@ -1012,7 +1086,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 		if (natoacie != NULL)
 			peer->next_hop_nat_oa = natoacie->nbma_address;
 		peer->expire_time = ev_now() + ntohs(cie->hdr.holding_time);
-		nhrp_address_mask(&peer->protocol_address, peer->prefix_length);
+		nhrp_address_set_network(&peer->protocol_address,
+					 peer->prefix_length);
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_CACHED);
 		goto ret;
 	}
@@ -1064,7 +1139,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 	np->prefix_length = cie->hdr.prefix_length;
 	np->next_hop_address = cie->protocol_address;
 	np->expire_time = ev_now() + ntohs(cie->hdr.holding_time);
-	nhrp_address_mask(&np->protocol_address, np->prefix_length);
+	nhrp_address_set_network(&np->protocol_address, np->prefix_length);
 	nhrp_peer_insert(np);
 	nhrp_peer_put(np);
 
@@ -1172,6 +1247,11 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 
 	nhrp_peer_cancel_async(peer);
 
+	if (peer->parent != NULL) {
+		nhrp_peer_put(peer->parent);
+		peer->parent = NULL;
+	}
+
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
 		if ((peer->flags & NHRP_PEER_FLAG_UP) &&
@@ -1181,6 +1261,7 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 	case NHRP_PEER_TYPE_CACHED:
 	case NHRP_PEER_TYPE_DYNAMIC:
 	case NHRP_PEER_TYPE_STATIC:
+	case NHRP_PEER_TYPE_DYNAMIC_NHS:
 		if (!(peer->flags & NHRP_PEER_FLAG_REPLACED)) {
 			/* Remove cached routes using this entry as next-hop */
 			memset(&sel, 0, sizeof(sel));
@@ -1204,6 +1285,9 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 				kernel_inject_neighbor(&peer->protocol_address,
 						       NULL, peer->interface);
 		}
+		break;
+	default:
+		NHRP_BUG_ON("invalid peer type");
 		break;
 	}
 
@@ -1230,6 +1314,82 @@ int nhrp_peer_put(struct nhrp_peer *peer)
 	return TRUE;
 }
 
+static int nhrp_peer_mark_matching(void *ctx, struct nhrp_peer *peer)
+{
+	peer->flags |= NHRP_PEER_FLAG_MARK;
+	return 0;
+}
+
+static int nhrp_peer_renew_nhs_matching(void *ctx, struct nhrp_peer *peer)
+{
+	peer->flags &= NHRP_PEER_FLAG_MARK;
+	return 1;
+}
+
+static void nhrp_peer_dnsmap_query_cb(struct nhrp_address_query *query,
+				      int num_addr, struct nhrp_address *addrs)
+{
+	struct nhrp_peer *np, *peer =
+		container_of(query, struct nhrp_peer, address_query);
+	struct nhrp_peer_selector sel;
+	int i;
+
+	if (num_addr < 0) {
+		nhrp_error("Failed to resolve '%s'", peer->nbma_hostname);
+		nhrp_peer_schedule(peer, 10, nhrp_peer_dnsmap_restart_cb);
+		return;
+	}
+
+	if (num_addr > 0) {
+		/* Refresh protocol */
+		peer->afnum = nhrp_afnum_from_pf(addrs[0].type);
+	}
+
+	/* Mark existing dynamic nhs entries as expired */
+	memset(&sel, 0, sizeof(sel));
+	sel.type_mask = BIT(NHRP_PEER_TYPE_DYNAMIC_NHS);
+	sel.interface = peer->interface;
+	sel.parent = peer;
+	nhrp_peer_foreach(nhrp_peer_mark_matching, NULL, &sel);
+
+	for (i = 0; i < num_addr; i++) {
+		/* If this NBMA exists as dynamic NHS, mark it ok. */
+		sel.next_hop_address = addrs[i];
+		if (nhrp_peer_foreach(nhrp_peer_renew_nhs_matching,
+				      NULL, &sel) != 0)
+			continue;
+
+		/* New NHS, create a peer entry */
+		np = nhrp_peer_alloc(peer->interface);
+		np->type = NHRP_PEER_TYPE_DYNAMIC_NHS;
+		np->flags |= NHRP_PEER_FLAG_REGISTER;
+		np->afnum = peer->afnum;
+		np->protocol_type = peer->protocol_type;
+		np->protocol_address = peer->protocol_address;
+		np->prefix_length = peer->prefix_length;
+		np->next_hop_address = addrs[i];
+		np->parent = nhrp_peer_get(peer);
+		nhrp_address_set_network(&np->protocol_address,
+					 np->prefix_length);
+		nhrp_peer_insert(np);
+		nhrp_peer_put(np);
+	}
+
+	/* Delete all dynamic nhs:s that were not in the DNS reply */
+	nhrp_address_set_type(&sel.next_hop_address, AF_UNSPEC);
+	sel.flags = NHRP_PEER_FIND_MARK;
+	nhrp_peer_foreach(nhrp_peer_purge_matching, NULL, &sel);
+}
+
+static void nhrp_peer_dnsmap_restart_cb(struct ev_timer *w, int revents)
+{
+	struct nhrp_peer *peer = container_of(w, struct nhrp_peer, timer);
+
+	NHRP_BUG_ON(peer->nbma_hostname == NULL);
+	nhrp_address_resolve(&peer->address_query, peer->nbma_hostname,
+			     nhrp_peer_dnsmap_query_cb);
+}
+
 static void nhrp_peer_insert_cb(struct ev_timer *w, int revents)
 {
 	struct nhrp_peer *peer = container_of(w, struct nhrp_peer, timer);
@@ -1246,7 +1406,11 @@ static void nhrp_peer_insert_cb(struct ev_timer *w, int revents)
 	case NHRP_PEER_TYPE_CACHED:
 	case NHRP_PEER_TYPE_DYNAMIC:
 	case NHRP_PEER_TYPE_STATIC:
+	case NHRP_PEER_TYPE_DYNAMIC_NHS:
 		nhrp_peer_restart_cb(w, 0);
+		break;
+	case NHRP_PEER_TYPE_STATIC_DNS:
+		nhrp_peer_dnsmap_restart_cb(w, 0);
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
 		if (!(peer->flags & NHRP_PEER_FLAG_UP) &&
@@ -1268,6 +1432,9 @@ static void nhrp_peer_insert_cb(struct ev_timer *w, int revents)
 					       NULL, peer->interface);
 		nhrp_peer_schedule(peer, NHRP_NEGATIVE_CACHE_TIME,
 				   nhrp_peer_remove_cb);
+		break;
+	default:
+		NHRP_BUG_ON("invalid peer type");
 		break;
 	}
 }
@@ -1425,9 +1592,17 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 	    !(p->flags & NHRP_PEER_FLAG_UP))
 		return FALSE;
 
+	if ((sel->flags & NHRP_PEER_FIND_MARK) &&
+	   !(p->flags & NHRP_PEER_FLAG_MARK))
+		return FALSE;
+
 	if (sel->interface != NULL &&
 	    p->type != NHRP_PEER_TYPE_LOCAL &&
 	    p->interface != sel->interface)
+		return FALSE;
+
+	if (sel->parent != NULL &&
+	    p->parent != sel->parent)
 		return FALSE;
 
 	if (sel->protocol_address.type != PF_UNSPEC) {

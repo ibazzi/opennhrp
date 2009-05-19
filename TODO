@@ -3,13 +3,6 @@ Open items that need work on OpenNHRP:
 - config directive to specify the shortcut subnet in addition / instead
   of the automatic route detection and interface specifications
 
-- "dns-map" directive, to map multiple GRE IP:s based on DNS
-   e.g. "dns-map N 172.16.0.0/16 core.foo.example register" or similar
-     would automatically get A records for core.foo.example, and
-     connect to N of them. the actual private IP of a public IP could
-     be figured out using opennhrp-script, and parse IPsec certificate,
-     or get corresponding TXT records
-
 - Proper handling of unique bit. Currently registration of unique address
   overwrites previous registration, but this against RFC.
 

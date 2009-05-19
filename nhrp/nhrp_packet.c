@@ -712,6 +712,7 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 {
 	struct nhrp_packet *req;
+	char tmp[64], tmp2[64], tmp3[64];
 
 	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY) {
 		TAILQ_FOREACH(req, &pending_requests, request_list_entry) {
@@ -732,14 +733,24 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 		}
 
 		/* Reply to unsent request? */
-		nhrp_packet_send_error(packet, NHRP_ERROR_INVALID_RESOLUTION_REPLY, 0);
+		nhrp_info("Packet type %d from nbma src %s, proto src %s, "
+			  "proto dst %s dropped: no matching request",
+			  packet->hdr.type,
+			  nhrp_address_format(&packet->src_nbma_address,
+					      sizeof(tmp), tmp),
+			  nhrp_address_format(&packet->src_protocol_address,
+					      sizeof(tmp2), tmp2),
+			  nhrp_address_format(&packet->dst_protocol_address,
+					      sizeof(tmp3), tmp3));
+
+		nhrp_packet_send_error(
+			packet, NHRP_ERROR_INVALID_RESOLUTION_REPLY, 0);
 		return TRUE;
 	}
 
 	if (packet_types[packet->hdr.type].handler == NULL) {
-		char tmp[64], tmp2[64], tmp3[64];
-
-		nhrp_info("Packet type %d from nbma src %s, proto src %s, proto dst %s not supported",
+		nhrp_info("Packet type %d from nbma src %s, proto src %s, "
+			  "proto dst %s not supported",
 			  packet->hdr.type,
 			  nhrp_address_format(&packet->src_nbma_address,
 					      sizeof(tmp), tmp),
@@ -748,6 +759,13 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 			  nhrp_address_format(&packet->dst_protocol_address,
 					      sizeof(tmp3), tmp3));
 		return FALSE;
+	}
+
+	if (packet->dst_peer->next_hop_address.type != PF_UNSPEC) {
+		/* Broadcast destinations gets rewritten as if destinied to
+		 * our local address */
+		packet->dst_protocol_address =
+			packet->dst_peer->next_hop_address;
 	}
 
 	return packet_types[packet->hdr.type].handler(packet);
@@ -1050,6 +1068,8 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 		packet->src_protocol_address = packet->dst_iface->protocol_address;
 	if (packet->hdr.afnum == AFNUM_RESERVED)
 		packet->hdr.afnum = packet->dst_peer->afnum;
+	if (packet->hdr.protocol_type == 0)
+		packet->hdr.protocol_type = packet->dst_peer->protocol_type;
 	if (packet->hdr.hop_count == 0)
 		packet->hdr.hop_count = 16;
 

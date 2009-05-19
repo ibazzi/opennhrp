@@ -25,13 +25,16 @@
 #define NHRP_PEER_TYPE_CACHED		0x02	/* Received/relayed resolution reply */
 #define NHRP_PEER_TYPE_CACHED_ROUTE	0x03	/* Received/relayed resolution for route */
 #define NHRP_PEER_TYPE_DYNAMIC		0x04	/* NHC registration */
-#define NHRP_PEER_TYPE_STATIC		0x05	/* Static mapping from config file */
-#define NHRP_PEER_TYPE_LOCAL		0x06	/* Learned from interface config */
-#define NHRP_PEER_TYPE_MAX		0x07
+#define NHRP_PEER_TYPE_DYNAMIC_NHS	0x05	/* Dynamic NHS from dns-map */
+#define NHRP_PEER_TYPE_STATIC		0x06	/* Static mapping from config file */
+#define NHRP_PEER_TYPE_STATIC_DNS	0x07	/* Static dns-map from config file */
+#define NHRP_PEER_TYPE_LOCAL		0x08	/* Learned from interface config */
+#define NHRP_PEER_TYPE_MAX		(NHRP_PEER_TYPE_LOCAL+1)
 
 #define NHRP_PEER_TYPEMASK_ADJACENT \
 	(BIT(NHRP_PEER_TYPE_CACHED) | \
 	 BIT(NHRP_PEER_TYPE_DYNAMIC) | \
+	 BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) | \
 	 BIT(NHRP_PEER_TYPE_STATIC) | \
 	 BIT(NHRP_PEER_TYPE_LOCAL))
 
@@ -44,7 +47,9 @@
 
 #define NHRP_PEER_TYPEMASK_PURGEABLE \
 	(NHRP_PEER_TYPEMASK_REMOVABLE | \
-	 BIT(NHRP_PEER_TYPE_STATIC))
+	 BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) | \
+	 BIT(NHRP_PEER_TYPE_STATIC) | \
+	 BIT(NHRP_PEER_TYPE_STATIC_DNS))
 
 #define NHRP_PEER_TYPEMASK_ALL \
 	(NHRP_PEER_TYPEMASK_PURGEABLE | \
@@ -57,12 +62,14 @@
 #define NHRP_PEER_FLAG_LOWER_UP		0x20	/* Script executed succesfully */
 #define NHRP_PEER_FLAG_UP		0x40	/* Can send all packets (registration ok) */
 #define NHRP_PEER_FLAG_REPLACED		0x80	/* Peer has been replaced */
-#define NHRP_PEER_FLAG_REMOVED		0x100	/* Deleted, but removed from cache yet */
+#define NHRP_PEER_FLAG_REMOVED		0x100	/* Deleted, but not removed from cache yet */
+#define NHRP_PEER_FLAG_MARK		0x200	/* Can be used to temporarily mark peers */
 
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02
 #define NHRP_PEER_FIND_SUBNET		0x04
 #define NHRP_PEER_FIND_UP		0x10
+#define NHRP_PEER_FIND_MARK		0x20
 
 CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
 
@@ -81,6 +88,7 @@ struct nhrp_peer {
 
 	CIRCLEQ_ENTRY(nhrp_peer) peer_list;
 	struct nhrp_interface *interface;
+	struct nhrp_peer *parent;
 	union {
 		struct nhrp_packet *queued_packet;
 		struct nhrp_pending_request *request;
@@ -111,6 +119,7 @@ struct nhrp_peer_selector {
 	int type_mask;
 
 	struct nhrp_interface *interface;
+	struct nhrp_peer *parent;
 
 	int prefix_length;
 	struct nhrp_address protocol_address;

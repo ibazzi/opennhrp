@@ -22,7 +22,7 @@ and everything following it until newline is ignored.
 Directives are keywords that can appear in any context of the configuration
 file and they select a new context.
 
-.PP   
+.PP
 .BI "interface " interface-name
 .RS
 Marks the start of configuration for network interface
@@ -51,7 +51,7 @@ to use this peer as a next hop server when sending Resolution Requests
 matching this subnet.
 .PP
 The optional parameter
-.B register
+.I register
 specifies that Registration Request should be sent to this peer on
 startup.
 .PP
@@ -61,6 +61,16 @@ keyword. It is used to fix statically the Registration Request ID
 so that a matching Purge Request can be sent if NBMA address has changed.
 This is to work around broken IOS which requires Purge Request ID to
 match the original Registration Request ID.
+.RE
+
+.BI "dynamic-map " protocol-address/prefix " " nbma-domain-name
+.RS
+Specifies that the NBMA addresses of the next hop servers are defined in the
+domain name
+.IR nbma-domain-name .
+For each A record opennhrp creates a dynamic NHS entry. Each NHS is contacted
+intially using the protocol broadcast address, and the server real protocol
+address is dynamically detected from the first registration reply.
 .RE
 
 .BI "holding-time " holdtime

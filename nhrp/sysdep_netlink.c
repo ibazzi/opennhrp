@@ -529,7 +529,7 @@ static int netlink_addr_new_nbma(void *ctx, struct nhrp_interface *iface)
 static void netlink_addr_new(struct nlmsghdr *msg)
 {
 	struct nhrp_interface *iface;
-	struct nhrp_peer *peer;
+	struct nhrp_peer *peer, *bcast;
 	struct ifaddrmsg *ifa = NLMSG_DATA(msg);
 	struct rtattr *rta[IFA_MAX+1];
 
@@ -564,9 +564,22 @@ static void netlink_addr_new(struct nlmsghdr *msg)
 		nhrp_peer_insert(peer);
 		break;
 	default:
-		break;
+		nhrp_peer_put(peer);
+		return;
 	}
+
+	bcast = nhrp_peer_alloc(iface);
+	bcast->type = peer->type;
+	bcast->afnum = peer->afnum;
+	bcast->protocol_type = peer->protocol_type;
+	bcast->prefix_length = peer->prefix_length;
+	bcast->protocol_address = peer->protocol_address;
+	nhrp_address_set_broadcast(&bcast->protocol_address,
+				   ifa->ifa_prefixlen);
+	bcast->next_hop_address = peer->protocol_address;
+	nhrp_peer_insert(bcast);
 	nhrp_peer_put(peer);
+	nhrp_peer_put(bcast);
 }
 
 struct netlink_del_addr_msg {
@@ -629,6 +642,10 @@ static void netlink_addr_del(struct nlmsghdr *nlmsg)
 
 	if (nhrp_address_cmp(&sel.protocol_address, &iface->protocol_address) == 0)
 		nhrp_address_set_type(&iface->protocol_address, PF_UNSPEC);
+	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+
+	nhrp_address_set_broadcast(&sel.protocol_address, ifa->ifa_prefixlen);
+	sel.next_hop_address = msg.address;
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 }
 

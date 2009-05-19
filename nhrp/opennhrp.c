@@ -145,6 +145,7 @@ static int load_config(const char *config_file)
 		"interface context not defined",
 		"keyword valid only for 'map' definition",
 		"invalid address",
+		"dynamic-map requires a network address",
 	};
 	struct nhrp_interface *iface = NULL;
 	struct nhrp_peer *peer = NULL;
@@ -154,7 +155,8 @@ static int load_config(const char *config_file)
 
 	in = fopen(config_file, "r");
 	if (in == NULL) {
-		nhrp_error("Unable to open configuration file '%s'.", config_file);
+		nhrp_error("Unable to open configuration file '%s'.",
+			   config_file);
 		return FALSE;
 	}
 
@@ -168,6 +170,30 @@ static int load_config(const char *config_file)
 			if (iface != NULL)
 				iface->flags |= NHRP_INTERFACE_FLAG_CONFIGURED;
 			peer = NULL;
+		} else if (strcmp(word, "dynamic-map") == 0) {
+			NEED_INTERFACE();
+			read_word(in, &lineno, sizeof(addr), addr);
+			read_word(in, &lineno, sizeof(nbma), nbma);
+
+			peer = nhrp_peer_alloc(iface);
+			peer->type = NHRP_PEER_TYPE_STATIC_DNS;
+			if (!nhrp_address_parse(addr, &peer->protocol_address,
+						&peer->prefix_length)) {
+				rc = 4;
+				break;
+			}
+			if (!nhrp_address_is_network(&peer->protocol_address,
+						     peer->prefix_length)) {
+				rc = 5;
+				break;
+			}
+			peer->protocol_type = nhrp_protocol_from_pf(
+				peer->protocol_address.type);
+			peer->nbma_hostname = strdup(nbma);
+			peer->afnum = nhrp_afnum_from_pf(
+				peer->next_hop_address.type);
+			nhrp_peer_insert(peer);
+			nhrp_peer_put(peer);
 		} else if (strcmp(word, "map") == 0) {
 			NEED_INTERFACE();
 			read_word(in, &lineno, sizeof(addr), addr);
@@ -180,7 +206,8 @@ static int load_config(const char *config_file)
 				rc = 4;
 				break;
 			}
-			peer->protocol_type = nhrp_protocol_from_pf(peer->protocol_address.type);
+			peer->protocol_type = nhrp_protocol_from_pf(
+				peer->protocol_address.type);
 			if (!nhrp_address_parse(nbma, &peer->next_hop_address,
 						NULL))
 				peer->nbma_hostname = strdup(nbma);

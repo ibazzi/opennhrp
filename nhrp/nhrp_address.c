@@ -216,17 +216,20 @@ static void ares_address_cb(void *arg, int status, struct hostent *he)
 {
 	struct nhrp_address_query *query =
 		(struct nhrp_address_query *) arg;
-	struct nhrp_address addr;
+	struct nhrp_address addr[16];
+	int i;
 
-	if (status == ARES_SUCCESS)
-		nhrp_address_set(&addr, AF_INET, he->h_length,
-				 (uint8_t *) he->h_addr);
-	else
-		nhrp_address_set_type(&addr, AF_UNSPEC);
+	if (status == ARES_SUCCESS) {
+		for (i = 0; he->h_addr_list[i] != NULL &&
+			    i < ARRAY_SIZE(addr); i++)
+			nhrp_address_set(&addr[i], AF_INET, he->h_length,
+					 (uint8_t *) he->h_addr_list[i]);
+	} else
+		i = -1;
 
 	NHRP_BUG_ON(query->callback == NULL);
 
-	query->callback(query, &addr);
+	query->callback(query, i, &addr[0]);
 	query->callback = NULL;
 }
 
@@ -339,12 +342,30 @@ unsigned int nhrp_address_hash(struct nhrp_address *addr)
 	return hash;
 }
 
-void nhrp_address_mask(struct nhrp_address *addr, int prefix)
+void nhrp_address_set_network(struct nhrp_address *addr, int prefix)
 {
 	int i, bits = 8 * addr->addr_len;
 
 	for (i = prefix; i < bits; i++)
 		addr->addr[i / 8] &= ~(0x80 >> (i % 8));
+}
+
+void nhrp_address_set_broadcast(struct nhrp_address *addr, int prefix)
+{
+	int i, bits = 8 * addr->addr_len;
+
+	for (i = prefix; i < bits; i++)
+		addr->addr[i / 8] |= 0x80 >> (i % 8);
+}
+
+int nhrp_address_is_network(struct nhrp_address *addr, int prefix)
+{
+	int i, bits = 8 * addr->addr_len;
+
+	for (i = prefix; i < bits; i++)
+		if (addr->addr[i / 8] & (0x80 >> (i % 8)))
+			return FALSE;
+	return TRUE;
 }
 
 const char *nhrp_address_format(struct nhrp_address *addr,
