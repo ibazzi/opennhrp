@@ -151,6 +151,8 @@ char *nhrp_peer_event_reason(union nhrp_peer_event e, int revents,
 struct nhrp_peer *nhrp_peer_from_event(union nhrp_peer_event e, int revents);
 void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 			  void (*cb)(union nhrp_peer_event, int));
+int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
+			   struct nhrp_address *newaddr);
 
 struct nhrp_peer *nhrp_peer_route_full(struct nhrp_interface *iface,
 				       struct nhrp_address *dest,

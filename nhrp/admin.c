@@ -302,6 +302,56 @@ static void admin_redirect_purge(void *ctx, const char *cmd)
 		    count);
 }
 
+struct update_nbma {
+	struct nhrp_address addr;
+	int count;
+};
+
+static int update_nbma(void *ctx, struct nhrp_peer *p)
+{
+	struct update_nbma *un = (struct update_nbma *) ctx;
+
+	nhrp_peer_discover_nhs(p, &un->addr);
+	un->count++;
+
+	return 0;
+}
+
+static void admin_update_nbma(void *ctx, const char *cmd)
+{
+	char keyword[64];
+	struct nhrp_peer_selector sel;
+	struct update_nbma un;
+
+	memset(&sel, 0, sizeof(sel));
+	sel.type_mask = BIT(NHRP_PEER_TYPE_DYNAMIC_NHS);
+
+	if (!parse_word(&cmd, sizeof(keyword), keyword))
+		goto err;
+	if (!nhrp_address_parse(keyword, &sel.next_hop_address, NULL))
+		goto err;
+	if (!parse_word(&cmd, sizeof(keyword), keyword))
+		goto err;
+	if (!nhrp_address_parse(keyword, &un.addr, NULL))
+		goto err;
+
+	un.count = 0;
+	nhrp_peer_foreach(update_nbma, &un, &sel);
+
+	admin_write(ctx,
+		    "Status: ok\n"
+		    "Entries-Affected: %d\n",
+		    un.count);
+	return;
+err:
+	admin_write(ctx,
+		    "Status: failed\n"
+		    "Reason: syntax-error\n"
+		    "Near-Keyword: '%s'\n",
+		    keyword);
+	return;
+}
+
 static struct {
 	const char *command;
 	void (*handler)(void *ctx, const char *cmd);
@@ -313,6 +363,7 @@ static struct {
 	{ "purge",		admin_cache_purge },
 	{ "cache purge",	admin_cache_purge },
 	{ "redirect purge",	admin_redirect_purge },
+	{ "update nbma",	admin_update_nbma },
 };
 
 static void admin_receive_cb(struct ev_io *w, int revents)

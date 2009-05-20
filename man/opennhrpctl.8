@@ -41,9 +41,15 @@ entries are forced down, up and finally reregistered.
 Clear redirection cache from all entries matching the specified address.
 .RE
 
-.BI "schedule"
+.BI "update nbma " nbma-address " " protocol-address
 .RS
-Show internal event schedule. Mostly useful only for debugging.
+This command can be used from
+.BR opennhrp-script "(8)"
+to inform
+.BR opennhrp
+daemon of the real
+.IR protocol-address
+of dynamically discovered NHS.
 .RE
 
 The following selectors can be used to limit which cache entries will

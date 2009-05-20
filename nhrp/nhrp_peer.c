@@ -742,8 +742,8 @@ static int nhrp_add_local_route_cie(void *ctx, struct nhrp_peer *route)
 	return 0;
 }
 
-static int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
-				  struct nhrp_address *newaddr)
+int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
+			   struct nhrp_address *newaddr)
 {
 	char tmp[32], tmp2[32];
 

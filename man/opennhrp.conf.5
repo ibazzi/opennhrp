@@ -68,9 +68,21 @@ match the original Registration Request ID.
 Specifies that the NBMA addresses of the next hop servers are defined in the
 domain name
 .IR nbma-domain-name .
-For each A record opennhrp creates a dynamic NHS entry. Each NHS is contacted
-intially using the protocol broadcast address, and the server real protocol
-address is dynamically detected from the first registration reply.
+For each A record opennhrp creates a dynamic NHS entry.
+
+Each dynamic NHS will get a peer entry with the configured network address
+and the discovered NBMA address.
+
+The first registration request is sent to the protocol broadcast address,
+and the server's real protocol address is dynamically detected from the first
+registration reply (requires opennhrp 0.11 or newer).
+
+Alternatively, if
+.BR peer-up
+script hook can determine the protocol address from the NBMA address (e.g.
+by doing an additional DNS lookup or by parsing the IPsec certificate) it can
+inform this mapping via
+.BR opennhrpctl "(8) " "update nbma " command.
 .RE
 
 .BI "holding-time " holdtime
