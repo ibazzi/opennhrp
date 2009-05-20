@@ -783,7 +783,6 @@ int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
 	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
 	sel.interface = peer->interface;
 	sel.protocol_address = peer->protocol_address;
-	sel.prefix_length = peer->prefix_length;
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 
 	/* Update protocol address */
@@ -1660,8 +1659,16 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 						    p->prefix_length) != 0)
 				return FALSE;
 		} else {
-			if (p->prefix_length < sel->prefix_length)
+			if (p->prefix_length < sel->prefix_length) {
+				if (sel->prefix_length
+				    == sel->protocol_address.addr_len * 8 &&
+				    nhrp_address_cmp(&p->protocol_address,
+						     &sel->protocol_address)
+				    == 0)
+					return TRUE;
+
 				return FALSE;
+			}
 
 			if (nhrp_address_prefix_cmp(&p->protocol_address,
 						    &sel->protocol_address,
