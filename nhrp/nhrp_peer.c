@@ -1379,6 +1379,10 @@ static void nhrp_peer_dnsmap_query_cb(struct nhrp_address_query *query,
 	nhrp_address_set_type(&sel.next_hop_address, AF_UNSPEC);
 	sel.flags = NHRP_PEER_FIND_MARK;
 	nhrp_peer_foreach(nhrp_peer_purge_matching, NULL, &sel);
+
+	/* Refresh DNS info */
+	nhrp_peer_schedule(peer, peer->interface->holding_time,
+			   nhrp_peer_dnsmap_restart_cb);
 }
 
 static void nhrp_peer_dnsmap_restart_cb(struct ev_timer *w, int revents)
