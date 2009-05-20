@@ -120,6 +120,7 @@ struct nhrp_peer_selector {
 
 	struct nhrp_interface *interface;
 	struct nhrp_peer *parent;
+	const char *hostname;
 
 	int prefix_length;
 	struct nhrp_address protocol_address;

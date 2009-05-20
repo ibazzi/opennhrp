@@ -139,6 +139,14 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
+static void admin_free_selector(struct nhrp_peer_selector *sel)
+{
+	if (sel->hostname != NULL) {
+		free((void *) sel->hostname);
+		sel->hostname = NULL;
+	}
+}
+
 static int admin_parse_selector(void *ctx, const char *cmd,
 				struct nhrp_peer_selector *sel)
 {
@@ -164,6 +172,12 @@ static int admin_parse_selector(void *ctx, const char *cmd,
 			sel->interface = nhrp_interface_get_by_name(tmp, FALSE);
 			if (sel->interface == NULL)
 				goto err_noiface;
+			continue;
+		} else if (strcmp(keyword, "host") == 0 ||
+			   strcmp(keyword, "hostname") == 0) {
+			if (sel->hostname != NULL)
+				goto err_conflict;
+			sel->hostname = strdup(tmp);
 			continue;
 		}
 
@@ -215,7 +229,7 @@ err_conflict:
 		    "Reason: conflicting-keyword\n"
 		    "Near-Keyword: '%s'\n",
 		    keyword);
-	return FALSE;
+	goto err;
 err_noiface:
 	admin_write(ctx,
 		    "Status: failed\n"
@@ -223,6 +237,8 @@ err_noiface:
 		    "Near-Keyword: '%s'\n"
 		    "Argument: '%s'\n",
 		    keyword, tmp);
+err:
+	admin_free_selector(sel);
 	return FALSE;
 }
 
@@ -237,6 +253,7 @@ static void admin_cache_show(void *ctx, const char *cmd)
 
 	admin_write(ctx, "Status: ok\n\n");
 	nhrp_peer_foreach(admin_show_peer, ctx, &sel);
+	admin_free_selector(&sel);
 }
 
 static void admin_cache_purge(void *ctx, const char *cmd)
@@ -250,6 +267,7 @@ static void admin_cache_purge(void *ctx, const char *cmd)
 		return;
 
 	nhrp_peer_foreach(nhrp_peer_purge_matching, &count, &sel);
+	admin_free_selector(&sel);
 
 	admin_write(ctx,
 		    "Status: ok\n"
@@ -268,6 +286,7 @@ static void admin_cache_flush(void *ctx, const char *cmd)
 		return;
 
 	nhrp_peer_foreach(nhrp_peer_remove_matching, &count, &sel);
+	admin_free_selector(&sel);
 
 	admin_write(ctx,
 		    "Status: ok\n"

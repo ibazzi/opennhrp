@@ -1616,6 +1616,11 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 	    p->interface != sel->interface)
 		return FALSE;
 
+	if (sel->hostname != NULL &&
+	    (p->nbma_hostname == NULL ||
+	     strcmp(sel->hostname, p->nbma_hostname) != 0))
+		return FALSE;
+
 	if (sel->parent != NULL &&
 	    p->parent != sel->parent)
 		return FALSE;
