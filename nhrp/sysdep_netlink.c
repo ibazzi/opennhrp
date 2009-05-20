@@ -545,6 +545,8 @@ static void netlink_addr_new(struct nlmsghdr *msg)
 	 * not from local address information. */
 	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)
 		return;
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
+		return;
 
 	nhrp_address_set(&iface->protocol_address, ifa->ifa_family,
 			 RTA_PAYLOAD(rta[IFA_LOCAL]),
@@ -578,8 +580,9 @@ static void netlink_addr_new(struct nlmsghdr *msg)
 				   ifa->ifa_prefixlen);
 	bcast->next_hop_address = peer->protocol_address;
 	nhrp_peer_insert(bcast);
-	nhrp_peer_put(peer);
 	nhrp_peer_put(bcast);
+
+	nhrp_peer_put(peer);
 }
 
 struct netlink_del_addr_msg {
