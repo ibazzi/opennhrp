@@ -1330,7 +1330,7 @@ static int nhrp_peer_mark_matching(void *ctx, struct nhrp_peer *peer)
 
 static int nhrp_peer_renew_nhs_matching(void *ctx, struct nhrp_peer *peer)
 {
-	peer->flags &= NHRP_PEER_FLAG_MARK;
+	peer->flags &= ~NHRP_PEER_FLAG_MARK;
 	return 1;
 }
 
