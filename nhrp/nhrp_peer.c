@@ -745,6 +745,7 @@ static int nhrp_add_local_route_cie(void *ctx, struct nhrp_peer *route)
 int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
 			   struct nhrp_address *newaddr)
 {
+	struct nhrp_peer_selector sel;
 	char tmp[32], tmp2[32];
 
 	if (nhrp_address_cmp(&peer->protocol_address, newaddr) == 0)
@@ -770,9 +771,16 @@ int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
 		return FALSE;
 	}
 
-	/* Refresh server's protocol address */
-	/* FIXME: should delete overlapping peers, or reject this if there's
-	 * fixed entries for this protocol address */
+	/* Remove incomplete/cached entries */
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_EXACT;
+	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
+	sel.interface = peer->interface;
+	sel.protocol_address = peer->protocol_address;
+	sel.prefix_length = peer->prefix_length;
+	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+
+	/* Update protocol address */
 	peer->protocol_address = *newaddr;
 
 	return TRUE;
