@@ -538,6 +538,12 @@ static void nhrp_peer_is_up(struct nhrp_peer *peer)
 	struct nhrp_interface *iface = peer->interface;
 	struct nhrp_peer_selector sel;
 
+	if ((peer->flags & (NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_REGISTER))
+	    == NHRP_PEER_FLAG_REGISTER) {
+		/* First time registration reply received */
+		nhrp_peer_run_script(peer, "nhs-up", NULL);
+	}
+
 	peer->flags |= NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP;
 
 	/* Check if there are routes using this peer as next-hop*/
@@ -1248,6 +1254,15 @@ struct nhrp_peer *nhrp_peer_get(struct nhrp_peer *peer)
 	return peer;
 }
 
+static void nhrp_peer_run_nhs_down(struct nhrp_peer *peer)
+{
+	if ((peer->flags & (NHRP_PEER_FLAG_REGISTER |
+			    NHRP_PEER_FLAG_UP |
+			    NHRP_PEER_FLAG_REPLACED))
+	    == (NHRP_PEER_FLAG_REGISTER | NHRP_PEER_FLAG_UP))
+		nhrp_peer_run_script(peer, "nhs-down", NULL);
+}
+
 static void nhrp_peer_release(struct nhrp_peer *peer)
 {
 	struct nhrp_interface *iface = peer->interface;
@@ -1280,6 +1295,7 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 					  &sel);
 
 			/* Execute peer-down */
+			nhrp_peer_run_nhs_down(peer);
 			if (peer->flags & NHRP_PEER_FLAG_UP)
 				nhrp_peer_run_script(peer, "peer-down", NULL);
 		}
@@ -1513,6 +1529,7 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 {
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
+		nhrp_peer_run_nhs_down(peer);
 		peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
 		nhrp_peer_cancel_async(peer);
 		nhrp_peer_run_script(peer, "peer-down",
