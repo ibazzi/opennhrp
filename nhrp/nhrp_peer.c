@@ -1528,6 +1528,7 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 {
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
+	case NHRP_PEER_TYPE_DYNAMIC_NHS:
 		nhrp_peer_run_nhs_down(peer);
 		peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
 		nhrp_peer_cancel_async(peer);
