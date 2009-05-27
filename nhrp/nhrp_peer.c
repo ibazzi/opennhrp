@@ -782,7 +782,7 @@ int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
 	sel.flags = NHRP_PEER_FIND_EXACT;
 	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
 	sel.interface = peer->interface;
-	sel.protocol_address = peer->protocol_address;
+	sel.protocol_address = *newaddr;
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 
 	/* Update protocol address */
