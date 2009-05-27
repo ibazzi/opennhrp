@@ -1786,7 +1786,7 @@ static int decide_route(void *ctx, struct nhrp_peer *peer)
 			return 0;
 	}
 
-	exact = (peer->type >= NHRP_PEER_TYPE_STATIC) &&
+	exact = (peer->type >= NHRP_PEER_TYPE_DYNAMIC_NHS) &&
 		(nhrp_address_cmp(&peer->protocol_address,
 				  &rd->sel.protocol_address) == 0);
 	if (rd->found_exact > exact)
