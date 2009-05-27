@@ -2,6 +2,7 @@
 # Building opennhrp
 
 PACKAGE := opennhrp
+TAGPREFIX := v
 VERSION := 0.10.3
 
 ##
@@ -32,9 +33,3 @@ include Make.rules
 install::
 	$(INSTALLDIR) $(DESTDIR)$(DOCDIR)
 	$(INSTALL) README $(DESTDIR)$(DOCDIR)
-
-dist:
-	(TOP=`pwd` && cd .. && ln -s $$TOP opennhrp-$(VERSION) && \
-	 tar --exclude '*/.git*' --exclude-from opennhrp-$(VERSION)/.gitignore \
-	     -cjvf opennhrp-$(VERSION).tar.bz2 opennhrp-$(VERSION)/* && \
-	 rm opennhrp-$(VERSION))
