@@ -23,12 +23,14 @@
 #include "nhrp_interface.h"
 
 #define PACKET_RETRIES			6
-#define PACKET_RETRY_INTERVAL		5000
+#define PACKET_RETRY_INTERVAL		5.0
+
 #define RATE_LIMIT_HASH_SIZE		256
 #define RATE_LIMIT_MAX_TOKENS		4
-#define RATE_LIMIT_SEND_INTERVAL	5
-#define RATE_LIMIT_SILENCE		360
-#define RATE_LIMIT_PURGE_INTERVAL	600
+#define RATE_LIMIT_SEND_INTERVAL	5.0
+#define RATE_LIMIT_SILENCE		360.0
+#define RATE_LIMIT_PURGE_INTERVAL	600.0
+
 #define MAX_PDU_SIZE			1500
 
 struct nhrp_rate_limit {
@@ -1072,6 +1074,8 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 		packet->hdr.protocol_type = packet->dst_peer->protocol_type;
 	if (packet->hdr.hop_count == 0)
 		packet->hdr.hop_count = 16;
+	else if (packet->hdr.hop_count == NHRP_PACKET_HOP_COUNT_NO_RELAY)
+		packet->hdr.hop_count = 0;
 
 	/* RFC2332 5.3.1 */
 	payload = nhrp_packet_extension(

@@ -953,7 +953,7 @@ static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents)
 		 * address. */
 		nhrp_address_set_broadcast(&packet->dst_protocol_address,
 					   peer->prefix_length);
-		packet->hdr.hop_count = 1;
+		packet->hdr.hop_count = NHRP_PACKET_HOP_COUNT_NO_RELAY;
 	}
 
 
