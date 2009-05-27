@@ -812,6 +812,10 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
 					      sizeof(tmp), tmp),
 			  nhrp_error_indication_text(ec), ntohs(ec));
 
+		if (ec == NHRP_ERROR_HOP_COUNT_EXCEEDED)
+			nhrp_peer_discover_nhs(peer,
+					       &reply->src_protocol_address);
+
 		if (reply != NULL) {
 			nhrp_peer_schedule(peer, NHRP_RETRY_REGISTER_TIME,
 					   nhrp_peer_send_register_cb);
