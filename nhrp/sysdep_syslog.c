@@ -26,36 +26,30 @@ int log_init(void)
 	return TRUE;
 }
 
-void nhrp_debug(const char *format, ...)
+void nhrp_log(int level, const char *format, ...)
 {
 	va_list va;
+	int l;
 
-	if (nhrp_verbose) {
-		va_start(va, format);
-		vsyslog(LOG_DEBUG, format, va);
-		va_end(va);
+	switch (level) {
+	case NHRP_LOG_ERROR:
+		l = LOG_ERR;
+		break;
+	case NHRP_LOG_INFO:
+		l = LOG_INFO;
+		break;
+	case NHRP_LOG_DEBUG:
+	default:
+		l = LOG_DEBUG;
+		break;
 	}
+
+	va_start(va, format);
+	vsyslog(l, format, va);
+	va_end(va);
 }
 
 void nhrp_perror(const char *message)
 {
 	nhrp_error("%s: %s", message, strerror(errno));
-}
-
-void nhrp_error(const char *format, ...)
-{
-	va_list va;
-
-	va_start(va, format);
-	vsyslog(LOG_ERR, format, va);
-	va_end(va);
-}
-
-void nhrp_info(const char *format, ...)
-{
-	va_list va;
-
-	va_start(va, format);
-	vsyslog(LOG_INFO, format, va);
-	va_end(va);
 }

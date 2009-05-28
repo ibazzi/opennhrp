@@ -26,9 +26,24 @@ extern const char *nhrp_config_file, *nhrp_script_file;
 extern int nhrp_running, nhrp_verbose;
 
 /* Logging */
-void nhrp_debug(const char *format, ...);
-void nhrp_info(const char *format, ...);
-void nhrp_error(const char *format, ...);
+void nhrp_log(int level, const char *format, ...);
+
+#define NHRP_LOG_DEBUG		0
+#define NHRP_LOG_INFO		1
+#define NHRP_LOG_ERROR		2
+
+#define nhrp_debug(...)						\
+	do {							\
+		if (nhrp_verbose)				\
+			nhrp_log(NHRP_LOG_DEBUG, __VA_ARGS__);	\
+	} while(0)
+
+#define nhrp_info(...) \
+		nhrp_log(NHRP_LOG_INFO, __VA_ARGS__)
+
+#define nhrp_error(...) \
+		nhrp_log(NHRP_LOG_ERROR, __VA_ARGS__)
+
 void nhrp_perror(const char *message);
 void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes);
 
