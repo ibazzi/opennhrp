@@ -299,13 +299,10 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 				   nhrp_address_format(&src, sizeof(fr), fr),
 				   nhrp_address_format(&dst, sizeof(to), to));
 
-
 			memset(&sel, 0, sizeof(sel));
 			sel.interface = iface;
-			sel.type_mask =
-				BIT(NHRP_PEER_TYPE_STATIC) |
-				BIT(NHRP_PEER_TYPE_DYNAMIC) |
-				BIT(NHRP_PEER_TYPE_CACHED);
+			sel.type_mask = iface->mcast_mask;
+			sel.protocol_address = iface->mcast_addr;
 			sel.flags = NHRP_PEER_FLAG_UP;
 			nhrp_peer_foreach(pfp_send_mcast, &msg, &sel);
 		} else {

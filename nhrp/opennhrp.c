@@ -146,6 +146,7 @@ static int load_config(const char *config_file)
 		"keyword valid only for 'map' definition",
 		"invalid address",
 		"dynamic-map requires a network address",
+		"bad multicast destination",
 	};
 	struct nhrp_interface *iface = NULL;
 	struct nhrp_peer *peer = NULL;
@@ -249,6 +250,24 @@ static int load_config(const char *config_file)
 		} else if (strcmp(word, "shortcut-destination") == 0) {
 			NEED_INTERFACE();
 			iface->flags |= NHRP_INTERFACE_FLAG_SHORTCUT_DEST;
+		} else if (strcmp(word, "multicast") == 0) {
+			NEED_INTERFACE();
+			read_word(in, &lineno, sizeof(word), word);
+			if (strcmp(word, "dynamic") == 0) {
+				iface->mcast_mask = \
+					BIT(NHRP_PEER_TYPE_STATIC) |
+					BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) |
+					BIT(NHRP_PEER_TYPE_DYNAMIC);
+			} else if (strcmp(word, "nhs") == 0) {
+				iface->mcast_mask = \
+					BIT(NHRP_PEER_TYPE_STATIC) |
+					BIT(NHRP_PEER_TYPE_DYNAMIC_NHS);
+			} else if (nhrp_address_parse(word, &iface->mcast_addr,
+						      NULL)) {
+			} else {
+				rc = 6;
+				break;
+			}
 		} else {
 			rc = 0;
 			break;

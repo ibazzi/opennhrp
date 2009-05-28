@@ -47,6 +47,10 @@ struct nhrp_interface {
 
         /* Peer cache is interface specific */
 	struct nhrp_peer_list peer_cache;
+
+	/* Multicast related stuff */
+	int mcast_mask;
+	struct nhrp_address mcast_addr;
 };
 
 typedef int (*nhrp_interface_enumerator)(void *ctx, struct nhrp_interface *iface);
