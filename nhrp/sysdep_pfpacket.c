@@ -34,6 +34,7 @@
 
 static struct ev_io packet_io;
 static struct ev_timer install_filter_timer;
+static struct ev_idle mcast_route;
 
 enum {
 	LABEL_NEXT = 0,
@@ -206,46 +207,74 @@ int forward_local_addresses_changed(void)
 	return TRUE;
 }
 
+struct multicast_packet {
+	struct nhrp_interface *iface;
+	struct sockaddr_ll lladdr;
+	unsigned int pdulen;
+	unsigned char pdu[1500];
+};
+
+static struct multicast_packet mcast_queue[16];
+static int mcast_head = 0, mcast_tail = 0;
+
 static int pfp_send_mcast(void *ctx, struct nhrp_peer *peer)
 {
-	struct msghdr *msg = (struct msghdr *) ctx;
-	struct sockaddr_ll *lladdr = (struct sockaddr_ll *) msg->msg_name;
-	char to[32];
+	struct multicast_packet *pkt = (struct multicast_packet *) ctx;
+	struct iovec iov;
+	struct msghdr msg = {
+		.msg_name = &pkt->lladdr,
+		.msg_namelen = sizeof(pkt->lladdr),
+		.msg_iov = &iov,
+		.msg_iovlen = 1,
+	};
 
-	nhrp_debug("Sending multicast to nbma %s",
-		   nhrp_address_format(&peer->next_hop_address,
-				       sizeof(to), to));
+	pkt->lladdr.sll_halen = peer->next_hop_address.addr_len;
+	memcpy(pkt->lladdr.sll_addr, peer->next_hop_address.addr,
+	       pkt->lladdr.sll_halen);
+	iov.iov_base = pkt->pdu;
+	iov.iov_len = pkt->pdulen;
 
-	lladdr->sll_halen = peer->next_hop_address.addr_len;
-	memcpy(lladdr->sll_addr, peer->next_hop_address.addr,
-	       lladdr->sll_halen);
-
-	if (sendmsg(packet_io.fd, msg, 0) < 0) {
-		nhrp_error("Failed to forward multicast packet to %s",
-			   nhrp_address_format(&peer->next_hop_address,
-					       sizeof(to), to));
-	}
+	/* Best effort attempt to emulate multicast */
+	(void) sendmsg(packet_io.fd, &msg, 0);
 
 	return 0;
 }
 
+static void send_multicast(struct ev_idle *w, int revents)
+{
+	struct multicast_packet *pkt;
+	struct nhrp_peer_selector sel;
+	struct nhrp_interface *iface;
+
+	if (mcast_head == mcast_tail) {
+		ev_idle_stop(&mcast_route);
+		return;
+	}
+
+	/* Pop a packet */
+	pkt = &mcast_queue[mcast_tail];
+	mcast_tail = (mcast_tail + 1) % ARRAY_SIZE(mcast_queue);
+
+	/* And softroute it forward */
+	iface = pkt->iface;
+	memset(&sel, 0, sizeof(sel));
+	sel.interface = iface;
+	sel.type_mask = iface->mcast_mask;
+	sel.protocol_address = iface->mcast_addr;
+	sel.flags = NHRP_PEER_FLAG_UP;
+	nhrp_peer_foreach(pfp_send_mcast, pkt, &sel);
+}
+
 static void pfp_read_cb(struct ev_io *w, int revents)
 {
-	struct nhrp_interface *iface;
-	struct nhrp_peer_selector sel;
 	struct nhrp_address src, dst;
-	struct sockaddr_ll lladdr;
+	struct nhrp_interface *iface;
+	struct sockaddr_ll *lladdr;
 	struct iovec iov;
 	struct msghdr msg = {
-		.msg_name = &lladdr,
-		.msg_namelen = sizeof(lladdr),
 		.msg_iov = &iov,
 		.msg_iovlen = 1,
 	};
-	union {
-		uint8_t buf[2048];
-		struct iphdr iphdr;
-	} u;
 	char fr[32], to[32];
 	int status, i, nbmaset;
 	int fd = w->fd;
@@ -253,11 +282,19 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 	if (!(revents & EV_READ))
 		return;
 
-	iov.iov_base = u.buf;
 	while (TRUE) {
-		iov.iov_len = sizeof(u.buf);
-		iov.iov_len = status = recvmsg(fd, &msg, MSG_DONTWAIT);
-		msg.msg_namelen = sizeof(lladdr);
+		/* Get a scracth buffer directly from mcast queue, so we do
+		 * not need copy the data later. */
+		msg.msg_name = &mcast_queue[mcast_head].lladdr;
+		msg.msg_namelen = sizeof(mcast_queue[mcast_head].lladdr);
+		iov.iov_base = mcast_queue[mcast_head].pdu;
+		iov.iov_len = sizeof(mcast_queue[mcast_head].pdu);
+
+		/* Receive */
+		status = recvmsg(fd, &msg, MSG_DONTWAIT);
+		mcast_queue[mcast_head].pdulen = status;
+
+		/* Process */
 		if (status < 0) {
 			if (errno == EINTR)
 				continue;
@@ -272,23 +309,24 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 			return;
 		}
 
-		if (lladdr.sll_pkttype != PACKET_OUTGOING)
+		lladdr = &mcast_queue[mcast_head].lladdr;
+		if (lladdr->sll_pkttype != PACKET_OUTGOING)
 			continue;
 
-		iface = nhrp_interface_get_by_index(lladdr.sll_ifindex, FALSE);
+		iface = nhrp_interface_get_by_index(lladdr->sll_ifindex, FALSE);
 		if (iface == NULL)
 			continue;
 		if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
 			continue;
 
-		if (!nhrp_address_parse_packet(lladdr.sll_protocol,
-					       iov.iov_len, u.buf,
+		if (!nhrp_address_parse_packet(lladdr->sll_protocol,
+					       iov.iov_len, iov.iov_base,
 					       &src, &dst))
 			return;
 
 		nbmaset = 0;
-		for (i = 0; i < lladdr.sll_halen; i++)
-			if (lladdr.sll_addr[i] != 0)
+		for (i = 0; i < lladdr->sll_halen; i++)
+			if (lladdr->sll_addr[i] != 0)
 				nbmaset = 1;
 
 		if (nhrp_address_is_multicast(&dst)) {
@@ -299,15 +337,21 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 				   nhrp_address_format(&src, sizeof(fr), fr),
 				   nhrp_address_format(&dst, sizeof(to), to));
 
-			memset(&sel, 0, sizeof(sel));
-			sel.interface = iface;
-			sel.type_mask = iface->mcast_mask;
-			sel.protocol_address = iface->mcast_addr;
-			sel.flags = NHRP_PEER_FLAG_UP;
-			nhrp_peer_foreach(pfp_send_mcast, &msg, &sel);
+			/* Queue packet for processing later (handle important
+			 * stuff first) */
+			mcast_queue[mcast_head].iface = iface;
+			mcast_head = (mcast_head + 1) % ARRAY_SIZE(mcast_queue);
+
+			/* Drop packets from queue tail, if we haven't processed
+			 * them yet. */
+			if (mcast_head == mcast_tail)
+				mcast_tail = (mcast_tail + 1) %
+					ARRAY_SIZE(mcast_queue);
+
+			ev_idle_start(&mcast_route);
 		} else {
-			nhrp_packet_send_traffic(iface, lladdr.sll_protocol,
-						 u.buf, iov.iov_len);
+			nhrp_packet_send_traffic(iface, lladdr->sll_protocol,
+						 iov.iov_base, iov.iov_len);
 		}
 	}
 }
@@ -329,6 +373,9 @@ int forward_init(void)
 
 	ev_timer_init(&install_filter_timer, install_filter_cb, .0, .01);
 	install_filter_cb(&install_filter_timer, 0);
+
+	ev_idle_init(&mcast_route, send_multicast);
+	ev_set_priority(&mcast_route, -1);
 
 	return TRUE;
 }
