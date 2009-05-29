@@ -87,6 +87,7 @@ struct nhrp_peer {
 	unsigned int flags;
 
 	CIRCLEQ_ENTRY(nhrp_peer) peer_list;
+	LIST_ENTRY(nhrp_peer) mcast_list;
 	struct nhrp_interface *interface;
 	struct nhrp_peer *parent;
 	union {

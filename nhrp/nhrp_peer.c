@@ -533,15 +533,52 @@ static void nhrp_peer_expire_cb(struct ev_timer *w, int revents)
 		nhrp_peer_renew(peer);
 }
 
+static void nhrp_peer_is_down(struct nhrp_peer *peer)
+{
+	peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
+	if (peer->mcast_list.le_prev != NULL) {
+		LIST_REMOVE(peer, mcast_list);
+		peer->mcast_list.le_prev = NULL;
+	}
+}
+
 static void nhrp_peer_is_up(struct nhrp_peer *peer)
 {
 	struct nhrp_interface *iface = peer->interface;
 	struct nhrp_peer_selector sel;
+	int mcast = 0, i;
+	char tmp[64];
 
 	if ((peer->flags & (NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_REGISTER))
 	    == NHRP_PEER_FLAG_REGISTER) {
 		/* First time registration reply received */
 		nhrp_peer_run_script(peer, "nhs-up", NULL);
+	}
+
+	/* Remove from mcast list if previously there */
+	if (peer->mcast_list.le_prev != NULL) {
+		LIST_REMOVE(peer, mcast_list);
+		peer->mcast_list.le_prev = NULL;
+	}
+
+	/* Check if this one needs multicast traffic */
+	if (BIT(peer->type) & iface->mcast_mask) {
+		mcast = 1;
+	} else {
+		for (i = 0; i < iface->mcast_numaddr; i++) {
+			if (!nhrp_address_cmp(&peer->protocol_address,
+					      &iface->mcast_addr[i])) {
+				mcast = 1;
+				break;
+			}
+		}
+	}
+
+	if (mcast) {
+		LIST_INSERT_HEAD(&iface->mcast_peers, peer, mcast_list);
+		nhrp_info("[%s] Peer inserted to multicast list",
+			   nhrp_address_format(&peer->protocol_address,
+					       sizeof(tmp), tmp));
 	}
 
 	peer->flags |= NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP;
@@ -1534,7 +1571,7 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 	case NHRP_PEER_TYPE_STATIC:
 	case NHRP_PEER_TYPE_DYNAMIC_NHS:
 		nhrp_peer_run_nhs_down(peer);
-		peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
+		nhrp_peer_is_down(peer);
 		nhrp_peer_cancel_async(peer);
 		nhrp_peer_run_script(peer, "peer-down",
 				     nhrp_peer_script_peer_down_done);
@@ -1567,6 +1604,7 @@ static void nhrp_peer_remove_cb(struct ev_timer *w, int revents)
 	int type;
 
 	peer->flags |= NHRP_PEER_FLAG_REMOVED;
+	nhrp_peer_is_down(peer);
 	if (peer->type == NHRP_PEER_TYPE_LOCAL)
 		CIRCLEQ_REMOVE(&local_peer_cache, peer, peer_list);
 	else
@@ -1591,6 +1629,7 @@ void nhrp_peer_remove(struct nhrp_peer *peer)
 		   nhrp_peer_format(peer, sizeof(tmp), tmp));
 
 	peer->flags |= NHRP_PEER_FLAG_REMOVED;
+	nhrp_peer_is_down(peer);
 	nhrp_peer_cancel_async(peer);
 	nhrp_peer_schedule(peer, 0, nhrp_peer_remove_cb);
 }

@@ -150,6 +150,7 @@ static int load_config(const char *config_file)
 	};
 	struct nhrp_interface *iface = NULL;
 	struct nhrp_peer *peer = NULL;
+	struct nhrp_address paddr;
 	char word[32], nbma[32], addr[32];
 	FILE *in;
 	int lineno = 1, rc = -1;
@@ -262,8 +263,13 @@ static int load_config(const char *config_file)
 				iface->mcast_mask = \
 					BIT(NHRP_PEER_TYPE_STATIC) |
 					BIT(NHRP_PEER_TYPE_DYNAMIC_NHS);
-			} else if (nhrp_address_parse(word, &iface->mcast_addr,
-						      NULL)) {
+			} else if (nhrp_address_parse(word, &paddr, NULL)) {
+				iface->mcast_numaddr++;
+				iface->mcast_addr = realloc(iface->mcast_addr,
+					iface->mcast_numaddr *
+					sizeof(struct nhrp_address));
+				iface->mcast_addr[iface->mcast_numaddr-1] =
+					paddr;
 			} else {
 				rc = 6;
 				break;

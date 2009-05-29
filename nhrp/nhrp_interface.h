@@ -23,6 +23,8 @@
 #define NHRP_INTERFACE_FLAG_SHORTCUT_DEST	0x0008	/* Advertise routes */
 #define NHRP_INTERFACE_FLAG_CONFIGURED		0x0010	/* Found in config file */
 
+LIST_HEAD(nhrp_mcast_list, nhrp_peer);
+
 struct nhrp_interface {
 	LIST_ENTRY(nhrp_interface) name_list;
 	LIST_ENTRY(nhrp_interface) index_list;
@@ -49,8 +51,10 @@ struct nhrp_interface {
 	struct nhrp_peer_list peer_cache;
 
 	/* Multicast related stuff */
+	struct nhrp_mcast_list mcast_peers;
 	int mcast_mask;
-	struct nhrp_address mcast_addr;
+	int mcast_numaddr;
+	struct nhrp_address *mcast_addr;
 };
 
 typedef int (*nhrp_interface_enumerator)(void *ctx, struct nhrp_interface *iface);

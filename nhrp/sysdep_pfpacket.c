@@ -32,9 +32,20 @@
 
 #define MAX_OPCODES 100
 
+struct multicast_packet {
+	struct nhrp_interface *iface;
+	struct sockaddr_ll lladdr;
+	unsigned int pdulen;
+	unsigned char pdu[1500];
+};
+
 static struct ev_io packet_io;
 static struct ev_timer install_filter_timer;
 static struct ev_idle mcast_route;
+
+static struct multicast_packet mcast_queue[16];
+static int mcast_head = 0, mcast_tail = 0;
+
 
 enum {
 	LABEL_NEXT = 0,
@@ -207,44 +218,12 @@ int forward_local_addresses_changed(void)
 	return TRUE;
 }
 
-struct multicast_packet {
-	struct nhrp_interface *iface;
-	struct sockaddr_ll lladdr;
-	unsigned int pdulen;
-	unsigned char pdu[1500];
-};
-
-static struct multicast_packet mcast_queue[16];
-static int mcast_head = 0, mcast_tail = 0;
-
-static int pfp_send_mcast(void *ctx, struct nhrp_peer *peer)
-{
-	struct multicast_packet *pkt = (struct multicast_packet *) ctx;
-	struct iovec iov;
-	struct msghdr msg = {
-		.msg_name = &pkt->lladdr,
-		.msg_namelen = sizeof(pkt->lladdr),
-		.msg_iov = &iov,
-		.msg_iovlen = 1,
-	};
-
-	pkt->lladdr.sll_halen = peer->next_hop_address.addr_len;
-	memcpy(pkt->lladdr.sll_addr, peer->next_hop_address.addr,
-	       pkt->lladdr.sll_halen);
-	iov.iov_base = pkt->pdu;
-	iov.iov_len = pkt->pdulen;
-
-	/* Best effort attempt to emulate multicast */
-	(void) sendmsg(packet_io.fd, &msg, 0);
-
-	return 0;
-}
-
 static void send_multicast(struct ev_idle *w, int revents)
 {
 	struct multicast_packet *pkt;
-	struct nhrp_peer_selector sel;
-	struct nhrp_interface *iface;
+	struct nhrp_peer *peer;
+	struct iovec iov;
+	struct msghdr msg;
 
 	if (mcast_head == mcast_tail) {
 		ev_idle_stop(&mcast_route);
@@ -256,13 +235,24 @@ static void send_multicast(struct ev_idle *w, int revents)
 	mcast_tail = (mcast_tail + 1) % ARRAY_SIZE(mcast_queue);
 
 	/* And softroute it forward */
-	iface = pkt->iface;
-	memset(&sel, 0, sizeof(sel));
-	sel.interface = iface;
-	sel.type_mask = iface->mcast_mask;
-	sel.protocol_address = iface->mcast_addr;
-	sel.flags = NHRP_PEER_FLAG_UP;
-	nhrp_peer_foreach(pfp_send_mcast, pkt, &sel);
+	iov.iov_base = pkt->pdu;
+	iov.iov_len = pkt->pdulen;
+	msg = (struct msghdr) {
+		.msg_name = &pkt->lladdr,
+		.msg_namelen = sizeof(pkt->lladdr),
+		.msg_iov = &iov,
+		.msg_iovlen = 1,
+	};
+
+	LIST_FOREACH(peer, &pkt->iface->mcast_peers, mcast_list) {
+		/* Update NBMA destination */
+		pkt->lladdr.sll_halen = peer->next_hop_address.addr_len;
+		memcpy(pkt->lladdr.sll_addr, peer->next_hop_address.addr,
+		       pkt->lladdr.sll_halen);
+
+		/* Best effort attempt to emulate multicast */
+		(void) sendmsg(packet_io.fd, &msg, 0);
+	}
 }
 
 static void pfp_read_cb(struct ev_io *w, int revents)
