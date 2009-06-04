@@ -1340,15 +1340,15 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 				nhrp_peer_run_script(peer, "peer-down", NULL);
 		}
 
-		/* Fall-through */
-	case NHRP_PEER_TYPE_INCOMPLETE:
-	case NHRP_PEER_TYPE_NEGATIVE:
 		/* Remove from arp cache */
 		if (!(peer->flags & NHRP_PEER_FLAG_REPLACED)) {
 			if (peer->protocol_address.type != PF_UNSPEC)
 				kernel_inject_neighbor(&peer->protocol_address,
 						       NULL, peer->interface);
 		}
+		break;
+	case NHRP_PEER_TYPE_INCOMPLETE:
+	case NHRP_PEER_TYPE_NEGATIVE:
 		break;
 	default:
 		NHRP_BUG_ON("invalid peer type");
