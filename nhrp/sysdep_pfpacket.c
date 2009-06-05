@@ -52,10 +52,11 @@ enum {
 	LABEL_SKIP1,
 	LABEL_SKIPN,
 	LABEL_DROP,
+	LABEL_CHECK_MC,
+	LABEL_CHECK_MC_DROP,
+	LABEL_CHECK_IND,
 	LABEL_ACCEPT_MC,
 	LABEL_ACCEPT_IND,
-	LABEL_IF_OK,
-	LABEL_NOT_IPV4,
 	NUM_LABELS
 };
 
@@ -106,9 +107,17 @@ static int check_interface(void *ctx, struct nhrp_interface *iface)
 {
 	struct filter *f = (struct filter *) ctx;
 
-	if (iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED)
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
+		return 0;
+	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)
+		return 0;
+
+	if (iface->mcast_mask || iface->mcast_numaddr)
 		emit_jump(f, BPF_JMP|BPF_JEQ|BPF_K, iface->index,
-			  LABEL_IF_OK, LABEL_NEXT);
+			  LABEL_CHECK_MC, LABEL_NEXT);
+	else
+		emit_jump(f, BPF_JMP|BPF_JEQ|BPF_K, iface->index,
+			  LABEL_CHECK_MC_DROP, LABEL_NEXT);
 
 	return 0;
 }
@@ -148,22 +157,29 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_PKTTYPE);
 	emit_jump(&f, BPF_JMP|BPF_JEQ|BPF_K,   PACKET_OUTGOING, LABEL_NEXT, LABEL_DROP);
 
+	/* Check for IPv4 */
+	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_PROTOCOL);
+	emit_jump(&f, BPF_JMP|BPF_JEQ|BPF_K,   ETH_P_IP, LABEL_NEXT, LABEL_DROP);
+
 	/* Check for valid interface */
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_IFINDEX);
 	nhrp_interface_foreach(check_interface, &f);
 	patch_jump(&f, LABEL_DROP);
-	mark(&f, LABEL_IF_OK);
 
-	/* Check for IPv4 */
-	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_PROTOCOL);
-	emit_jump(&f, BPF_JMP|BPF_JEQ|BPF_K,   ETH_P_IP, LABEL_NEXT, LABEL_NOT_IPV4);
-
-	/* Check for multicast IPv4 destination */
+	/* Check for multicast IPv4 destination - accept on match */
+	mark(&f, LABEL_CHECK_MC);
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, daddr));
-	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xe0000000, LABEL_NEXT, LABEL_SKIP1);
-	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xf0000000, LABEL_NEXT, LABEL_ACCEPT_MC);
+	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xe0000000, LABEL_NEXT, LABEL_CHECK_IND);
+	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xf0000000, LABEL_CHECK_IND, LABEL_ACCEPT_MC);
+
+	/* Check for multicast IPv4 destination - drop on match */
+	mark(&f, LABEL_CHECK_MC_DROP);
+	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, daddr));
+	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xe0000000, LABEL_NEXT, LABEL_CHECK_IND);
+	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xf0000000, LABEL_CHECK_IND, LABEL_DROP);
 
 	/* Check for non-local IPv4 source */
+	mark(&f, LABEL_CHECK_IND);
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, saddr));
 
 	memset(&sel, 0, sizeof(sel));
@@ -173,8 +189,6 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 	/* A packet we send Traffic Indication about: snap only start */
 	mark(&f, LABEL_ACCEPT_IND);
 	emit_stmt(&f, BPF_RET|BPF_K, 68);
-
-	mark(&f, LABEL_NOT_IPV4);
 
 	/* Exit */
 	mark(&f, LABEL_DROP);
