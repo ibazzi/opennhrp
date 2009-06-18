@@ -85,6 +85,30 @@ inform this mapping via
 .BR opennhrpctl "(8) " "update nbma " command.
 .RE
 
+.BR multicast " " dynamic "|" nhs
+.br
+.BI "multicast " protocol-address
+.RS
+Determines how opennhrp daemon should soft switch the multicast traffic.
+Currently, multicast traffic is captured by opennhrp daemon using a packet
+socket, and resent back to proper destinations. This means that multicast
+packet sending is CPU intensive.
+
+Specfying
+.B nhs
+makes all multicast packets to be repeated to each statically configured
+next hop.
+.B dynamic
+instructs to forward to all peers which we have a direct connection with.
+Alternatively, you can specify the directive multiple times for each
+.I protocol-address
+the multicast traffic should be sent to.
+
+.B "WARNING:"
+It is very easy to misconfigure multicast repeating if you have multiple
+NHS:es.
+.RE
+
 .BI "holding-time " holdtime
 .RS
 Specifies the holding time for NHRP Registration Requests and
