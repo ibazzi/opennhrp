@@ -6,6 +6,22 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.11 - released 18/Jun/2009
+-----------------------------------------------------------------------------
+ - introduce 'dynamic-map' directive to autodetect all next hop servers
+   from a domain name with multiple A entries
+ - 'multicast' directive to better control softswitching of multicast
+   packets
+ - use libev instead of the self written event handling code
+ - enable Forward NHS extension for Traffic Indications to drop the message
+   after it has visited all NHS:es (otherwise it would loop between them
+   until ttl expires)
+ - performance optimizations to packet capturing, multicast packet process
+   switching, handling of registration requests and logging
+ - fix 64-bit compatibility issues
+ - some code documentation and clean ups
+
+-----------------------------------------------------------------------------
  opennhrp 0.10.3 - released 04/May/2009
 -----------------------------------------------------------------------------
  - fix handling of c-ares timeouts

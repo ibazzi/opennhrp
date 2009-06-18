@@ -3,7 +3,7 @@
 
 PACKAGE := opennhrp
 TAGPREFIX := v
-VERSION := 0.10.3
+VERSION := 0.11
 
 ##
 # Default directories
