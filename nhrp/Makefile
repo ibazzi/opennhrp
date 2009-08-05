@@ -21,7 +21,7 @@ CFLAGS_opennhrpctl.o	+= $(CFLAGS_opennhrp.o)
 
 CFLAGS_EXTRA		+= -I$(srctree)/include
 
-install::
+install:
 	$(INSTALLDIR) $(DESTDIR)$(SBINDIR)
 	$(INSTALL) $(addprefix $(obj)/,$(progs-y)) $(DESTDIR)$(SBINDIR)
 

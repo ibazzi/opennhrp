@@ -2,7 +2,6 @@
 # Building opennhrp
 
 PACKAGE := opennhrp
-TAGPREFIX := v
 VERSION := 0.11
 
 ##
@@ -30,6 +29,6 @@ include Make.rules
 ##
 # Top-level targets
 
-install::
+install:
 	$(INSTALLDIR) $(DESTDIR)$(DOCDIR)
 	$(INSTALL) README $(DESTDIR)$(DOCDIR)

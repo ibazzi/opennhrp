@@ -47,6 +47,8 @@ export srctree objtree
 ##
 # Consult SCM for better version string.
 
+TAGPREFIX	?= v
+
 GIT_REV := $(shell test -d .git && git describe || echo exported)
 ifneq ($(GIT_REV), exported)
 FULL_VERSION	:= $(patsubst $(TAGPREFIX)%,%,$(GIT_REV))
@@ -67,7 +69,7 @@ LD		:= $(CROSS_COMPILE)ld
 INSTALL		:= install
 INSTALLDIR	:= $(INSTALL) -d
 
-CFLAGS		?= -g
+CFLAGS		?= -g -O2
 CFLAGS_ALL	:= -Werror -Wall -Wstrict-prototypes -D_GNU_SOURCE -std=gnu99
 CFLAGS_ALL	+= $(CFLAGS)
 
@@ -246,8 +248,7 @@ endif
 compile: $(targets)
 	@:
 
-install:: $(targets) FORCE
-	@:
+install: $(targets) FORCE
 
 clean: $(filter %/,$(targets))
 ifeq ($(toplevelrun),yes)
