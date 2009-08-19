@@ -19,7 +19,7 @@ progs-y			+= opennhrpctl
 opennhrpctl-objs	+= opennhrpctl.o
 CFLAGS_opennhrpctl.o	+= $(CFLAGS_opennhrp.o)
 
-CFLAGS_EXTRA		+= -I$(srctree)/include
+CFLAGS_EXTRA		+= -I$(srctree)/include -Wno-strict-aliasing
 
 install:
 	$(INSTALLDIR) $(DESTDIR)$(SBINDIR)
