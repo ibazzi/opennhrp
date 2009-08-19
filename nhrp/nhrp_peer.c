@@ -1349,6 +1349,7 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 		break;
 	case NHRP_PEER_TYPE_INCOMPLETE:
 	case NHRP_PEER_TYPE_NEGATIVE:
+	case NHRP_PEER_TYPE_LOCAL:
 		break;
 	default:
 		NHRP_BUG_ON("invalid peer type");
