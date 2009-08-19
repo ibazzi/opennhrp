@@ -148,9 +148,6 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 	struct filter f;
 	int i;
 
-	if (ev_is_pending(&install_filter_timer))
-		ev_timer_stop(&install_filter_timer);
-
 	memset(&f, 0, sizeof(f));
 
 	/* First, we are interested only on outgoing stuff */
@@ -228,7 +225,7 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 int forward_local_addresses_changed(void)
 {
 	if (install_filter_timer.cb != NULL)
-		ev_timer_again(&install_filter_timer);
+		ev_timer_start(&install_filter_timer);
 	return TRUE;
 }
 
@@ -375,7 +372,7 @@ int forward_init(void)
 	ev_io_init(&packet_io, pfp_read_cb, fd, EV_READ);
 	ev_io_start(&packet_io);
 
-	ev_timer_init(&install_filter_timer, install_filter_cb, .0, .01);
+	ev_timer_init(&install_filter_timer, install_filter_cb, .01, .0);
 	install_filter_cb(&install_filter_timer, 0);
 
 	ev_idle_init(&mcast_route, send_multicast);
