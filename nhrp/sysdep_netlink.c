@@ -326,12 +326,12 @@ static int netlink_link_arp_on(struct nhrp_interface *iface)
 
 #endif
 
-static int proc_icmp_redirect_off(struct nhrp_interface *iface)
+static int proc_icmp_redirect_off(const char *interface)
 {
 	char fname[256];
 	int fd, ret = FALSE;
 
-	sprintf(fname, "/proc/sys/net/ipv4/conf/%s/send_redirects", iface->name);
+	sprintf(fname, "/proc/sys/net/ipv4/conf/%s/send_redirects", interface);
 	fd = open(fname, O_WRONLY);
 	if (fd < 0)
 		return FALSE;
@@ -443,7 +443,7 @@ static void netlink_link_new(struct nlmsghdr *msg)
 	nhrp_interface_hash(iface);
 
 	if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
-	    return;
+		return;
 
 	switch (ifi->ifi_type) {
 	case ARPHRD_IPGRE:
@@ -470,7 +470,7 @@ static void netlink_link_new(struct nlmsghdr *msg)
 	if (!(iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)) {
 		netlink_configure_arp(iface, PF_INET);
 		netlink_link_arp_on(iface);
-		proc_icmp_redirect_off(iface);
+		proc_icmp_redirect_off(iface->name);
 	}
 }
 
@@ -848,6 +848,8 @@ int kernel_init(void)
 		RTMGRP_NEIGH | RTMGRP_LINK |
 		RTMGRP_IPV4_IFADDR | RTMGRP_IPV4_ROUTE;
 	int fd;
+
+	proc_icmp_redirect_off("all");
 
 	fd = socket(PF_PACKET, SOCK_DGRAM, ETHPROTO_NHRP);
 	if (fd < 0) {
