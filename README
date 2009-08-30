@@ -26,6 +26,14 @@ upgrade to 2.6.24 or later and no patching is required.
 Also remember to turn on CONFIG_ARPD and CONFIG_NET_IPGRE in your kernel
 configuration.
 
+	SYSTEM REQUIREMENTS
+
+To compile OpenNHRP you need:
+- GNU make (3.81 or later works)
+- GCC
+- pkg-config
+- c-ares library (Ubuntu package: libc-ares-dev)
+
 	COMPILING
 
 Just type 'make' and 'make install'.
