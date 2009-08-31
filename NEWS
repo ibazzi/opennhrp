@@ -6,6 +6,16 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.11.1 - released 31/Aug/2009
+-----------------------------------------------------------------------------
+ - update libev version to 3.8
+ - more permssive build for warnings (libev generates some warnings)
+ - fix packet filter installation timer
+ - fix a false assert for peer deletion
+ - disable icmp redirect properly
+ - minor fixes to documentation and example script
+
+-----------------------------------------------------------------------------
  opennhrp 0.11 - released 18/Jun/2009
 -----------------------------------------------------------------------------
  - introduce 'dynamic-map' directive to autodetect all next hop servers
