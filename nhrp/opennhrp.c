@@ -308,6 +308,7 @@ static int open_pid_file(void)
 	if (pid_file_fd < 0)
 		goto err;
 
+	fcntl(pid_file_fd, F_SETFD, FD_CLOEXEC);
 	if (flock(pid_file_fd, LOCK_EX | LOCK_NB) < 0)
 		goto err_close;
 
