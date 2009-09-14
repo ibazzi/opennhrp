@@ -195,12 +195,17 @@ static void nhrp_server_finish_reg(struct nhrp_pending_request *pr)
 
 static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e, int revents)
 {
-	struct nhrp_peer *peer = nhrp_peer_from_event(e, revents);
-	struct nhrp_pending_request *pr = peer->request;
-	struct nhrp_packet *packet = pr->packet;
-	struct nhrp_cie *cie = pr->cie;
+	struct nhrp_peer *peer;
+	struct nhrp_pending_request *pr;
+	struct nhrp_packet *packet;
+	struct nhrp_cie *cie;
 	struct nhrp_peer_selector sel;
 	char tmp[64], reason[32];
+
+	peer = nhrp_peer_from_event(e, revents);
+	pr = peer->request;
+	packet = pr->packet;
+	cie = pr->cie;
 
 	peer->request = NULL;
 	nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp);

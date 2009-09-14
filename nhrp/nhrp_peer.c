@@ -308,14 +308,16 @@ struct nhrp_peer *nhrp_peer_from_event(union nhrp_peer_event e, int revents)
 
 	if (revents & EV_CHILD) {
 		peer = container_of(e.child, struct nhrp_peer, child);
-		ev_timer_stop(&peer->timer);
 	} else if (revents & EV_TIMEOUT) {
 		peer = container_of(e.timer, struct nhrp_peer, timer);
-		ev_child_stop(&peer->child);
 	} else {
 		NHRP_BUG_ON(revents != 0);
 		peer = container_of(e.child, struct nhrp_peer, child);
 	}
+
+	ev_child_stop(&peer->child);
+	ev_timer_stop(&peer->timer);
+
 	return peer;
 }
 
