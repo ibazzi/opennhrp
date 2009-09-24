@@ -277,8 +277,7 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 		.msg_iovlen = 1,
 	};
 	char fr[32], to[32];
-	int status, i, nbmaset;
-	int fd = w->fd;
+	int r, i, nbmaset, fd = w->fd;
 
 	if (!(revents & EV_READ))
 		return;
@@ -292,11 +291,11 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 		iov.iov_len = sizeof(mcast_queue[mcast_head].pdu);
 
 		/* Receive */
-		status = recvmsg(fd, &msg, MSG_DONTWAIT);
-		mcast_queue[mcast_head].pdulen = status;
+		r = recvmsg(fd, &msg, MSG_DONTWAIT);
+		mcast_queue[mcast_head].pdulen = r;
 
 		/* Process */
-		if (status < 0) {
+		if (r < 0) {
 			if (errno == EINTR)
 				continue;
 			if (errno == EAGAIN)
@@ -305,7 +304,7 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 			continue;
 		}
 
-		if (iov.iov_len == 0) {
+		if (r == 0) {
 			nhrp_error("PF_PACKET returned EOF");
 			return;
 		}
@@ -321,7 +320,7 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 			continue;
 
 		if (!nhrp_address_parse_packet(lladdr->sll_protocol,
-					       iov.iov_len, iov.iov_base,
+					       r, iov.iov_base,
 					       &src, &dst))
 			return;
 
@@ -352,7 +351,7 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 			ev_idle_start(&mcast_route);
 		} else {
 			nhrp_packet_send_traffic(iface, lladdr->sll_protocol,
-						 iov.iov_base, iov.iov_len);
+						 iov.iov_base, r);
 		}
 	}
 }
