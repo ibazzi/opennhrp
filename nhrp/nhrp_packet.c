@@ -924,7 +924,7 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 	if (!marshall_packet_header(&pos, &pduleft, packet))
 		return -1;
 	if (!marshall_payload(&pos, &pduleft, nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_ANY)))
-		return -1;
+		return -2;
 
 	phdr->extension_offset = htons((int)(pos - pdu));
 	for (i = 1; i < packet->num_extensions; i++) {
@@ -937,15 +937,15 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 		neh.length = 0;
 
 		if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
-			return -1;
+			return -3;
 		if (!marshall_payload(&pos, &pduleft, &packet->extension_by_order[i]))
-			return -1;
+			return -4;
 		eh->length = htons((pos - (uint8_t *) eh) - sizeof(neh));
 	}
 	neh.type = htons(NHRP_EXTENSION_END | NHRP_EXTENSION_FLAG_COMPULSORY);
 	neh.length = 0;
 	if (!marshall_binary(&pos, &pduleft, sizeof(neh), &neh))
-		return -1;
+		return -5;
 
 	/* Cisco is seriously brain damaged. It needs some extra garbage
          * at the end of error indication or it'll barf out spurious errors. */
@@ -1043,8 +1043,10 @@ int nhrp_packet_marshall_and_send(struct nhrp_packet *packet)
 				       sizeof(tmp[3]), tmp[3]));
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
-	if (size < 0)
+	if (size < 0) {
+		nhrp_error("Packet marshalling failed (r=%d)", size);
 		return FALSE;
+	}
 
 	if (!kernel_send(pdu, size, packet->dst_iface,
 			 &packet->dst_peer->next_hop_address))
