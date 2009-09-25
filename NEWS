@@ -6,6 +6,15 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.11.2 - released 25/Sep/2009
+-----------------------------------------------------------------------------
+ - fixed libev usage bug that could cause crash on script timeout
+ - make lock file closed on exec so opennhrp-script instances won't keep
+   opennhrp daemon lock
+ - fixes traffic indications to work again (captured packet length was
+   not right)
+
+-----------------------------------------------------------------------------
  opennhrp 0.11.1 - released 31/Aug/2009
 -----------------------------------------------------------------------------
  - update libev version to 3.8
