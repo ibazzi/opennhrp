@@ -392,11 +392,11 @@ const char *nhrp_address_format(const struct nhrp_address *addr,
 
 int nhrp_address_match_cie_list(struct nhrp_address *nbma_address,
 				struct nhrp_address *protocol_address,
-				struct nhrp_cie_list_head *cie_list)
+				struct list_head *cie_list)
 {
 	struct nhrp_cie *cie;
 
-	TAILQ_FOREACH(cie, cie_list, cie_list_entry) {
+	list_for_each_entry(cie, cie_list, cie_list_entry) {
 		if (nhrp_address_cmp(&cie->nbma_address, nbma_address) == 0 &&
 		    nhrp_address_cmp(&cie->protocol_address, protocol_address) == 0)
 			return TRUE;

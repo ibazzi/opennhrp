@@ -13,7 +13,6 @@
 #ifndef NHRP_INTERFACE_H
 #define NHRP_INTERFACE_H
 
-#include <sys/queue.h>
 #include "nhrp_packet.h"
 #include "nhrp_peer.h"
 
@@ -23,11 +22,11 @@
 #define NHRP_INTERFACE_FLAG_SHORTCUT_DEST	0x0008	/* Advertise routes */
 #define NHRP_INTERFACE_FLAG_CONFIGURED		0x0010	/* Found in config file */
 
-LIST_HEAD(nhrp_mcast_list, nhrp_peer);
+#define NHRP_INTERFACE_NBMA_HASH_SIZE		256
 
 struct nhrp_interface {
-	LIST_ENTRY(nhrp_interface) name_list;
-	LIST_ENTRY(nhrp_interface) index_list;
+	struct list_head name_list_entry;
+	struct hlist_node index_list_entry;
 
 	/* Configured information */
 	char name[16];
@@ -48,10 +47,11 @@ struct nhrp_interface {
 	int protocol_address_prefix;
 
         /* Peer cache is interface specific */
-	struct nhrp_peer_list peer_cache;
+	struct list_head peer_list;
+	struct hlist_head nbma_hash[NHRP_INTERFACE_NBMA_HASH_SIZE];
 
 	/* Multicast related stuff */
-	struct nhrp_mcast_list mcast_peers;
+	struct list_head mcast_list;
 	int mcast_mask;
 	int mcast_numaddr;
 	struct nhrp_address *mcast_addr;
@@ -66,6 +66,7 @@ struct nhrp_interface *nhrp_interface_get_by_index(unsigned int index, int creat
 struct nhrp_interface *nhrp_interface_get_by_nbma(struct nhrp_address *addr);
 struct nhrp_interface *nhrp_interface_get_by_protocol(struct nhrp_address *addr);
 int nhrp_interface_run_script(struct nhrp_interface *iface, char *action);
+struct nhrp_peer *nhrp_interface_find_peer(struct nhrp_interface *iface, const struct nhrp_address *nbma);
 
 void nhrp_interface_resolve_nbma(struct nhrp_interface *iface,
 				 struct nhrp_address *nbmadest,

@@ -13,8 +13,8 @@
 #ifndef NHRP_PACKET_H
 #define NHRP_PACKET_H
 
-#include <sys/queue.h>
 #include "libev.h"
+#include "list.h"
 #include "nhrp_protocol.h"
 #include "nhrp_address.h"
 
@@ -30,13 +30,11 @@ struct nhrp_buffer {
 };
 
 struct nhrp_cie {
-	TAILQ_ENTRY(nhrp_cie)	cie_list_entry;
+	struct list_head	cie_list_entry;
 	struct nhrp_cie_header	hdr;
 	struct nhrp_address	nbma_address;
 	struct nhrp_address	protocol_address;
 };
-
-TAILQ_HEAD(nhrp_cie_list_head, nhrp_cie);
 
 #define NHRP_PAYLOAD_TYPE_ANY		-1
 #define NHRP_PAYLOAD_TYPE_NONE		0
@@ -48,7 +46,7 @@ struct nhrp_payload {
 	uint16_t payload_type;
 	union {
 		struct nhrp_buffer *raw;
-		struct nhrp_cie_list_head cie_list_head;
+		struct list_head cie_list;
 	} u;
 };
 
@@ -64,7 +62,7 @@ struct nhrp_packet {
 	struct nhrp_payload		extension_by_order[NHRP_MAX_EXTENSIONS];
 	struct nhrp_payload *		extension_by_type[NHRP_MAX_EXTENSIONS];
 
-	TAILQ_ENTRY(nhrp_packet)	request_list_entry;
+	struct list_head		request_list_entry;
 	struct ev_timer			timeout;
 	void				(*handler)(void *ctx, struct nhrp_packet *packet);
 	void *				handler_ctx;

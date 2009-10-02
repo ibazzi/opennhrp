@@ -21,7 +21,7 @@
 #define NHRP_MAX_PENDING_REQUESTS 16
 
 struct nhrp_pending_request {
-	LIST_ENTRY(nhrp_pending_request) request_list;
+	struct list_head request_list_entry;
 	int natted;
 	struct nhrp_packet *packet;
 	struct nhrp_cie *cie;
@@ -29,10 +29,8 @@ struct nhrp_pending_request {
 	struct nhrp_peer *peer, *rpeer;
 	ev_tstamp now;
 };
-LIST_HEAD(nhrp_pending_request_head, nhrp_pending_request);
 
-static struct nhrp_pending_request_head pending_requests =
-	LIST_HEAD_INITIALIZER();
+static struct list_head request_list = LIST_INITIALIZER(request_list);
 static int num_pending_requests = 0;
 
 static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr);
@@ -43,9 +41,10 @@ nhrp_server_record_request(struct nhrp_packet *packet)
 	struct nhrp_pending_request *pr;
 
 	pr = calloc(1, sizeof(struct nhrp_pending_request));
+	list_init(&pr->request_list_entry);
 	if (pr != NULL) {
 		num_pending_requests++;
-		LIST_INSERT_HEAD(&pending_requests, pr, request_list);
+		list_add(&pr->request_list_entry, &request_list);
 		pr->packet = nhrp_packet_get(packet);
 		pr->now = ev_now();
 	}
@@ -54,7 +53,7 @@ nhrp_server_record_request(struct nhrp_packet *packet)
 
 static void nhrp_server_finish_request(struct nhrp_pending_request *pr)
 {
-	LIST_REMOVE(pr, request_list);
+	list_del(&pr->request_list_entry);
 	if (pr->rpeer != NULL)
 		nhrp_peer_put(pr->rpeer);
 	if (pr->packet != NULL)
@@ -67,7 +66,7 @@ static int nhrp_server_request_pending(struct nhrp_packet *packet)
 {
 	struct nhrp_pending_request *r;
 
-	LIST_FOREACH(r, &pending_requests, request_list) {
+	list_for_each_entry(r, &request_list, request_list_entry) {
 		if (nhrp_address_cmp(&packet->src_nbma_address,
 				     &r->packet->src_nbma_address) != 0)
 			continue;
@@ -242,9 +241,8 @@ static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e, int revents)
 	pr->peer = NULL;
 
 	/* Process next CIE or finish registration handling */
-	if (cie != TAILQ_LAST(&pr->payload->u.cie_list_head,
-	                      nhrp_cie_list_head)) {
-		pr->cie = TAILQ_NEXT(cie, cie_list_entry);
+	if (cie->cie_list_entry.next != &pr->payload->u.cie_list) {
+		pr->cie = list_next(&cie->cie_list_entry, struct nhrp_cie, cie_list_entry);
 		nhrp_server_start_cie_reg(pr);
 	} else {
 		nhrp_server_finish_reg(pr);
@@ -263,9 +261,8 @@ static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr)
 	if (peer == NULL) {
 		/* Mark all remaining registration requests as failed
 		 * due to lack of memory, and send reply */
-		for (; cie != TAILQ_LAST(&pr->payload->u.cie_list_head,
-					 nhrp_cie_list_head);
-		     cie = TAILQ_NEXT(cie, cie_list_entry))
+		for (; cie->cie_list_entry.next != &pr->payload->u.cie_list;
+		     cie = list_next(&cie->cie_list_entry, struct nhrp_cie, cie_list_entry))
 			cie->hdr.code = NHRP_CODE_INSUFFICIENT_RESOURCES;
 		cie->hdr.code = NHRP_CODE_INSUFFICIENT_RESOURCES;
 		nhrp_server_finish_reg(pr);
@@ -356,7 +353,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 					NHRP_EXTENSION_FORWARD_TRANSIT_NHS |
 					NHRP_EXTENSION_FLAG_NOCREATE,
 					NHRP_PAYLOAD_TYPE_CIE_LIST);
-	if (payload != NULL && TAILQ_EMPTY(&payload->u.cie_list_head) &&
+	if (payload != NULL && list_empty(&payload->u.cie_list) &&
 	    packet->src_linklayer_address.type != PF_UNSPEC &&
 	    nhrp_address_cmp(&packet->src_nbma_address,
 			     &packet->src_linklayer_address) != 0) {
@@ -381,7 +378,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	packet->hdr.hop_count = 0;
 
 	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
-	if (TAILQ_EMPTY(&payload->u.cie_list_head)) {
+	if (list_empty(&payload->u.cie_list)) {
 		nhrp_error("Received registration request has no CIEs");
 		return TRUE;
 	}
@@ -424,7 +421,7 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 	}
 
 	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
-	TAILQ_FOREACH(cie, &payload->u.cie_list_head, cie_list_entry) {
+	list_for_each_entry(cie, &payload->u.cie_list, cie_list_entry) {
 		nhrp_info("Purge proto %s/%d nbma %s",
 			nhrp_address_format(&cie->protocol_address,
 					    sizeof(tmp), tmp),

@@ -255,7 +255,7 @@ static void send_multicast(struct ev_idle *w, int revents)
 		.msg_iovlen = 1,
 	};
 
-	LIST_FOREACH(peer, &pkt->iface->mcast_peers, mcast_list) {
+	list_for_each_entry(peer, &pkt->iface->mcast_list, mcast_list_entry) {
 		/* Update NBMA destination */
 		pkt->lladdr.sll_halen = peer->next_hop_address.addr_len;
 		memcpy(pkt->lladdr.sll_addr, peer->next_hop_address.addr,

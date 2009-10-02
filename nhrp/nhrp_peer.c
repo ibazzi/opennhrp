@@ -41,8 +41,7 @@ const char * const nhrp_peer_type[] = {
 	[NHRP_PEER_TYPE_LOCAL]		= "local",
 };
 
-static struct nhrp_peer_list local_peer_cache =
-	CIRCLEQ_HEAD_INITIALIZER(local_peer_cache);
+static struct list_head local_peer_list = LIST_INITIALIZER(local_peer_list);
 
 /* Peer entrys life, pending callbacks and their call order are listed
  * here.
@@ -538,10 +537,10 @@ static void nhrp_peer_expire_cb(struct ev_timer *w, int revents)
 static void nhrp_peer_is_down(struct nhrp_peer *peer)
 {
 	peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
-	if (peer->mcast_list.le_prev != NULL) {
-		LIST_REMOVE(peer, mcast_list);
-		peer->mcast_list.le_prev = NULL;
-	}
+	if (list_hashed(&peer->mcast_list_entry))
+		list_del(&peer->mcast_list_entry);
+	if (hlist_hashed(&peer->nbma_hash_entry))
+		hlist_del(&peer->nbma_hash_entry);
 }
 
 static void nhrp_peer_is_up(struct nhrp_peer *peer)
@@ -558,10 +557,8 @@ static void nhrp_peer_is_up(struct nhrp_peer *peer)
 	}
 
 	/* Remove from mcast list if previously there */
-	if (peer->mcast_list.le_prev != NULL) {
-		LIST_REMOVE(peer, mcast_list);
-		peer->mcast_list.le_prev = NULL;
-	}
+	if (list_hashed(&peer->mcast_list_entry))
+		list_del(&peer->mcast_list_entry);
 
 	/* Check if this one needs multicast traffic */
 	if (BIT(peer->type) & iface->mcast_mask) {
@@ -577,10 +574,21 @@ static void nhrp_peer_is_up(struct nhrp_peer *peer)
 	}
 
 	if (mcast) {
-		LIST_INSERT_HEAD(&iface->mcast_peers, peer, mcast_list);
+		list_add(&peer->mcast_list_entry, &iface->mcast_list);
 		nhrp_info("[%s] Peer inserted to multicast list",
 			   nhrp_address_format(&peer->protocol_address,
 					       sizeof(tmp), tmp));
+	}
+
+	/* Searchable by NBMA */
+	if (hlist_hashed(&peer->nbma_hash_entry))
+		hlist_del(&peer->nbma_hash_entry);
+	if (BIT(peer->type) & (BIT(NHRP_PEER_TYPE_CACHED) |
+			       BIT(NHRP_PEER_TYPE_DYNAMIC) |
+			       BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) |
+			       BIT(NHRP_PEER_TYPE_STATIC))) {
+		i = nhrp_address_hash(&peer->next_hop_address) % NHRP_INTERFACE_NBMA_HASH_SIZE;
+		hlist_add_head(&peer->nbma_hash_entry, &iface->nbma_hash[i]);
 	}
 
 	peer->flags |= NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP;
@@ -1101,7 +1109,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 	}
 
 	payload = nhrp_packet_payload(reply, NHRP_PAYLOAD_TYPE_CIE_LIST);
-	cie = TAILQ_FIRST(&payload->u.cie_list_head);
+	cie = list_next(&payload->u.cie_list, struct nhrp_cie, cie_list_entry);
 	if (cie == NULL)
 		goto ret;
 
@@ -1120,7 +1128,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 					NHRP_PAYLOAD_TYPE_CIE_LIST);
 	if ((reply->hdr.flags & NHRP_FLAG_RESOLUTION_NAT) &&
 	    (payload != NULL)) {
-		natcie = TAILQ_FIRST(&payload->u.cie_list_head);
+		natcie = list_next(&payload->u.cie_list, struct nhrp_cie, cie_list_entry);
 		if (natcie != NULL) {
 			natoacie = cie;
 			nhrp_info("NAT detected: really at proto %s nbma %s",
@@ -1279,6 +1287,8 @@ struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface)
 	p = calloc(1, sizeof(struct nhrp_peer));
 	p->ref = 1;
 	p->interface = iface;
+	list_init(&p->peer_list_entry);
+	list_init(&p->mcast_list_entry);
 	ev_timer_init(&p->timer, NULL, 0., 0.);
 	ev_child_init(&p->child, NULL, 0, 0);
 
@@ -1548,10 +1558,9 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 		   nhrp_peer_format(peer, sizeof(tmp), tmp));
 
 	if (peer->type == NHRP_PEER_TYPE_LOCAL)
-		CIRCLEQ_INSERT_HEAD(&local_peer_cache, peer, peer_list);
+		list_add(&peer->peer_list_entry, &local_peer_list);
 	else
-		CIRCLEQ_INSERT_HEAD(&peer->interface->peer_cache,
-				    peer, peer_list);
+		list_add(&peer->peer_list_entry, &peer->interface->peer_list);
 
 	/* Start peers life */
 	if (nhrp_running || peer->type == NHRP_PEER_TYPE_LOCAL)
@@ -1603,15 +1612,11 @@ int nhrp_peer_purge_matching(void *ctx, struct nhrp_peer *peer)
 static void nhrp_peer_remove_cb(struct ev_timer *w, int revents)
 {
 	struct nhrp_peer *peer = container_of(w, struct nhrp_peer, timer);
-	struct nhrp_interface *iface = peer->interface;
 	int type;
 
 	peer->flags |= NHRP_PEER_FLAG_REMOVED;
 	nhrp_peer_is_down(peer);
-	if (peer->type == NHRP_PEER_TYPE_LOCAL)
-		CIRCLEQ_REMOVE(&local_peer_cache, peer, peer_list);
-	else
-		CIRCLEQ_REMOVE(&iface->peer_cache, peer, peer_list);
+	list_del(&peer->peer_list_entry);
 
 	type = peer->type;
 	nhrp_peer_put(peer);
@@ -1739,14 +1744,14 @@ struct enum_interface_peers_ctx {
 	struct nhrp_peer_selector *sel;
 };
 
-static int enumerate_peer_cache(struct nhrp_peer_list *peer_cache,
+static int enumerate_peer_cache(struct list_head *peer_cache,
 				nhrp_peer_enumerator e, void *ctx,
 				struct nhrp_peer_selector *sel)
 {
 	struct nhrp_peer *p;
 	int rc = 0;
 
-	CIRCLEQ_FOREACH(p, peer_cache, peer_list) {
+	list_for_each_entry(p, peer_cache, peer_list_entry) {
 		if (p->flags & NHRP_PEER_FLAG_REMOVED)
 			continue;
 
@@ -1765,7 +1770,7 @@ static int enum_interface_peers(void *ctx, struct nhrp_interface *iface)
 	struct enum_interface_peers_ctx *ectx =
 		(struct enum_interface_peers_ctx *) ctx;
 
-	return enumerate_peer_cache(&iface->peer_cache,
+	return enumerate_peer_cache(&iface->peer_list,
 				    ectx->enumerator, ectx->ctx,
 				    ectx->sel);
 }
@@ -1780,7 +1785,7 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 	if (sel != NULL)
 		iface = sel->interface;
 
-	rc = enumerate_peer_cache(&local_peer_cache, e, ctx, sel);
+	rc = enumerate_peer_cache(&local_peer_list, e, ctx, sel);
 	if (rc != 0)
 		return rc;
 
@@ -1792,14 +1797,14 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 	if (iface == NULL)
 		rc = nhrp_interface_foreach(enum_interface_peers, &ectx);
 	else
-		rc = enumerate_peer_cache(&iface->peer_cache, e, ctx, sel);
+		rc = enumerate_peer_cache(&iface->peer_list, e, ctx, sel);
 
 	return rc;
 }
 
 struct route_decision {
 	struct nhrp_peer_selector sel;
-	struct nhrp_cie_list_head *exclude;
+	struct list_head *exclude;
 	struct nhrp_peer *best_found;
 	struct nhrp_address *src;
 	int found_exact, found_up;
@@ -1862,7 +1867,7 @@ struct nhrp_peer *nhrp_peer_route_full(struct nhrp_interface *interface,
 				       struct nhrp_address *dst,
 				       int flags, int type_mask,
 				       struct nhrp_address *src,
-				       struct nhrp_cie_list_head *exclude)
+				       struct list_head *exclude)
 {
 	struct route_decision rd;
 

@@ -24,10 +24,8 @@
 #define NHRP_DEFAULT_HOLDING_TIME	(2 * 60 * 60)
 #define NHRP_INDEX_HASH_SIZE		(1 << 6)
 
-LIST_HEAD(nhrp_interface_list, nhrp_interface);
-
-static struct nhrp_interface_list name_list;
-static struct nhrp_interface_list index_hash[NHRP_INDEX_HASH_SIZE];
+static struct list_head name_list = LIST_INITIALIZER(name_list);
+static struct hlist_head index_hash[NHRP_INDEX_HASH_SIZE];
 
 static char *env(const char *key, const char *value)
 {
@@ -43,11 +41,11 @@ void nhrp_interface_hash(struct nhrp_interface *iface)
 {
 	int iidx = iface->index & (NHRP_INDEX_HASH_SIZE - 1);
 
-	LIST_REMOVE(iface, name_list);
-	LIST_REMOVE(iface, index_list);
+	list_del(&iface->name_list_entry);
+	list_add(&iface->name_list_entry, &name_list);
 
-	LIST_INSERT_HEAD(&name_list, iface, name_list);
-	LIST_INSERT_HEAD(&index_hash[iidx], iface, index_list);
+	hlist_del(&iface->index_list_entry);
+	hlist_add_head(&iface->index_list_entry, &index_hash[iidx]);
 }
 
 int nhrp_interface_foreach(nhrp_interface_enumerator enumerator, void *ctx)
@@ -55,7 +53,7 @@ int nhrp_interface_foreach(nhrp_interface_enumerator enumerator, void *ctx)
 	struct nhrp_interface *iface;
 	int rc;
 
-	LIST_FOREACH(iface, &name_list, name_list) {
+	list_for_each_entry(iface, &name_list, name_list_entry) {
 		rc = enumerator(ctx, iface);
 		if (rc != 0)
 			return rc;
@@ -67,7 +65,7 @@ struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create)
 {
 	struct nhrp_interface *iface;
 
-	LIST_FOREACH(iface, &name_list, name_list) {
+	list_for_each_entry(iface, &name_list, name_list_entry) {
 		if (strcmp(iface->name, name) == 0)
 			return iface;
 	}
@@ -78,10 +76,11 @@ struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create)
 	iface = calloc(1, sizeof(struct nhrp_interface));
 	iface->holding_time = NHRP_DEFAULT_HOLDING_TIME;
 	strncpy(iface->name, name, sizeof(iface->name));
-	CIRCLEQ_INIT(&iface->peer_cache);
 
-	LIST_INSERT_HEAD(&name_list, iface, name_list);
-	LIST_INSERT_HEAD(&index_hash[0], iface, index_list);
+	list_init(&iface->peer_list);
+	list_init(&iface->mcast_list);
+	list_add(&iface->name_list_entry, &name_list);
+	hlist_add_head(&iface->index_list_entry, &index_hash[0]);
 
 	return iface;
 }
@@ -89,9 +88,10 @@ struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create)
 struct nhrp_interface *nhrp_interface_get_by_index(unsigned int index, int create)
 {
 	struct nhrp_interface *iface;
+	struct hlist_node *n;
 	int iidx = index & (NHRP_INDEX_HASH_SIZE - 1);
 
-	LIST_FOREACH(iface, &index_hash[iidx], index_list) {
+	hlist_for_each_entry(iface, n, &index_hash[iidx], index_list_entry) {
 		if (iface->index == index)
 			return iface;
 	}
@@ -103,7 +103,7 @@ struct nhrp_interface *nhrp_interface_get_by_nbma(struct nhrp_address *addr)
 {
 	struct nhrp_interface *iface;
 
-	LIST_FOREACH(iface, &name_list, name_list) {
+	list_for_each_entry(iface, &name_list, name_list_entry) {
 		if (nhrp_address_cmp(addr, &iface->nbma_address) == 0)
 			return iface;
 
@@ -119,7 +119,7 @@ struct nhrp_interface *nhrp_interface_get_by_protocol(struct nhrp_address *addr)
 {
 	struct nhrp_interface *iface;
 
-	LIST_FOREACH(iface, &name_list, name_list) {
+	list_for_each_entry(iface, &name_list, name_list_entry) {
 		if (nhrp_address_cmp(addr, &iface->protocol_address) == 0)
 			return iface;
 	}
@@ -146,4 +146,18 @@ int nhrp_interface_run_script(struct nhrp_interface *iface, char *action)
 
 	execve(nhrp_script_file, (char **) argv, envp);
 	exit(1);
+}
+
+struct nhrp_peer *nhrp_interface_find_peer(struct nhrp_interface *iface,
+					   const struct nhrp_address *nbma)
+{
+	unsigned int key = nhrp_address_hash(nbma) % NHRP_INTERFACE_NBMA_HASH_SIZE;
+	struct nhrp_peer *peer;
+	struct hlist_node *n;
+
+	hlist_for_each_entry(peer, n, &iface->nbma_hash[key], nbma_hash_entry) {
+		if (nhrp_address_cmp(nbma, &peer->next_hop_address) == 0)
+			return peer;
+	}
+	return NULL;
 }

@@ -16,7 +16,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/time.h>
-#include <sys/queue.h>
 #include <linux/if_ether.h>
 
 struct nhrp_interface;

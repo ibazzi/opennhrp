@@ -16,9 +16,9 @@
 #include <time.h>
 #include <stdint.h>
 #include <sys/types.h>
-#include <sys/queue.h>
 #include "nhrp_address.h"
 #include "libev.h"
+#include "list.h"
 
 #define NHRP_PEER_TYPE_INCOMPLETE	0x00	/* Resolution request sent */
 #define NHRP_PEER_TYPE_NEGATIVE		0x01	/* Negative cached */
@@ -71,11 +71,8 @@
 #define NHRP_PEER_FIND_UP		0x10
 #define NHRP_PEER_FIND_MARK		0x20
 
-CIRCLEQ_HEAD(nhrp_peer_list, nhrp_peer);
-
 struct nhrp_interface;
 struct nhrp_packet;
-struct nhrp_cie_list_head;
 
 union __attribute__ ((__transparent_union__)) nhrp_peer_event {
 	struct ev_timer *timer;
@@ -86,8 +83,10 @@ struct nhrp_peer {
 	unsigned int ref;
 	unsigned int flags;
 
-	CIRCLEQ_ENTRY(nhrp_peer) peer_list;
-	LIST_ENTRY(nhrp_peer) mcast_list;
+	struct list_head peer_list_entry;
+	struct list_head mcast_list_entry;
+	struct hlist_node nbma_hash_entry;
+
 	struct nhrp_interface *interface;
 	struct nhrp_peer *parent;
 	union {
@@ -160,7 +159,7 @@ struct nhrp_peer *nhrp_peer_route_full(struct nhrp_interface *iface,
 				       struct nhrp_address *dest,
 				       int flags, int type_mask,
 				       struct nhrp_address *source,
-				       struct nhrp_cie_list_head *exclude);
+				       struct list_head *exclude_cie_list);
 
 static inline struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *iface,
 						struct nhrp_address *dest,

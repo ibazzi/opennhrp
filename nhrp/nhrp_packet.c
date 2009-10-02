@@ -34,21 +34,16 @@
 #define MAX_PDU_SIZE			1500
 
 struct nhrp_rate_limit {
-	LIST_ENTRY(nhrp_rate_limit) hash_entry;
+	struct hlist_node hash_entry;
 	struct nhrp_address src;
 	struct nhrp_address dst;
 	ev_tstamp rate_last;
 	int rate_tokens;
 };
 
-LIST_HEAD(nhrp_rate_limit_list_head, nhrp_rate_limit);
-TAILQ_HEAD(nhrp_packet_list_head, nhrp_packet);
-
 static uint32_t request_id = 0;
-static struct nhrp_packet_list_head pending_requests =
-	TAILQ_HEAD_INITIALIZER(pending_requests);
-
-static struct nhrp_rate_limit_list_head rate_limit_hash[RATE_LIMIT_HASH_SIZE];
+static struct list_head pending_requests = LIST_INITIALIZER(pending_requests);
+static struct hlist_head rate_limit_hash[RATE_LIMIT_HASH_SIZE];
 static ev_timer rate_limit_timer;
 static int num_rate_limit_entries = 0;
 
@@ -58,21 +53,20 @@ static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize,
 
 static void nhrp_rate_limit_delete(struct nhrp_rate_limit *rl)
 {
-	LIST_REMOVE(rl, hash_entry);
+	hlist_del(&rl->hash_entry);
 	free(rl);
 	num_rate_limit_entries--;
 }
 
 int nhrp_rate_limit_clear(struct nhrp_address *a, int pref)
 {
-	struct nhrp_rate_limit *rl, *next;
+	struct nhrp_rate_limit *rl;
+	struct hlist_node *n, *c;
 	int i, ret = 0;
 
 	for (i = 0; i < RATE_LIMIT_HASH_SIZE; i++) {
-		for (rl = LIST_FIRST(&rate_limit_hash[i]);
-		     rl != NULL; rl = next) {
-			next = LIST_NEXT(rl, hash_entry);
-
+		hlist_for_each_entry_safe(rl, c, n, &rate_limit_hash[i],
+					  hash_entry) {
 			if (a->addr == AF_UNSPEC ||
 			    nhrp_address_prefix_cmp(a, &rl->src, pref) == 0 ||
 			    nhrp_address_prefix_cmp(a, &rl->dst, pref) == 0) {
@@ -90,13 +84,13 @@ int nhrp_rate_limit_clear(struct nhrp_address *a, int pref)
 
 static void prune_rate_limit_entries_cb(struct ev_timer *w, int revents)
 {
-	struct nhrp_rate_limit *rl, *next;
+	struct nhrp_rate_limit *rl;
+	struct hlist_node *c, *n;
 	int i;
 
 	for (i = 0; i < RATE_LIMIT_HASH_SIZE; i++) {
-		for (rl = LIST_FIRST(&rate_limit_hash[i]);
-		     rl != NULL; rl = next) {
-			next = LIST_NEXT(rl, hash_entry);
+		hlist_for_each_entry_safe(rl, c, n, &rate_limit_hash[i],
+					  hash_entry) {
 
 			if (ev_now() > rl->rate_last + 2 * RATE_LIMIT_SILENCE)
 				nhrp_rate_limit_delete(rl);
@@ -112,11 +106,12 @@ static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src,
 {
 	unsigned int key;
 	struct nhrp_rate_limit *e;
+	struct hlist_node *n;
 
 	key = nhrp_address_hash(src) ^ nhrp_address_hash(dst);
 	key %= RATE_LIMIT_HASH_SIZE;
 
-	LIST_FOREACH(e, &rate_limit_hash[key], hash_entry) {
+	hlist_for_each_entry(e, n, &rate_limit_hash[key], hash_entry) {
 		if (nhrp_address_cmp(&e->src, src) == 0 &&
 		    nhrp_address_cmp(&e->dst, dst) == 0)
 			return e;
@@ -125,7 +120,7 @@ static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src,
 	e = calloc(1, sizeof(struct nhrp_rate_limit));
 	e->src = *src;
 	e->dst = *dst;
-	LIST_INSERT_HEAD(&rate_limit_hash[key], e, hash_entry);
+	hlist_add_head(&e->hash_entry, &rate_limit_hash[key]);
 
 	if (num_rate_limit_entries == 0) {
 		ev_timer_init(&rate_limit_timer, prune_rate_limit_entries_cb,
@@ -206,16 +201,15 @@ void nhrp_cie_reset(struct nhrp_cie *cie)
 
 void nhrp_payload_free(struct nhrp_payload *payload)
 {
-	struct nhrp_cie *cie;
+	struct nhrp_cie *cie, *n;
 
 	switch (payload->payload_type) {
 	case NHRP_PAYLOAD_TYPE_RAW:
 		nhrp_buffer_free(payload->u.raw);
 		break;
 	case NHRP_PAYLOAD_TYPE_CIE_LIST:
-		while (!TAILQ_EMPTY(&payload->u.cie_list_head)) {
-			cie = TAILQ_FIRST(&payload->u.cie_list_head);
-			TAILQ_REMOVE(&payload->u.cie_list_head, cie, cie_list_entry);
+		list_for_each_entry_safe(cie, n, &payload->u.cie_list, cie_list_entry) {
+			list_del(&cie->cie_list_entry);
 			nhrp_cie_free(cie);
 		}
 		break;
@@ -232,7 +226,7 @@ void nhrp_payload_set_type(struct nhrp_payload *payload, int type)
 	payload->payload_type = type;
 	switch (type) {
 	case NHRP_PAYLOAD_TYPE_CIE_LIST:
-		TAILQ_INIT(&payload->u.cie_list_head);
+		list_init(&payload->u.cie_list);
 		break;
 	default:
 		payload->u.raw = NULL;
@@ -251,7 +245,7 @@ void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie)
 	if (payload->payload_type != NHRP_PAYLOAD_TYPE_CIE_LIST)
 		return;
 
-	TAILQ_INSERT_TAIL(&payload->u.cie_list_head, cie, cie_list_entry);
+	list_add(&cie->cie_list_entry, &payload->u.cie_list);
 }
 
 struct nhrp_cie *nhrp_payload_get_cie(struct nhrp_payload *payload, int index)
@@ -261,12 +255,13 @@ struct nhrp_cie *nhrp_payload_get_cie(struct nhrp_payload *payload, int index)
 	if (payload->payload_type != NHRP_PAYLOAD_TYPE_CIE_LIST)
 		return NULL;
 
-	for (cie = TAILQ_FIRST(&payload->u.cie_list_head);
-	     cie != NULL && index > 1; index--) {
-		cie = TAILQ_NEXT(cie, cie_list_entry);
+	list_for_each_entry(cie, &payload->u.cie_list, cie_list_entry) {
+		index--;
+		if (index == 0)
+			return cie;
 	}
 
-	return cie;
+	return NULL;
 }
 
 struct nhrp_packet *nhrp_packet_alloc(void)
@@ -274,6 +269,7 @@ struct nhrp_packet *nhrp_packet_alloc(void)
 	struct nhrp_packet *packet;
 	packet = calloc(1, sizeof(struct nhrp_packet));
 	packet->ref = 1;
+	list_init(&packet->request_list_entry);
 	ev_timer_init(&packet->timeout, nhrp_packet_xmit_timeout_cb,
 		      PACKET_RETRY_INTERVAL, PACKET_RETRY_INTERVAL);
 	return packet;
@@ -350,7 +346,8 @@ int nhrp_packet_reroute(struct nhrp_packet *packet, struct nhrp_peer *dst_peer)
 static void nhrp_packet_dequeue(struct nhrp_packet *packet)
 {
 	ev_timer_stop(&packet->timeout);
-	TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
+	if (list_hashed(&packet->request_list_entry))
+		list_del(&packet->request_list_entry);
 	nhrp_packet_put(packet);
 }
 
@@ -359,7 +356,7 @@ static int nhrp_do_handle_error_indication(struct nhrp_packet *error_pkt,
 {
 	struct nhrp_packet *req;
 
-	TAILQ_FOREACH(req, &pending_requests, request_list_entry) {
+	list_for_each_entry(req, &pending_requests, request_list_entry) {
 		if (orig_pkt->hdr.u.request_id != req->hdr.u.request_id)
 			continue;
 
@@ -544,7 +541,7 @@ static int unmarshall_payload(uint8_t **pdu, size_t *pduleft,
 		cieleft = size;
 		while (cieleft) {
 			cie = nhrp_cie_alloc();
-			TAILQ_INSERT_TAIL(&p->u.cie_list_head, cie, cie_list_entry);
+			list_add(&cie->cie_list_entry, &p->u.cie_list);
 			if (!unmarshall_cie(pdu, &cieleft, packet, cie))
 				return FALSE;
 		}
@@ -691,7 +688,7 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 
 		if (nhrp_address_match_cie_list(&packet->dst_peer->my_nbma_address,
 						&packet->dst_iface->protocol_address,
-						&p->u.cie_list_head)) {
+						&p->u.cie_list)) {
 			nhrp_packet_send_error(packet, NHRP_ERROR_LOOP_DETECTED, 0);
 			return FALSE;
 		}
@@ -717,7 +714,7 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 	char tmp[64], tmp2[64], tmp3[64];
 
 	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY) {
-		TAILQ_FOREACH(req, &pending_requests, request_list_entry) {
+		list_for_each_entry(req, &pending_requests, request_list_entry) {
 			if (packet->hdr.u.request_id != req->hdr.u.request_id)
 				continue;
 			if (nhrp_address_cmp(&packet->src_nbma_address,
@@ -893,7 +890,7 @@ static int marshall_payload(uint8_t **pdu, size_t *pduleft, struct nhrp_payload 
 			return TRUE;
 		return marshall_binary(pdu, pduleft, p->u.raw->length, p->u.raw->data);
 	case NHRP_PAYLOAD_TYPE_CIE_LIST:
-		TAILQ_FOREACH(cie, &p->u.cie_list_head, cie_list_entry) {
+		list_for_each_entry(cie, &p->u.cie_list, cie_list_entry) {
 			if (!marshall_cie(pdu, pduleft, cie))
 				return FALSE;
 		}
@@ -971,7 +968,7 @@ static int marshall_packet(uint8_t *pdu, size_t pduleft, struct nhrp_packet *pac
 int nhrp_packet_route(struct nhrp_packet *packet)
 {
 	struct nhrp_address proto_nexthop, *src, *dst;
-	struct nhrp_cie_list_head *cielist = NULL;
+	struct list_head *cielist = NULL;
 	struct nhrp_payload *payload;
 	struct nhrp_peer *peer;
 	char tmp[64];
@@ -995,7 +992,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 					r | NHRP_EXTENSION_FLAG_NOCREATE,
 					NHRP_PAYLOAD_TYPE_CIE_LIST);
 	if (payload != NULL)
-		cielist = &payload->u.cie_list_head;
+		cielist = &payload->u.cie_list;
 
 	if (packet->dst_peer != NULL) {
 		proto_nexthop = packet->dst_peer->next_hop_address;
@@ -1085,7 +1082,7 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 		NHRP_EXTENSION_FLAG_COMPULSORY | NHRP_EXTENSION_FLAG_NOCREATE,
 		NHRP_PAYLOAD_TYPE_CIE_LIST);
 	if (packet_types[packet->hdr.type].type == NHRP_TYPE_REPLY &&
-	    (payload != NULL && TAILQ_EMPTY(&payload->u.cie_list_head))) {
+	    (payload != NULL && list_empty(&payload->u.cie_list))) {
 		struct nhrp_cie *cie;
 
 		cie = nhrp_cie_alloc();
@@ -1145,7 +1142,7 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 						NHRP_PAYLOAD_TYPE_CIE_LIST);
 
 		if (packet->dst_iface->nat_cie.nbma_address.addr_len &&
-		    payload != NULL && TAILQ_EMPTY(&payload->u.cie_list_head)) {
+		    payload != NULL && list_empty(&payload->u.cie_list)) {
 			cie = nhrp_cie_alloc();
 			if (cie != NULL) {
 				*cie = packet->dst_iface->nat_cie;
@@ -1163,14 +1160,13 @@ static void nhrp_packet_xmit_timeout_cb(struct ev_timer *w, int revents)
 	struct nhrp_packet *packet =
 		container_of(w, struct nhrp_packet, timeout);
 
-	TAILQ_REMOVE(&pending_requests, packet, request_list_entry);
+	list_del(&packet->request_list_entry);
 
 	if (packet->dst_peer != NULL &&
 	    ++packet->retry < PACKET_RETRIES) {
 		nhrp_packet_marshall_and_send(packet);
 
-		TAILQ_INSERT_TAIL(&pending_requests, packet,
-				  request_list_entry);
+		list_add(&packet->request_list_entry, &pending_requests);
 	} else {
 		ev_timer_stop(&packet->timeout);
 		if (packet->dst_peer == NULL)
@@ -1197,7 +1193,7 @@ int nhrp_packet_send_request(struct nhrp_packet *pkt,
 
 	packet->handler = handler;
 	packet->handler_ctx = ctx;
-	TAILQ_INSERT_TAIL(&pending_requests, packet, request_list_entry);
+	list_add(&packet->request_list_entry, &pending_requests);
 	ev_timer_again(&packet->timeout);
 
 	return nhrp_packet_send(packet);

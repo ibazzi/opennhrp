@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include <sys/socket.h>
+#include "list.h"
 
 #define NHRP_MAX_ADDRESS_LEN            6
 
@@ -72,6 +73,6 @@ const char *nhrp_address_format(const struct nhrp_address *addr,
 
 int nhrp_address_match_cie_list(struct nhrp_address *nbma_address,
 				struct nhrp_address *protocol_address,
-				struct nhrp_cie_list_head *cie_list);
+				struct list_head *cie_list);
 
 #endif
