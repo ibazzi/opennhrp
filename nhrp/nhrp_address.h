@@ -58,16 +58,16 @@ int nhrp_address_set(struct nhrp_address *addr, uint16_t type,
 int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type,
 			  uint8_t len, uint8_t *bytes,
 			  uint8_t sublen, uint8_t *subbytes);
-int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b);
-int nhrp_address_prefix_cmp(struct nhrp_address *a, struct nhrp_address *b,
+int nhrp_address_cmp(const struct nhrp_address *a, const struct nhrp_address *b);
+int nhrp_address_prefix_cmp(const struct nhrp_address *a, const struct nhrp_address *b,
 			    int prefix);
-int nhrp_address_is_multicast(struct nhrp_address *addr);
-unsigned int nhrp_address_hash(struct nhrp_address *addr);
+unsigned int nhrp_address_hash(const struct nhrp_address *addr);
 void nhrp_address_set_network(struct nhrp_address *addr, int prefix);
 void nhrp_address_set_broadcast(struct nhrp_address *addr, int prefix);
-int nhrp_address_is_network(struct nhrp_address *addr, int prefix);
-int nhrp_address_is_broadcast(struct nhrp_address *addr, int prefix);
-const char *nhrp_address_format(struct nhrp_address *addr,
+int nhrp_address_is_network(const struct nhrp_address *addr, int prefix);
+int nhrp_address_is_broadcast(const struct nhrp_address *addr, int prefix);
+int nhrp_address_is_multicast(const struct nhrp_address *addr);
+const char *nhrp_address_format(const struct nhrp_address *addr,
 				size_t buflen, char *buffer);
 
 int nhrp_address_match_cie_list(struct nhrp_address *nbma_address,

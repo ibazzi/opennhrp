@@ -103,7 +103,7 @@ static void ares_socket_cb(void *data, ares_socket_t fd,
 	}
 }
 
-static int bitcmp(uint8_t *a, uint8_t *b, int len)
+static int bitcmp(const uint8_t *a, const uint8_t *b, int len)
 {
 	int bytes, bits, mask, r;
 
@@ -294,7 +294,7 @@ int nhrp_address_set_full(struct nhrp_address *addr, uint16_t type,
 	return TRUE;
 }
 
-int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b)
+int nhrp_address_cmp(const struct nhrp_address *a, const struct nhrp_address *b)
 {
 	if (a->type > b->type)
 		return 1;
@@ -307,7 +307,8 @@ int nhrp_address_cmp(struct nhrp_address *a, struct nhrp_address *b)
 	return memcmp(a->addr, b->addr, a->addr_len + a->subaddr_len);
 }
 
-int nhrp_address_prefix_cmp(struct nhrp_address *a, struct nhrp_address *b, int prefix)
+int nhrp_address_prefix_cmp(const struct nhrp_address *a,
+			    const struct nhrp_address *b, int prefix)
 {
 	if (a->type > b->type)
 		return 1;
@@ -320,7 +321,7 @@ int nhrp_address_prefix_cmp(struct nhrp_address *a, struct nhrp_address *b, int 
 	return bitcmp(a->addr, b->addr, prefix);
 }
 
-int nhrp_address_is_multicast(struct nhrp_address *addr)
+int nhrp_address_is_multicast(const struct nhrp_address *addr)
 {
 	switch (addr->type) {
 	case PF_INET:
@@ -331,13 +332,13 @@ int nhrp_address_is_multicast(struct nhrp_address *addr)
 	return FALSE;
 }
 
-unsigned int nhrp_address_hash(struct nhrp_address *addr)
+unsigned int nhrp_address_hash(const struct nhrp_address *addr)
 {
-	unsigned int hash = 0;
+	unsigned int hash = 5381;
 	int i;
 
 	for (i = 0; i < addr->addr_len; i++)
-		hash = (hash << 8) ^ (hash >> 24) ^ addr->addr[i];
+		hash = hash * 33 + addr->addr[i];
 
 	return hash;
 }
@@ -358,7 +359,7 @@ void nhrp_address_set_broadcast(struct nhrp_address *addr, int prefix)
 		addr->addr[i / 8] |= 0x80 >> (i % 8);
 }
 
-int nhrp_address_is_network(struct nhrp_address *addr, int prefix)
+int nhrp_address_is_network(const struct nhrp_address *addr, int prefix)
 {
 	int i, bits = 8 * addr->addr_len;
 
@@ -368,7 +369,7 @@ int nhrp_address_is_network(struct nhrp_address *addr, int prefix)
 	return TRUE;
 }
 
-const char *nhrp_address_format(struct nhrp_address *addr,
+const char *nhrp_address_format(const struct nhrp_address *addr,
 				size_t buflen, char *buffer)
 {
 	switch (addr->type) {
