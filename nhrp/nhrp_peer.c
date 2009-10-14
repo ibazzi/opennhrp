@@ -679,17 +679,17 @@ static void nhrp_peer_address_query_cb(struct nhrp_address_query *query,
 					      address_query);
 	char host[64];
 
-	if (num_addr <= 0) {
+	if (num_addr > 0) {
+		nhrp_info("Resolved '%s' as %s",
+			  peer->nbma_hostname,
+			  nhrp_address_format(&addrs[0], sizeof(host), host));
+		peer->next_hop_address = addrs[0];
+		peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
+		nhrp_peer_run_up_script(peer);
+	} else {
 		nhrp_error("Failed to resolve '%s'", peer->nbma_hostname);
 		nhrp_peer_restart_error(peer);
 	}
-
-	nhrp_info("Resolved '%s' as %s",
-		  peer->nbma_hostname,
-		  nhrp_address_format(&addrs[0], sizeof(host), host));
-	peer->next_hop_address = addrs[0];
-	peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
-	nhrp_peer_run_up_script(peer);
 }
 
 static void nhrp_peer_restart_cb(struct ev_timer *w, int revents)
