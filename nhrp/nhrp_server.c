@@ -388,7 +388,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	pr->natted = natted;
 	pr->payload = payload;
 
-	pr->cie = nhrp_payload_get_cie(payload, 0);
+	pr->cie = nhrp_payload_get_cie(payload, 1);
 	nhrp_server_start_cie_reg(pr);
 
 	return TRUE;
