@@ -466,6 +466,16 @@ static int nhrp_peer_routes_up(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
+static int nhrp_peer_routes_down(void *ctx, struct nhrp_peer *peer)
+{
+	if (peer->flags & NHRP_PEER_FLAG_UP) {
+		nhrp_peer_run_script(peer, "route-down", NULL);
+		peer->flags &= ~NHRP_PEER_FLAG_UP;
+	}
+
+	return 0;
+}
+
 static int nhrp_peer_routes_renew(void *ctx, struct nhrp_peer *peer)
 {
 	int *num_routes = (int *) ctx;
@@ -536,7 +546,20 @@ static void nhrp_peer_expire_cb(struct ev_timer *w, int revents)
 
 static void nhrp_peer_is_down(struct nhrp_peer *peer)
 {
+	struct nhrp_peer_selector sel;
+
 	peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
+
+	/* Check if there are routes using this peer as next-hop */
+	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE) {
+		memset(&sel, 0, sizeof(sel));
+		sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+		sel.interface = peer->interface;
+		sel.next_hop_address = peer->protocol_address;
+		nhrp_peer_foreach(nhrp_peer_routes_down, NULL, &sel);
+	}
+
+	/* Remove from lists */
 	if (list_hashed(&peer->mcast_list_entry))
 		list_del(&peer->mcast_list_entry);
 	if (hlist_hashed(&peer->nbma_hash_entry))
@@ -594,11 +617,13 @@ static void nhrp_peer_is_up(struct nhrp_peer *peer)
 	peer->flags |= NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP;
 
 	/* Check if there are routes using this peer as next-hop*/
-	memset(&sel, 0, sizeof(sel));
-	sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
-	sel.interface = iface;
-	sel.next_hop_address = peer->protocol_address;
-	nhrp_peer_foreach(nhrp_peer_routes_up, NULL, &sel);
+	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE) {
+		memset(&sel, 0, sizeof(sel));
+		sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+		sel.interface = iface;
+		sel.next_hop_address = peer->protocol_address;
+		nhrp_peer_foreach(nhrp_peer_routes_up, NULL, &sel);
+	}
 
 	if (peer->queued_packet != NULL) {
 		nhrp_packet_marshall_and_send(peer->queued_packet);
