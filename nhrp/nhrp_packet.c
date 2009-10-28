@@ -671,6 +671,7 @@ static int nhrp_packet_forward(struct nhrp_packet *packet)
 
 	switch (packet_types[packet->hdr.type].type) {
 	case NHRP_TYPE_REQUEST:
+	case NHRP_TYPE_INDICATION:
 		p = nhrp_packet_extension(packet,
 					  NHRP_EXTENSION_FORWARD_TRANSIT_NHS |
 					  NHRP_EXTENSION_FLAG_NOCREATE,
