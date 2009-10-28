@@ -245,7 +245,7 @@ void nhrp_payload_add_cie(struct nhrp_payload *payload, struct nhrp_cie *cie)
 	if (payload->payload_type != NHRP_PAYLOAD_TYPE_CIE_LIST)
 		return;
 
-	list_add(&cie->cie_list_entry, &payload->u.cie_list);
+	list_add_tail(&cie->cie_list_entry, &payload->u.cie_list);
 }
 
 struct nhrp_cie *nhrp_payload_get_cie(struct nhrp_payload *payload, int index)
@@ -541,7 +541,7 @@ static int unmarshall_payload(uint8_t **pdu, size_t *pduleft,
 		cieleft = size;
 		while (cieleft) {
 			cie = nhrp_cie_alloc();
-			list_add(&cie->cie_list_entry, &p->u.cie_list);
+			list_add_tail(&cie->cie_list_entry, &p->u.cie_list);
 			if (!unmarshall_cie(pdu, &cieleft, packet, cie))
 				return FALSE;
 		}
