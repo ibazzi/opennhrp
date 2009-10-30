@@ -6,6 +6,14 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.11.3 - released 30/Oct/2009
+-----------------------------------------------------------------------------
+ - handle dns lookup failures properly
+ - fix failover for shortcut routes
+ - detect forwarding loops for indications
+ - some code cleanups
+
+-----------------------------------------------------------------------------
  opennhrp 0.11.2 - released 25/Sep/2009
 -----------------------------------------------------------------------------
  - fixed libev usage bug that could cause crash on script timeout
