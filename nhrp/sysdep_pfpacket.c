@@ -277,7 +277,7 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 		.msg_iovlen = 1,
 	};
 	char fr[32], to[32];
-	int r, i, nbmaset, fd = w->fd;
+	int r, i, fd = w->fd;
 
 	if (!(revents & EV_READ))
 		return;
@@ -324,15 +324,7 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 					       &src, &dst))
 			return;
 
-		nbmaset = 0;
-		for (i = 0; i < lladdr->sll_halen; i++)
-			if (lladdr->sll_addr[i] != 0)
-				nbmaset = 1;
-
 		if (nhrp_address_is_multicast(&dst)) {
-			if (nbmaset)
-				continue;
-
 			nhrp_debug("Multicast from %s to %s",
 				   nhrp_address_format(&src, sizeof(fr), fr),
 				   nhrp_address_format(&dst, sizeof(to), to));
