@@ -277,7 +277,7 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 		.msg_iovlen = 1,
 	};
 	char fr[32], to[32];
-	int r, i, fd = w->fd;
+	int r, fd = w->fd;
 
 	if (!(revents & EV_READ))
 		return;
