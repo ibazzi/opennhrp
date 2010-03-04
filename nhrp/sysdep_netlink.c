@@ -35,7 +35,7 @@
 #include "nhrp_interface.h"
 #include "nhrp_peer.h"
 
-#define NETLINK_KERNEL_BUFFER	(64 * 1024)
+#define NETLINK_KERNEL_BUFFER	(256 * 1024)
 #define NETLINK_RECV_BUFFER	(8 * 1024)
 
 #define NLMSG_TAIL(nmsg) \
