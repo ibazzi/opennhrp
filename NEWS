@@ -6,6 +6,12 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.11.4 - released 04/Mar/2010
+-----------------------------------------------------------------------------
+ - multicast packet relay fix
+ - netlink buffer sizes increased
+
+-----------------------------------------------------------------------------
  opennhrp 0.11.3 - released 30/Oct/2009
 -----------------------------------------------------------------------------
  - handle dns lookup failures properly
