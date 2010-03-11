@@ -55,7 +55,16 @@ struct netlink_fd {
 	const netlink_dispatch_f *dispatch;
 };
 
-static struct netlink_fd netlink_fd;
+static const int netlink_groups[] = {
+	0,
+	RTMGRP_NEIGH,
+	RTMGRP_LINK,
+	RTMGRP_IPV4_IFADDR,
+	RTMGRP_IPV4_ROUTE,
+};
+static struct netlink_fd netlink_fds[ARRAY_SIZE(netlink_groups)];
+#define talk_fd netlink_fds[0]
+
 static struct ev_io packet_io;
 
 static u_int16_t translate_mtu(u_int16_t mtu)
@@ -290,7 +299,7 @@ static int netlink_configure_arp(struct nhrp_interface *iface, int pf)
 	netlink_add_rtattr_l(&req.n, sizeof(req), NDTA_PARMS,
 			     parms.buf, parms.rta.rta_len - RTA_LENGTH(0));
 
-	return netlink_send(&netlink_fd, &req.n);
+	return netlink_send(&talk_fd, &req.n);
 }
 
 static int netlink_link_arp_on(struct nhrp_interface *iface)
@@ -844,10 +853,7 @@ static void pfpacket_read_cb(struct ev_io *w, int revents)
 
 int kernel_init(void)
 {
-	const int groups =
-		RTMGRP_NEIGH | RTMGRP_LINK |
-		RTMGRP_IPV4_IFADDR | RTMGRP_IPV4_ROUTE;
-	int fd;
+	int fd, i;
 
 	proc_icmp_redirect_off("all");
 
@@ -861,23 +867,28 @@ int kernel_init(void)
 	ev_io_init(&packet_io, pfpacket_read_cb, fd, EV_READ);
 	ev_io_start(&packet_io);
 
-	netlink_fd.dispatch_size = sizeof(route_dispatch) / sizeof(route_dispatch[0]);
-	netlink_fd.dispatch = route_dispatch;
-	if (!netlink_open(&netlink_fd, NETLINK_ROUTE, groups))
-		goto err_remove_packetfd;
+	for (i = 0; i < ARRAY_SIZE(netlink_groups); i++) {
+		netlink_fds[i].dispatch_size = sizeof(route_dispatch) / sizeof(route_dispatch[0]);
+		netlink_fds[i].dispatch = route_dispatch;
+		if (!netlink_open(&netlink_fds[i], NETLINK_ROUTE,
+				  netlink_groups[i]))
+			goto err_close_all;
+	}
 
-	netlink_enumerate(&netlink_fd, PF_UNSPEC, RTM_GETLINK);
-	netlink_read_cb(&netlink_fd.io, EV_READ);
+	netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETLINK);
+	netlink_read_cb(&talk_fd.io, EV_READ);
 
-	netlink_enumerate(&netlink_fd, PF_UNSPEC, RTM_GETADDR);
-	netlink_read_cb(&netlink_fd.io, EV_READ);
+	netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETADDR);
+	netlink_read_cb(&talk_fd.io, EV_READ);
 
-	netlink_enumerate(&netlink_fd, PF_UNSPEC, RTM_GETROUTE);
-	netlink_read_cb(&netlink_fd.io, EV_READ);
+	netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETROUTE);
+	netlink_read_cb(&talk_fd.io, EV_READ);
 
 	return TRUE;
 
-err_remove_packetfd:
+err_close_all:
+	for (i = 0; i < ARRAY_SIZE(netlink_groups); i++)
+		netlink_close(&netlink_fds[i]);
 	ev_io_stop(&packet_io);
 	close(fd);
 
@@ -916,7 +927,7 @@ int kernel_route(struct nhrp_interface *out_iface,
 		netlink_add_rtattr_l(&req.n, sizeof(req), RTA_OIF,
 				     &out_iface->index, sizeof(int));
 
-	if (!netlink_talk(&netlink_fd, &req.n, sizeof(req), &req.n))
+	if (!netlink_talk(&talk_fd, &req.n, sizeof(req), &req.n))
 		return FALSE;
 
 	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(r), RTM_PAYLOAD(&req.n));
@@ -1038,6 +1049,6 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor,
 			   nhrp_address_format(neighbor, sizeof(neigh), neigh));
 	}
 
-	return netlink_send(&netlink_fd, &req.n);
+	return netlink_send(&talk_fd, &req.n);
 }
 
