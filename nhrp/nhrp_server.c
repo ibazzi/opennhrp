@@ -89,6 +89,7 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	char tmp[64], tmp2[64];
 	struct nhrp_payload *payload;
 	struct nhrp_peer *peer = packet->dst_peer;
+	struct nhrp_peer_selector sel;
 	struct nhrp_cie *cie;
 
 	nhrp_info("Received Resolution Request from proto src %s to %s",
@@ -97,6 +98,16 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 		  nhrp_address_format(&packet->dst_protocol_address,
 				      sizeof(tmp2), tmp2));
 
+	/* As first thing, flush all negative entries for the
+	 * requestor */
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_EXACT;
+	sel.type_mask = BIT(NHRP_PEER_TYPE_NEGATIVE);
+	sel.interface = packet->src_iface;
+	sel.protocol_address = packet->src_protocol_address;
+	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+
+	/* Send reply */
 	packet->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
 	packet->hdr.flags &= NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
 			     NHRP_FLAG_RESOLUTION_SOURCE_STABLE |
