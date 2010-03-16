@@ -163,7 +163,7 @@ struct ev_loop;
 #endif
 
 #define EV_VERSION_MAJOR 3
-#define EV_VERSION_MINOR 8
+#define EV_VERSION_MINOR 9
 
 #ifndef EV_CB_DECLARE
 # define EV_CB_DECLARE(type) void (*cb)(EV_P_ struct type *w, int revents);
@@ -365,7 +365,7 @@ typedef struct ev_async
   EV_ATOMIC_T sent; /* private */
 } ev_async;
 
-# define ev_async_pending(w) ((w)->sent + 0)
+# define ev_async_pending(w) (+(w)->sent)
 #endif
 
 /* the presence of this union forces similar struct layout */
@@ -406,7 +406,8 @@ union ev_any_watcher
 #define EVFLAG_FORKCHECK  0x02000000U /* check for a fork in each iteration */
 /* debugging/feature disable */
 #define EVFLAG_NOINOTIFY  0x00100000U /* do not attempt to use inotify */
-#define EVFLAG_NOSIGFD    0x00200000U /* do not attempt to use signalfd */
+#define EVFLAG_NOSIGFD 0 /* compatibility to pre-3.9 */
+#define EVFLAG_SIGNALFD   0x00200000U /* attempt to use signalfd */
 /* method bits to be ored together */
 #define EVBACKEND_SELECT  0x00000001U /* about anywhere */
 #define EVBACKEND_POLL    0x00000002U /* !win */
@@ -414,6 +415,7 @@ union ev_any_watcher
 #define EVBACKEND_KQUEUE  0x00000008U /* bsd */
 #define EVBACKEND_DEVPOLL 0x00000010U /* solaris 8 */ /* NYI */
 #define EVBACKEND_PORT    0x00000020U /* solaris 10 */
+#define EVBACKEND_ALL     0x0000003FU
 
 #if EV_PROTOTYPES
 int ev_version_major (void);
@@ -612,11 +614,11 @@ void ev_resume  (EV_P);
 # define ev_priority(ev)                     ((ev), EV_MINPRI)
 # define ev_set_priority(ev,pri)             ((ev), (pri))
 #else
-# define ev_priority(ev)                     ((((ev_watcher *)(void *)(ev))->priority) + 0)
+# define ev_priority(ev)                     (+(((ev_watcher *)(void *)(ev))->priority))
 # define ev_set_priority(ev,pri)             (  (ev_watcher *)(void *)(ev))->priority = (pri)
 #endif
 
-#define ev_periodic_at(ev)                   (((ev_watcher_time *)(ev))->at + 0.)
+#define ev_periodic_at(ev)                   (+((ev_watcher_time *)(ev))->at)
 
 #ifndef ev_set_cb
 # define ev_set_cb(ev,cb_)                   ev_cb (ev) = (cb_)

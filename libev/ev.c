@@ -155,6 +155,7 @@ extern "C" {
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 #include <fcntl.h>
 #include <stddef.h>
 
@@ -304,7 +305,7 @@ extern "C" {
 #endif
 
 #ifndef EV_USE_SIGNALFD
-# if __linux && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 9))
+# if __linux && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 7))
 #  define EV_USE_SIGNALFD 1
 # else
 #  define EV_USE_SIGNALFD 0
@@ -404,8 +405,33 @@ int eventfd (unsigned int initval, int flags);
 #endif
 
 #if EV_USE_SIGNALFD
-# include <sys/signalfd.h>
+/* our minimum requirement is glibc 2.7 which has the stub, but not the header */
+# include <stdint.h>
+# ifndef SFD_NONBLOCK
+#  define SFD_NONBLOCK O_NONBLOCK
+# endif
+# ifndef SFD_CLOEXEC
+#  ifdef O_CLOEXEC
+#   define SFD_CLOEXEC O_CLOEXEC
+#  else
+#   define SFD_CLOEXEC 02000000
+#  endif
+# endif
+# ifdef __cplusplus
+extern "C" {
+# endif
+int signalfd (int fd, const sigset_t *mask, int flags);
+
+struct signalfd_siginfo
+{
+  uint32_t ssi_signo;
+  char pad[128 - sizeof (uint32_t)];
+};
+# ifdef __cplusplus
+}
+# endif
 #endif
+
 
 /**/
 
@@ -427,7 +453,6 @@ int eventfd (unsigned int initval, int flags);
 
 #define MIN_TIMEJUMP  1. /* minimum timejump that gets detected (if monotonic clock available) */
 #define MAX_BLOCKTIME 59.743 /* never wait longer than this time (to detect time jumps) */
-/*#define CLEANUP_INTERVAL (MAX_BLOCKTIME * 5.) /* how often to try to free memory and re-check fds, TODO */
 
 #if __GNUC__ >= 4
 # define expect(expr,value)         __builtin_expect ((expr),(value))
@@ -476,6 +501,16 @@ static EV_ATOMIC_T have_realtime; /* did clock_gettime (CLOCK_REALTIME) work? */
 
 #if EV_USE_MONOTONIC
 static EV_ATOMIC_T have_monotonic; /* did clock_gettime (CLOCK_MONOTONIC) work? */
+#endif
+
+#ifndef EV_FD_TO_WIN32_HANDLE
+# define EV_FD_TO_WIN32_HANDLE(fd) _get_osfhandle (fd)
+#endif
+#ifndef EV_WIN32_HANDLE_TO_FD
+# define EV_WIN32_HANDLE_TO_FD(handle) _open_osfhandle (fd, 0)
+#endif
+#ifndef EV_WIN32_CLOSE_FD
+# define EV_WIN32_CLOSE_FD(fd) close (fd)
 #endif
 
 #ifdef _WIN32
@@ -878,11 +913,7 @@ fd_reify (EV_P)
       if (events)
         {
           unsigned long arg;
-          #ifdef EV_FD_TO_WIN32_HANDLE
-            anfd->handle = EV_FD_TO_WIN32_HANDLE (fd);
-          #else
-            anfd->handle = _get_osfhandle (fd);
-          #endif
+          anfd->handle = EV_FD_TO_WIN32_HANDLE (fd);
           assert (("libev: only socket fds supported in this configuration", ioctlsocket (anfd->handle, FIONREAD, &arg) == 0));
         }
 #endif
@@ -1576,7 +1607,7 @@ loop_init (EV_P_ unsigned int flags)
       fs_fd             = flags & EVFLAG_NOINOTIFY ? -1 : -2;
 #endif
 #if EV_USE_SIGNALFD
-      sigfd             = flags & EVFLAG_NOSIGFD   ? -1 : -2;
+      sigfd             = flags & EVFLAG_SIGNALFD  ? -2 : -1;
 #endif
 
       if (!(flags & 0x0000ffffU))
@@ -1623,19 +1654,14 @@ loop_destroy (EV_P)
 
       if (evpipe [0] >= 0)
         {
-          close (evpipe [0]);
-          close (evpipe [1]);
+          EV_WIN32_CLOSE_FD (evpipe [0]);
+          EV_WIN32_CLOSE_FD (evpipe [1]);
         }
     }
 
 #if EV_USE_SIGNALFD
   if (ev_is_active (&sigfd_w))
-    {
-      /*ev_ref (EV_A);*/
-      /*ev_io_stop (EV_A_ &sigfd_w);*/
-
-      close (sigfd);
-    }
+    close (sigfd);
 #endif
 
 #if EV_USE_INOTIFY
@@ -1730,8 +1756,8 @@ loop_fork (EV_P)
 
       if (evpipe [0] >= 0)
         {
-          close (evpipe [0]);
-          close (evpipe [1]);
+          EV_WIN32_CLOSE_FD (evpipe [0]);
+          EV_WIN32_CLOSE_FD (evpipe [1]);
         }
 
       evpipe_init (EV_A);
@@ -2724,6 +2750,8 @@ ev_signal_start (EV_P_ ev_signal *w)
 # endif
       {
 # if _WIN32
+        evpipe_init (EV_A);
+
         signal (w->signum, ev_sighandler);
 # else
         struct sigaction sa;
@@ -2764,11 +2792,14 @@ ev_signal_stop (EV_P_ ev_signal *w)
 #if EV_USE_SIGNALFD
       if (sigfd >= 0)
         {
-          sigprocmask (SIG_UNBLOCK, &sigfd_set, 0);//D
+          sigset_t ss;
+
+          sigemptyset (&ss);
+          sigaddset (&ss, w->signum);
           sigdelset (&sigfd_set, w->signum);
+
           signalfd (sigfd, &sigfd_set, 0);
-          sigprocmask (SIG_BLOCK, &sigfd_set, 0);//D
-          /*TODO: maybe unblock signal? */
+          sigprocmask (SIG_UNBLOCK, &ss, 0);
         }
       else
 #endif
@@ -2831,12 +2862,33 @@ infy_add (EV_P_ ev_stat *w)
 {
   w->wd = inotify_add_watch (fs_fd, w->path, IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF | IN_MODIFY | IN_DONT_FOLLOW | IN_MASK_ADD);
 
-  if (w->wd < 0)
+  if (w->wd >= 0)
     {
-      w->timer.repeat = w->interval ? w->interval : DEF_STAT_INTERVAL;
-      ev_timer_again (EV_A_ &w->timer); /* this is not race-free, so we still need to recheck periodically */
+      struct statfs sfs;
 
-      /* monitor some parent directory for speedup hints */
+      /* now local changes will be tracked by inotify, but remote changes won't */
+      /* unless the filesystem is known to be local, we therefore still poll */
+      /* also do poll on <2.6.25, but with normal frequency */
+
+      if (!fs_2625)
+        w->timer.repeat = w->interval ? w->interval : DEF_STAT_INTERVAL;
+      else if (!statfs (w->path, &sfs)
+               && (sfs.f_type == 0x1373 /* devfs */
+                   || sfs.f_type == 0xEF53 /* ext2/3 */
+                   || sfs.f_type == 0x3153464a /* jfs */
+                   || sfs.f_type == 0x52654973 /* reiser3 */
+                   || sfs.f_type == 0x01021994 /* tempfs */
+                   || sfs.f_type == 0x58465342 /* xfs */))
+        w->timer.repeat = 0.; /* filesystem is local, kernel new enough */
+      else
+        w->timer.repeat = w->interval ? w->interval : NFS_STAT_INTERVAL; /* remote, use reduced frequency */
+    }
+  else
+    {
+      /* can't use inotify, continue to stat */
+      w->timer.repeat = w->interval ? w->interval : DEF_STAT_INTERVAL;
+
+      /* if path is not there, monitor some parent directory for speedup hints */
       /* note that exceeding the hardcoded path limit is not a correctness issue, */
       /* but an efficiency issue only */
       if ((errno == ENOENT || errno == EACCES) && strlen (w->path) < 4096)
@@ -2862,26 +2914,12 @@ infy_add (EV_P_ ev_stat *w)
     }
 
   if (w->wd >= 0)
-    {
-      wlist_add (&fs_hash [w->wd & (EV_INOTIFY_HASHSIZE - 1)].head, (WL)w);
+    wlist_add (&fs_hash [w->wd & (EV_INOTIFY_HASHSIZE - 1)].head, (WL)w);
 
-      /* now local changes will be tracked by inotify, but remote changes won't */
-      /* unless the filesystem it known to be local, we therefore still poll */
-      /* also do poll on <2.6.25, but with normal frequency */
-      struct statfs sfs;
-
-      if (fs_2625 && !statfs (w->path, &sfs))
-        if (sfs.f_type == 0x1373 /* devfs */
-            || sfs.f_type == 0xEF53 /* ext2/3 */
-            || sfs.f_type == 0x3153464a /* jfs */
-            || sfs.f_type == 0x52654973 /* reiser3 */
-            || sfs.f_type == 0x01021994 /* tempfs */
-            || sfs.f_type == 0x58465342 /* xfs */)
-          return;
-
-      w->timer.repeat = w->interval ? w->interval : fs_2625 ? NFS_STAT_INTERVAL : DEF_STAT_INTERVAL;
-      ev_timer_again (EV_A_ &w->timer);
-    }
+  /* now re-arm timer, if required */
+  if (ev_is_active (&w->timer)) ev_ref (EV_A);
+  ev_timer_again (EV_A_ &w->timer);
+  if (ev_is_active (&w->timer)) ev_unref (EV_A);
 }
 
 static void noinline
@@ -2967,6 +3005,17 @@ check_2625 (EV_P)
   fs_2625 = 1;
 }
 
+inline_size int
+infy_newfd (void)
+{
+#if defined (IN_CLOEXEC) && defined (IN_NONBLOCK)
+  int fd = inotify_init1 (IN_CLOEXEC | IN_NONBLOCK);
+  if (fd >= 0)
+    return fd;
+#endif
+  return inotify_init ();
+}
+
 inline_size void
 infy_init (EV_P)
 {
@@ -2977,13 +3026,15 @@ infy_init (EV_P)
 
   check_2625 (EV_A);
 
-  fs_fd = inotify_init ();
+  fs_fd = infy_newfd ();
 
   if (fs_fd >= 0)
     {
+      fd_intern (fs_fd);
       ev_io_init (&fs_w, infy_cb, fs_fd, EV_READ);
       ev_set_priority (&fs_w, EV_MAXPRI);
       ev_io_start (EV_A_ &fs_w);
+      ev_unref (EV_A);
     }
 }
 
@@ -2995,8 +3046,18 @@ infy_fork (EV_P)
   if (fs_fd < 0)
     return;
 
+  ev_ref (EV_A);
+  ev_io_stop (EV_A_ &fs_w);
   close (fs_fd);
-  fs_fd = inotify_init ();
+  fs_fd = infy_newfd ();
+
+  if (fs_fd >= 0)
+    {
+      fd_intern (fs_fd);
+      ev_io_set (&fs_w, fs_fd, EV_READ);
+      ev_io_start (EV_A_ &fs_w);
+      ev_unref (EV_A);
+    }
 
   for (slot = 0; slot < EV_INOTIFY_HASHSIZE; ++slot)
     {
@@ -3013,7 +3074,12 @@ infy_fork (EV_P)
           if (fs_fd >= 0)
             infy_add (EV_A_ w); /* re-add, no matter what */
           else
-            ev_timer_again (EV_A_ &w->timer);
+            {
+              w->timer.repeat = w->interval ? w->interval : DEF_STAT_INTERVAL;
+              if (ev_is_active (&w->timer)) ev_ref (EV_A);
+              ev_timer_again (EV_A_ &w->timer);
+              if (ev_is_active (&w->timer)) ev_unref (EV_A);
+            }
         }
     }
 }
@@ -3040,25 +3106,28 @@ stat_timer_cb (EV_P_ ev_timer *w_, int revents)
 {
   ev_stat *w = (ev_stat *)(((char *)w_) - offsetof (ev_stat, timer));
 
-  /* we copy this here each the time so that */
-  /* prev has the old value when the callback gets invoked */
-  w->prev = w->attr;
+  ev_statdata prev = w->attr;
   ev_stat_stat (EV_A_ w);
 
   /* memcmp doesn't work on netbsd, they.... do stuff to their struct stat */
   if (
-    w->prev.st_dev      != w->attr.st_dev
-    || w->prev.st_ino   != w->attr.st_ino
-    || w->prev.st_mode  != w->attr.st_mode
-    || w->prev.st_nlink != w->attr.st_nlink
-    || w->prev.st_uid   != w->attr.st_uid
-    || w->prev.st_gid   != w->attr.st_gid
-    || w->prev.st_rdev  != w->attr.st_rdev
-    || w->prev.st_size  != w->attr.st_size
-    || w->prev.st_atime != w->attr.st_atime
-    || w->prev.st_mtime != w->attr.st_mtime
-    || w->prev.st_ctime != w->attr.st_ctime
+    prev.st_dev      != w->attr.st_dev
+    || prev.st_ino   != w->attr.st_ino
+    || prev.st_mode  != w->attr.st_mode
+    || prev.st_nlink != w->attr.st_nlink
+    || prev.st_uid   != w->attr.st_uid
+    || prev.st_gid   != w->attr.st_gid
+    || prev.st_rdev  != w->attr.st_rdev
+    || prev.st_size  != w->attr.st_size
+    || prev.st_atime != w->attr.st_atime
+    || prev.st_mtime != w->attr.st_mtime
+    || prev.st_ctime != w->attr.st_ctime
   ) {
+      /* we only update w->prev on actual differences */
+      /* in case we test more often than invoke the callback, */
+      /* to ensure that prev is always different to attr */
+      w->prev = prev;
+
       #if EV_USE_INOTIFY
         if (fs_fd >= 0)
           {
@@ -3093,7 +3162,10 @@ ev_stat_start (EV_P_ ev_stat *w)
     infy_add (EV_A_ w);
   else
 #endif
-    ev_timer_again (EV_A_ &w->timer);
+    {
+      ev_timer_again (EV_A_ &w->timer);
+      ev_unref (EV_A);
+    }
 
   ev_start (EV_A_ (W)w, 1);
 
@@ -3112,7 +3184,12 @@ ev_stat_stop (EV_P_ ev_stat *w)
 #if EV_USE_INOTIFY
   infy_del (EV_A_ w);
 #endif
-  ev_timer_stop (EV_A_ &w->timer);
+
+  if (ev_is_active (&w->timer))
+    {
+      ev_ref (EV_A);
+      ev_timer_stop (EV_A_ &w->timer);
+    }
 
   ev_stop (EV_A_ (W)w);
 
