@@ -148,18 +148,6 @@ static const char *nhrp_cie_code_text(int ct)
 	return "unknown";
 }
 
-static inline void nhrp_peer_debug_refcount(const char *func,
-					    struct nhrp_peer *peer)
-{
-#if 0
-	char tmp[NHRP_PEER_FORMAT_LEN];
-	nhrp_debug("%s(%s %s) ref=%d",
-		   func, nhrp_peer_type[peer->type],
-		   nhrp_peer_format(peer, sizeof(tmp), tmp),
-		   peer->ref);
-#endif
-}
-
 static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len,
 				   char *buf, int full)
 {
@@ -231,6 +219,18 @@ static inline char *nhrp_peer_format(struct nhrp_peer *peer,
 				     size_t len, char *buf)
 {
 	return nhrp_peer_format_full(peer, len, buf, TRUE);
+}
+
+static inline void nhrp_peer_debug_refcount(const char *func,
+					    struct nhrp_peer *peer)
+{
+#if 0
+	char tmp[NHRP_PEER_FORMAT_LEN];
+	nhrp_debug("%s(%s %s) ref=%d",
+		   func, nhrp_peer_type[peer->type],
+		   nhrp_peer_format(peer, sizeof(tmp), tmp),
+		   peer->ref);
+#endif
 }
 
 static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer)
@@ -441,9 +441,10 @@ static void nhrp_peer_script_route_up_done(union nhrp_peer_event e, int revents)
 	char tmp[64], reason[32];
 
 	if (nhrp_peer_event_ok(e, revents)) {
-		nhrp_debug("[%s] Route up script: success",
-			   nhrp_address_format(&peer->protocol_address,
-					       sizeof(tmp), tmp));
+		if (events)
+			nhrp_debug("[%s] Route up script: success",
+				   nhrp_address_format(&peer->protocol_address,
+						       sizeof(tmp), tmp));
 
 		peer->flags |= NHRP_PEER_FLAG_UP;
 		nhrp_peer_schedule(peer, peer->expire_time - NHRP_EXPIRY_TIME
@@ -551,7 +552,10 @@ static void nhrp_peer_is_down(struct nhrp_peer *peer)
 {
 	struct nhrp_peer_selector sel;
 
-	peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
+	/* Remove UP flags if not being removed permanently, so futher
+	 * lookups are valid */
+	if (!(peer->flags & NHRP_PEER_FLAG_REMOVED))
+		peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
 
 	/* Check if there are routes using this peer as next-hop */
 	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE) {
@@ -1559,6 +1563,31 @@ static void nhrp_peer_reinsert(struct nhrp_peer *peer, int type)
 	nhrp_peer_insert_cb(&peer->timer, 0);
 }
 
+static int nhrp_peer_replace_shortcut(void *ctx, struct nhrp_peer *peer)
+{
+	struct nhrp_peer *shortcut = (struct nhrp_peer *) ctx;
+
+	/* Shortcut of identical prefix is replacement, either
+	 * due to renewal, or new shortcut next-hop. */
+	if (nhrp_address_cmp(&peer->protocol_address,
+			     &shortcut->protocol_address) == 0 &&
+	    peer->prefix_length == shortcut->prefix_length) {
+		peer->flags |= NHRP_PEER_FLAG_REPLACED;
+
+		/* If identical shortcut is being refreshed,
+		 * mark the refresher peer entry up. */
+		if ((peer->flags & NHRP_PEER_FLAG_UP) &&
+		    nhrp_address_cmp(&peer->next_hop_address,
+				     &shortcut->next_hop_address) == 0)
+			shortcut->flags |= NHRP_PEER_FLAG_UP;
+	}
+
+	/* Delete the old peer unconditionally */
+	nhrp_peer_remove(peer);
+
+	return 0;
+}
+
 void nhrp_peer_insert(struct nhrp_peer *peer)
 {
 	struct nhrp_peer_selector sel;
@@ -1566,19 +1595,20 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 
 	/* First, prune all duplicates */
 	memset(&sel, 0, sizeof(sel));
-	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
-		/* remove all existing shortcuts with same nexthop */
-		sel.flags = NHRP_PEER_FIND_SUBNET;
-		sel.next_hop_address = peer->next_hop_address;
-	} else {
-		/* remove exact nbma protocol address matches */
-		sel.flags = NHRP_PEER_FIND_EXACT;
-	}
-	sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
 	sel.interface = peer->interface;
 	sel.protocol_address = peer->protocol_address;
 	sel.prefix_length = peer->prefix_length;
-	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
+		/* remove all existing shortcuts with same nexthop */
+		sel.flags = NHRP_PEER_FIND_SUBNET;
+		sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+		nhrp_peer_foreach(nhrp_peer_replace_shortcut, peer, &sel);
+	} else {
+		/* remove exact nbma protocol address matches */
+		sel.flags = NHRP_PEER_FIND_EXACT;
+		sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
+		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+	}
 
 	/* Keep a reference as long as we are on the list */
 	peer = nhrp_peer_get(peer);
