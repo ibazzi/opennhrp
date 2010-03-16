@@ -100,6 +100,7 @@ static void nhrp_peer_dnsmap_restart_cb(struct ev_timer *w, int revents);
 static void nhrp_peer_remove_cb(struct ev_timer *w, int revents);
 static void nhrp_peer_send_resolve(struct nhrp_peer *peer);
 static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents);
+static void nhrp_peer_expire_cb(struct ev_timer *w, int revents);
 
 static const char *nhrp_error_indication_text(int ei)
 {
@@ -445,6 +446,8 @@ static void nhrp_peer_script_route_up_done(union nhrp_peer_event e, int revents)
 					       sizeof(tmp), tmp));
 
 		peer->flags |= NHRP_PEER_FLAG_UP;
+		nhrp_peer_schedule(peer, peer->expire_time - NHRP_EXPIRY_TIME
+				   - 10 - ev_now(), nhrp_peer_expire_cb);
 	} else {
 		nhrp_info("[%s] Route up script: %s; "
 			  "adding negative cached entry",
@@ -1519,16 +1522,17 @@ static void nhrp_peer_insert_cb(struct ev_timer *w, int revents)
 		nhrp_peer_dnsmap_restart_cb(w, 0);
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
-		if (!(peer->flags & NHRP_PEER_FLAG_UP) &&
-		    nhrp_peer_route(peer->interface,
-				    &peer->next_hop_address,
-				    NHRP_PEER_FIND_UP | NHRP_PEER_FIND_EXACT,
-				    NHRP_PEER_TYPEMASK_ADJACENT) != NULL)
+		if (peer->flags & NHRP_PEER_FLAG_UP)
+			nhrp_peer_script_route_up_done(&peer->child, 0);
+		else if (nhrp_peer_route(peer->interface,
+					 &peer->next_hop_address,
+					 NHRP_PEER_FIND_UP | NHRP_PEER_FIND_EXACT,
+					 NHRP_PEER_TYPEMASK_ADJACENT) != NULL)
 			nhrp_peer_run_script(peer, "route-up",
 					     nhrp_peer_script_route_up_done);
-
-		nhrp_peer_schedule(peer, peer->expire_time - NHRP_EXPIRY_TIME
-				   - 1 - ev_now(), nhrp_peer_expire_cb);
+		else
+			nhrp_peer_schedule(peer, peer->expire_time - NHRP_EXPIRY_TIME
+					   - 10 - ev_now(), nhrp_peer_expire_cb);
 		break;
 	case NHRP_PEER_TYPE_NEGATIVE:
 		peer->expire_time = ev_now() + NHRP_NEGATIVE_CACHE_TIME;
