@@ -332,6 +332,19 @@ int nhrp_address_is_multicast(const struct nhrp_address *addr)
 	return FALSE;
 }
 
+int nhrp_address_is_any_addr(const struct nhrp_address *addr)
+{
+	switch (addr->type) {
+	case PF_UNSPEC:
+		return TRUE;
+	case PF_INET:
+		if (memcmp(addr->addr, "\x00\x00\x00\x00", 4) == 0)
+			return TRUE;
+		break;
+	}
+	return FALSE;
+}
+
 unsigned int nhrp_address_hash(const struct nhrp_address *addr)
 {
 	unsigned int hash = 5381;

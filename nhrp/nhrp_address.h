@@ -68,6 +68,7 @@ void nhrp_address_set_broadcast(struct nhrp_address *addr, int prefix);
 int nhrp_address_is_network(const struct nhrp_address *addr, int prefix);
 int nhrp_address_is_broadcast(const struct nhrp_address *addr, int prefix);
 int nhrp_address_is_multicast(const struct nhrp_address *addr);
+int nhrp_address_is_any_addr(const struct nhrp_address *addr);
 const char *nhrp_address_format(const struct nhrp_address *addr,
 				size_t buflen, char *buffer);
 

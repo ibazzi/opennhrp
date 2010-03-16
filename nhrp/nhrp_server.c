@@ -405,6 +405,35 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	return TRUE;
 }
 
+static int remove_peer_by_nbma(void *ctx, struct nhrp_peer *peer)
+{
+	struct nhrp_address *nbma = ctx;
+	struct nhrp_address *peer_nbma = NULL;
+
+	if (!nhrp_address_is_any_addr(nbma)) {
+		if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
+			struct nhrp_peer *nexthop;
+
+			nexthop = nhrp_peer_route(peer->interface,
+				&peer->next_hop_address,
+				NHRP_PEER_FIND_EXACT,
+				NHRP_PEER_TYPEMASK_ADJACENT);
+			if (nexthop != NULL)
+				peer_nbma = &nexthop->next_hop_address;
+		} else {
+			peer_nbma = &peer->next_hop_address;
+		}
+	} else {
+		peer_nbma = nbma;
+	}
+
+	if (peer_nbma != NULL &&
+	    nhrp_address_cmp(peer_nbma, nbma) == 0)
+		nhrp_peer_remove(peer);
+
+	return 0;
+}
+
 static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64];
@@ -446,7 +475,8 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 		sel.interface = packet->src_iface;
 		sel.protocol_address = cie->protocol_address;
 		sel.prefix_length = cie->hdr.prefix_length;
-		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+		nhrp_peer_foreach(remove_peer_by_nbma,
+				  &cie->nbma_address, &sel);
 		nhrp_rate_limit_clear(&cie->protocol_address,
 				      cie->hdr.prefix_length);
 	}
