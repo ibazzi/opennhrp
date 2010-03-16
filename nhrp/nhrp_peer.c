@@ -441,7 +441,7 @@ static void nhrp_peer_script_route_up_done(union nhrp_peer_event e, int revents)
 	char tmp[64], reason[32];
 
 	if (nhrp_peer_event_ok(e, revents)) {
-		if (events)
+		if (revents)
 			nhrp_debug("[%s] Route up script: success",
 				   nhrp_address_format(&peer->protocol_address,
 						       sizeof(tmp), tmp));
