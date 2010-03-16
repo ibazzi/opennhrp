@@ -97,9 +97,11 @@ static void signal_init(void)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(hook_signal); i++)
+	for (i = 0; i < ARRAY_SIZE(hook_signal); i++) {
 		ev_signal_init(&signal_event[i], handle_signal_cb,
 			       hook_signal[i]);
+		ev_signal_start(&signal_event[i]);
+	}
 }
 
 static int read_word(FILE *in, int *lineno, size_t len, char *word)
