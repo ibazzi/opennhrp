@@ -6,6 +6,16 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.11.5 - released 16/Mar/2010
+-----------------------------------------------------------------------------
+ - clear negative cached entries for peers which sends resolution request
+ - use several netlink sockets to receive notifications so we don't lose
+   sync on all of them
+ - fix shortcut renewals
+ - libev updated to version 3.9
+ - signal handling fixed
+
+-----------------------------------------------------------------------------
  opennhrp 0.11.4 - released 04/Mar/2010
 -----------------------------------------------------------------------------
  - multicast packet relay fix
