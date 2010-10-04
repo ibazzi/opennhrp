@@ -21,11 +21,14 @@
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
 
-#define NHRP_SCRIPT_TIMEOUT		120
 #define NHRP_PEER_FORMAT_LEN		128
+
+#define NHRP_SCRIPT_TIMEOUT		(2*60)
 #define NHRP_NEGATIVE_CACHE_TIME	(3*60)
 #define NHRP_EXPIRY_TIME		(5*60)
-#define NHRP_RETRY_REGISTER_TIME	(60)
+
+#define NHRP_RETRY_REGISTER_TIME	(30 + random()/(RAND_MAX/60))
+#define NHRP_RETRY_ERROR_TIME		(60 + random()/(RAND_MAX/120))
 
 #define NHRP_PEER_FLAG_PRUNE_PENDING	0x00010000
 
@@ -427,7 +430,8 @@ static void nhrp_peer_restart_error(struct nhrp_peer *peer)
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
 	case NHRP_PEER_TYPE_DYNAMIC_NHS:
-		nhrp_peer_schedule(peer, 10, nhrp_peer_restart_cb);
+		nhrp_peer_schedule(peer, NHRP_RETRY_ERROR_TIME,
+				   nhrp_peer_restart_cb);
 		break;
 	default:
 		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);

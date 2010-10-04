@@ -444,6 +444,7 @@ int main(int argc, char **argv)
 		}
 	}
 
+	srandom(time(NULL));
 	if (!log_init())
 		return 1;
 	if (!open_pid_file())
