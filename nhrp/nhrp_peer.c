@@ -21,7 +21,7 @@
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
 
-#define NHRP_SCRIPT_TIMEOUT		20
+#define NHRP_SCRIPT_TIMEOUT		120
 #define NHRP_PEER_FORMAT_LEN		128
 #define NHRP_NEGATIVE_CACHE_TIME	(3*60)
 #define NHRP_EXPIRY_TIME		(5*60)
