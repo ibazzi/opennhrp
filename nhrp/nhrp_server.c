@@ -140,11 +140,13 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	cie->nbma_address = peer->my_nbma_address;
 	cie->protocol_address = packet->dst_iface->protocol_address;
 
-	nhrp_info("Sending Resolution Reply %s is-at %s",
-		  nhrp_address_format(&cie->protocol_address,
+	nhrp_info("Sending Resolution Reply %s/%d is-at %s (holdtime %d)",
+		  nhrp_address_format(&packet->dst_protocol_address,
 				      sizeof(tmp), tmp),
+		  cie->hdr.prefix_length,
 		  nhrp_address_format(&cie->nbma_address,
-				      sizeof(tmp2), tmp2));
+				      sizeof(tmp2), tmp2),
+		  ntohs(cie->hdr.holding_time));
 
 	/* Reset NAT header to regenerate it for reply */
 	payload = nhrp_packet_extension(packet,
