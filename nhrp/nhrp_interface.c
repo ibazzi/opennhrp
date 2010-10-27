@@ -21,7 +21,6 @@
 #include "nhrp_interface.h"
 #include "nhrp_address.h"
 
-#define NHRP_DEFAULT_HOLDING_TIME	(2 * 60 * 60)
 #define NHRP_INDEX_HASH_SIZE		(1 << 6)
 
 static struct list_head name_list = LIST_INITIALIZER(name_list);

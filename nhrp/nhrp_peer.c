@@ -185,8 +185,9 @@ static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len,
 			      nhrp_address_format(&peer->next_hop_nat_oa,
 						  sizeof(tmp), tmp));
 	}
-	i += snprintf(&buf[i], len - i, " dev %s",
-		      peer->interface->name);
+	if (peer->interface != NULL)
+		i += snprintf(&buf[i], len - i, " dev %s",
+			      peer->interface->name);
 	if (peer->mtu)
 		i += snprintf(&buf[i], len - i, " mtu %d", peer->mtu);
 
@@ -802,7 +803,8 @@ static int nhrp_add_local_route_cie(void *ctx, struct nhrp_peer *route)
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
 
-	if (!(route->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST))
+	if (route->interface != NULL &&
+	    !(route->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST))
 		return 0;
 
 	cie = nhrp_cie_alloc();

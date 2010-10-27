@@ -82,4 +82,6 @@
 #define NHRP_NO_NBMA_GRE
 #endif
 
+#define NHRP_DEFAULT_HOLDING_TIME	(2 * 60 * 60)
+
 #endif

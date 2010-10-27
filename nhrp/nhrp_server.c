@@ -124,8 +124,13 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	cie->hdr = (struct nhrp_cie_header) {
 		.code = NHRP_CODE_SUCCESS,
 		.prefix_length = peer->prefix_length,
-		.holding_time = htons(peer->interface->holding_time),
 	};
+	if (peer->holding_time)
+		cie->hdr.holding_time = htons(peer->holding_time);
+	else if (peer->interface != NULL)
+		cie->hdr.holding_time = htons(peer->interface->holding_time);
+	else
+		cie->hdr.holding_time = NHRP_DEFAULT_HOLDING_TIME;
 
 	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_ANY);
 	nhrp_payload_free(payload);

@@ -87,11 +87,14 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 	size_t len = sizeof(buf);
 	int i = 0, rel;
 
+	if (peer->interface != NULL)
+		i += snprintf(&buf[i], len - i,
+			"Interface: %s\n",
+			peer->interface->name);
+
 	i += snprintf(&buf[i], len - i,
-		"Interface: %s\n"
 		"Type: %s\n"
 		"Protocol-Address: %s/%d\n",
-		peer->interface->name,
 		nhrp_peer_type[peer->type],
 		nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp),
 		peer->prefix_length);

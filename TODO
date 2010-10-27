@@ -14,12 +14,6 @@ Open items that need work on OpenNHRP:
 - nhrp_peer should be split to more files, it's relatively large now.
   might split nhrp_peer to separate types.
 
-- config directive to specify the shortcut subnet in addition / instead
-  of the automatic route detection and interface specifications
-
-- instead of keeping track of local routes for shortcuts, we could use
-  the above option + per-packet kernel lookup for off-nbma destinations.
-
 - Proper handling of unique bit. Currently registration of unique address
   overwrites previous registration, but this against RFC.
 

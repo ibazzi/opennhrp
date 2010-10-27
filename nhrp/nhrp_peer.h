@@ -107,6 +107,7 @@ struct nhrp_peer {
 	ev_tstamp last_used;
 	struct nhrp_address my_nbma_address;
 	struct nhrp_address protocol_address;
+	unsigned int holding_time;
 
 	char *nbma_hostname;
 	/* NHRP_PEER_TYPE_ROUTE: protocol addr., others: NBMA addr. */

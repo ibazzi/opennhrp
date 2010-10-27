@@ -138,20 +138,22 @@ static int read_word(FILE *in, int *lineno, size_t len, char *word)
 
 static int load_config(const char *config_file)
 {
-#define NEED_INTERFACE() if (iface == NULL) { rc = 2; break; } peer = NULL;
+#define NEED_INTERFACE() if (iface == NULL) { rc = 2; break; } peer = sc_peer = NULL;
 #define NEED_PEER() if (peer == NULL) { rc = 3; break; }
 
 	static const char *errors[] = {
 		"syntax error",
 		"missing keyword",
-		"interface context not defined",
+		"keyword valid only for 'interface' definition",
 		"keyword valid only for 'map' definition",
 		"invalid address",
 		"dynamic-map requires a network address",
 		"bad multicast destination",
+		"keyword valid only for 'interace' and 'shortcut-target' definition",
 	};
 	struct nhrp_interface *iface = NULL;
 	struct nhrp_peer *peer = NULL;
+	struct nhrp_peer *sc_peer = NULL;
 	struct nhrp_address paddr;
 	char word[32], nbma[32], addr[32];
 	FILE *in;
@@ -173,6 +175,25 @@ static int load_config(const char *config_file)
 			iface = nhrp_interface_get_by_name(word, TRUE);
 			if (iface != NULL)
 				iface->flags |= NHRP_INTERFACE_FLAG_CONFIGURED;
+			peer = sc_peer = NULL;
+		} else if (strcmp(word, "shortcut-target") == 0) {
+			if (!read_word(in, &lineno, sizeof(addr), addr)) {
+				rc = 1;
+				break;
+			}
+			sc_peer = nhrp_peer_alloc(NULL);
+			sc_peer->type = NHRP_PEER_TYPE_LOCAL;
+			sc_peer->afnum = AFNUM_RESERVED;
+			if (!nhrp_address_parse(addr, &sc_peer->protocol_address,
+						&sc_peer->prefix_length)) {
+				rc = 4;
+				break;
+			}
+			sc_peer->protocol_type = nhrp_protocol_from_pf(sc_peer->protocol_address.type);
+			nhrp_peer_insert(sc_peer);
+			nhrp_peer_put(sc_peer);
+
+			iface = NULL;
 			peer = NULL;
 		} else if (strcmp(word, "dynamic-map") == 0) {
 			NEED_INTERFACE();
@@ -225,9 +246,14 @@ static int load_config(const char *config_file)
 			NEED_PEER();
 			peer->flags |= NHRP_PEER_FLAG_CISCO;
 		} else if (strcmp(word, "holding-time") == 0) {
-			NEED_INTERFACE();
+			peer = NULL;
 			read_word(in, &lineno, sizeof(word), word);
-			iface->holding_time = atoi(word);
+			if (iface != NULL)
+				iface->holding_time = atoi(word);
+			else if (sc_peer != NULL)
+				sc_peer->holding_time = atoi(word);
+			else
+				rc = 7;
 		} else if (strcmp(word, "cisco-authentication") == 0) {
 			struct nhrp_buffer *buf;
 			struct nhrp_cisco_authentication_extension *auth;

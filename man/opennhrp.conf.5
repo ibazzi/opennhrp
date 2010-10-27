@@ -1,4 +1,4 @@
-.TH OPENNHRP.CONF 5 "20 May 2009" "" "OpenNHRP Documentation"
+.TH OPENNHRP.CONF 5 "27 Oct 2010" "" "OpenNHRP Documentation"
 
 .SH NAME
 opennhrp.conf \- NHRP daemon configuration file
@@ -30,6 +30,14 @@ Marks the start of configuration for network interface
 Even if no interface specific configuration is required, the
 .B interface
 directive must be present to enable NHRP on that interface.
+.RE
+
+.PP
+.BI "shortcut-target " protocol-address/prefix
+.RS
+Defines an off-NBMA network prefix for which the node will act as
+a gateway. This an alternative to defining local interfaces with
+shortcut-destination flag.
 .RE
 
 .SH "INTERFACE CONTEXT"
@@ -173,6 +181,17 @@ on the interface.
 When specified, this should be the only keyword for the interface.
 .RE
 
+.SH "SHORTCUT-TARGET CONTEXT"
+These configuration keywords can appear only in the shortcut-target.
+
+.BI "holding-time " holdtime
+.RS
+Specifies the holding time for NHRP Resolution Replies which refer
+to this prefix. The
+.I holdtime
+is specified in seconds and defaults to target interface's holding time.
+.RE
+
 .SH EXAMPLE
 The following configuration file was used for testing OpenNHRP on a machine
 with two ethernet network interfaces. GRE tunnel was configured with tunnel
@@ -192,6 +211,9 @@ interface gre1
 
 interface eth1
   shortcut-destination
+
+shortcut-target 172.16.0.0/16
+  holding-time 3600
 .fi
 
 .SH "SEE ALSO"
