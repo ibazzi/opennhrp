@@ -1758,7 +1758,8 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 				return FALSE;
 
 			if (p->prefix_length != sel->prefix_length &&
-			    p->type != NHRP_PEER_TYPE_STATIC)
+			    p->type != NHRP_PEER_TYPE_STATIC &&
+			    p->type != NHRP_PEER_TYPE_DYNAMIC_NHS)
 				return FALSE;
 		} else if (sel->flags & NHRP_PEER_FIND_ROUTE) {
 			if (nhrp_address_prefix_cmp(&p->protocol_address,
