@@ -21,7 +21,9 @@ have the partitial support too (no NAT there either).
 
 For the brave who compile their own kernels, there are patches against
 vanilla 2.6.20 and 2.6.22 kernels in the patches directory. Or just
-upgrade to 2.6.24 or later and no patching is required.
+upgrade to 2.6.24 or later and no patching is required. Though, there
+has been a major performance fixes in newer kernels, so 2.6.35 or later
+is strongly recommended.
 
 Also remember to turn on CONFIG_ARPD and CONFIG_NET_IPGRE in your kernel
 configuration.
@@ -76,7 +78,10 @@ like this:
 		lifetime time 24 hour;
 		my_identifier user_fqdn "my-user-name@my-domain.example";
 		nat_traversal on;
-		script "/etc/opennhrp/racoon-ph1down.sh" phase1_down;
+		# For ipsec-tools snapshot 2010-10-10 or later
+		script "/etc/opennhrp/racoon-ph1dead.sh" phase1_dead;
+		# For earlier ipsec-tools
+		# script "/etc/opennhrp/racoon-ph1down.sh" phase1_down;
 		proposal {
 			encryption_algorithm 3des;
 			hash_algorithm sha1;
