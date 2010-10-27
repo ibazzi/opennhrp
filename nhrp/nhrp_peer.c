@@ -474,16 +474,6 @@ static int nhrp_peer_routes_up(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
-static int nhrp_peer_routes_down(void *ctx, struct nhrp_peer *peer)
-{
-	if (peer->flags & NHRP_PEER_FLAG_UP) {
-		nhrp_peer_run_script(peer, "route-down", NULL);
-		peer->flags &= ~NHRP_PEER_FLAG_UP;
-	}
-
-	return 0;
-}
-
 static int nhrp_peer_routes_renew(void *ctx, struct nhrp_peer *peer)
 {
 	int *num_routes = (int *) ctx;
@@ -567,7 +557,7 @@ static void nhrp_peer_is_down(struct nhrp_peer *peer)
 		sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
 		sel.interface = peer->interface;
 		sel.next_hop_address = peer->protocol_address;
-		nhrp_peer_foreach(nhrp_peer_routes_down, NULL, &sel);
+		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 	}
 
 	/* Remove from lists */
