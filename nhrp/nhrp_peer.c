@@ -1491,7 +1491,7 @@ static void nhrp_peer_dnsmap_query_cb(struct nhrp_address_query *query,
 	/* Delete all dynamic nhs:s that were not in the DNS reply */
 	nhrp_address_set_type(&sel.next_hop_address, AF_UNSPEC);
 	sel.flags = NHRP_PEER_FIND_MARK;
-	nhrp_peer_foreach(nhrp_peer_purge_matching, NULL, &sel);
+	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 
 	/* Refresh DNS info */
 	nhrp_peer_schedule(peer, peer->interface->holding_time,
