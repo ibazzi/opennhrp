@@ -32,14 +32,6 @@ Even if no interface specific configuration is required, the
 directive must be present to enable NHRP on that interface.
 .RE
 
-.PP
-.BI "shortcut-target " protocol-address/prefix
-.RS
-Defines an off-NBMA network prefix for which the node will act as
-a gateway. This an alternative to defining local interfaces with
-shortcut-destination flag.
-.RE
-
 .SH "INTERFACE CONTEXT"
 These configuration keywords can appear only in the interface context.
 
@@ -93,6 +85,14 @@ inform this mapping via
 .BR opennhrpctl "(8) " "update nbma " command.
 .RE
 
+.PP
+.BI "shortcut-target " protocol-address/prefix " [holding-time " holdtime "]"
+.RS
+Defines an off-NBMA network prefix for which the GRE interface will act
+as a gateway. This an alternative to defining local interfaces with
+shortcut-destination flag.
+.RE
+
 .BR multicast " " dynamic "|" nhs
 .br
 .BI "multicast " protocol-address
@@ -120,7 +120,7 @@ NHS:es.
 .BI "holding-time " holdtime
 .RS
 Specifies the holding time for NHRP Registration Requests and
-Resolution Replies sent by this host.
+Resolution Replies sent from this interface or shortcut-target.
 The
 .I holdtime
 is specified in seconds and defaults to two hours.
@@ -181,29 +181,21 @@ on the interface.
 When specified, this should be the only keyword for the interface.
 .RE
 
-.SH "SHORTCUT-TARGET CONTEXT"
-These configuration keywords can appear only in the shortcut-target.
-
-.BI "holding-time " holdtime
-.RS
-Specifies the holding time for NHRP Resolution Replies which refer
-to this prefix. The
-.I holdtime
-is specified in seconds and defaults to target interface's holding time.
-.RE
-
 .SH EXAMPLE
 The following configuration file was used for testing OpenNHRP on a machine
 with two ethernet network interfaces. GRE tunnel was configured with tunnel
 IP 10.255.255.2/24. Configuration enables registration to hub node at
 10.255.255.1 and resolution of other nodes in the subnet using that hub.
 .PP
-It also enables creation of shortcut routes to networks behind other hosts
+It also enables creation of shortcut routes to networks behind other
+hosts (with holding-time override for the defined shortcut-target)
 in our NBMA network and allows incoming shortcut routes.
 .PP
 .nf
 interface gre1
+  holding-time 3600
   map 10.255.255.1/24 192.168.200.1 register
+  shortcut-target 172.16.0.0/16 holding-time 1800
   cisco-authentication secret
   shortcut
   redirect
@@ -212,8 +204,6 @@ interface gre1
 interface eth1
   shortcut-destination
 
-shortcut-target 172.16.0.0/16
-  holding-time 3600
 .fi
 
 .SH "SEE ALSO"

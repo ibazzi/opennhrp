@@ -138,8 +138,8 @@ static int read_word(FILE *in, int *lineno, size_t len, char *word)
 
 static int load_config(const char *config_file)
 {
-#define NEED_INTERFACE() if (iface == NULL) { rc = 2; break; } peer = sc_peer = NULL;
-#define NEED_PEER() if (peer == NULL) { rc = 3; break; }
+#define NEED_INTERFACE() if (iface == NULL) { rc = 2; break; } peer = NULL;
+#define NEED_PEER() if (peer == NULL || peer->type == NHRP_PEER_TYPE_LOCAL) { rc = 3; break; }
 
 	static const char *errors[] = {
 		"syntax error",
@@ -153,7 +153,6 @@ static int load_config(const char *config_file)
 	};
 	struct nhrp_interface *iface = NULL;
 	struct nhrp_peer *peer = NULL;
-	struct nhrp_peer *sc_peer = NULL;
 	struct nhrp_address paddr;
 	char word[32], nbma[32], addr[32];
 	FILE *in;
@@ -175,26 +174,24 @@ static int load_config(const char *config_file)
 			iface = nhrp_interface_get_by_name(word, TRUE);
 			if (iface != NULL)
 				iface->flags |= NHRP_INTERFACE_FLAG_CONFIGURED;
-			peer = sc_peer = NULL;
+			peer = NULL;
 		} else if (strcmp(word, "shortcut-target") == 0) {
+			NEED_INTERFACE();
 			if (!read_word(in, &lineno, sizeof(addr), addr)) {
 				rc = 1;
 				break;
 			}
-			sc_peer = nhrp_peer_alloc(NULL);
-			sc_peer->type = NHRP_PEER_TYPE_LOCAL;
-			sc_peer->afnum = AFNUM_RESERVED;
-			if (!nhrp_address_parse(addr, &sc_peer->protocol_address,
-						&sc_peer->prefix_length)) {
+			peer = nhrp_peer_alloc(iface);
+			peer->type = NHRP_PEER_TYPE_LOCAL;
+			peer->afnum = AFNUM_RESERVED;
+			if (!nhrp_address_parse(addr, &peer->protocol_address,
+						&peer->prefix_length)) {
 				rc = 4;
 				break;
 			}
-			sc_peer->protocol_type = nhrp_protocol_from_pf(sc_peer->protocol_address.type);
-			nhrp_peer_insert(sc_peer);
-			nhrp_peer_put(sc_peer);
-
-			iface = NULL;
-			peer = NULL;
+			peer->protocol_type = nhrp_protocol_from_pf(peer->protocol_address.type);
+			nhrp_peer_insert(peer);
+			nhrp_peer_put(peer);
 		} else if (strcmp(word, "dynamic-map") == 0) {
 			NEED_INTERFACE();
 			read_word(in, &lineno, sizeof(addr), addr);
@@ -250,8 +247,9 @@ static int load_config(const char *config_file)
 			read_word(in, &lineno, sizeof(word), word);
 			if (iface != NULL)
 				iface->holding_time = atoi(word);
-			else if (sc_peer != NULL)
-				sc_peer->holding_time = atoi(word);
+			else if (peer != NULL &&
+				 peer->type == NHRP_PEER_TYPE_LOCAL)
+				peer->holding_time = atoi(word);
 			else
 				rc = 7;
 		} else if (strcmp(word, "cisco-authentication") == 0) {

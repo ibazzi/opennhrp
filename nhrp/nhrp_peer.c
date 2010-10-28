@@ -1735,8 +1735,8 @@ int nhrp_peer_match(struct nhrp_peer *p, struct nhrp_peer_selector *sel)
 		return FALSE;
 
 	if (sel->interface != NULL &&
-	    p->type != NHRP_PEER_TYPE_LOCAL &&
-	    p->interface != sel->interface)
+	    p->interface != sel->interface &&
+	    !(p->interface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST))
 		return FALSE;
 
 	if (sel->hostname != NULL &&
