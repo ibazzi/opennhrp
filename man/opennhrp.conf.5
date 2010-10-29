@@ -126,6 +126,20 @@ The
 is specified in seconds and defaults to two hours.
 .RE
 
+.BI "route-table " routetable
+.RS
+Specifies the kernel routing table to be monitored for outgoing routes
+to this interface. This is required to do routing lookups excluding
+active shortcut routes (for existing shortcut route renewal). The
+default is main table.
+
+If you use
+.B table
+directive in
+.B zebra.conf
+to put Quagga routes in alternate table, this should match with it.
+.RE
+
 .BI "cisco-authentication " secret
 .RS
 Enables Cisco style authentication on NHRP packets. This embeds the

@@ -36,6 +36,13 @@ Purge entries from NHRP cache: cached entries are removed and permanent
 entries are forced down, up and finally reregistered.
 .RE
 
+.BI "route show [" selector "]..."
+.RS
+Show the contents of locally cached kernel routing information
+(outbound routing base to do route lookups excluding active shortcut
+routes).
+.RE
+
 .BI "redirect purge [" protocol-address "/" prefix-length "]"
 .RS
 Clear redirection cache from all entries matching the specified address.

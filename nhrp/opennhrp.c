@@ -139,7 +139,7 @@ static int read_word(FILE *in, int *lineno, size_t len, char *word)
 static int load_config(const char *config_file)
 {
 #define NEED_INTERFACE() if (iface == NULL) { rc = 2; break; } peer = NULL;
-#define NEED_PEER() if (peer == NULL || peer->type == NHRP_PEER_TYPE_LOCAL) { rc = 3; break; }
+#define NEED_PEER() if (peer == NULL || peer->type == NHRP_PEER_TYPE_LOCAL_ADDR) { rc = 3; break; }
 
 	static const char *errors[] = {
 		"syntax error",
@@ -182,7 +182,7 @@ static int load_config(const char *config_file)
 				break;
 			}
 			peer = nhrp_peer_alloc(iface);
-			peer->type = NHRP_PEER_TYPE_LOCAL;
+			peer->type = NHRP_PEER_TYPE_LOCAL_ADDR;
 			peer->afnum = AFNUM_RESERVED;
 			if (!nhrp_address_parse(addr, &peer->protocol_address,
 						&peer->prefix_length)) {
@@ -248,7 +248,7 @@ static int load_config(const char *config_file)
 			if (iface != NULL)
 				iface->holding_time = atoi(word);
 			else if (peer != NULL &&
-				 peer->type == NHRP_PEER_TYPE_LOCAL)
+				 peer->type == NHRP_PEER_TYPE_LOCAL_ADDR)
 				peer->holding_time = atoi(word);
 			else
 				rc = 7;
@@ -265,6 +265,10 @@ static int load_config(const char *config_file)
 			memcpy(auth->secret, word, strlen(word));
 
 			iface->auth_token = buf;
+		} else if (strcmp(word, "route-table") == 0) {
+			NEED_INTERFACE();
+			read_word(in, &lineno, sizeof(word), word);
+			iface->route_table = atoi(word);
 		} else if (strcmp(word, "shortcut") == 0) {
 			NEED_INTERFACE();
 			iface->flags |= NHRP_INTERFACE_FLAG_SHORTCUT;

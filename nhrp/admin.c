@@ -84,6 +84,7 @@ static void admin_free_remote(struct admin_remote *rm)
 static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 {
 	char buf[512], tmp[32];
+	char *str;
 	size_t len = sizeof(buf);
 	int i = 0, rel;
 
@@ -100,10 +101,20 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 		peer->prefix_length);
 
 	if (peer->next_hop_address.type != PF_UNSPEC) {
+		switch (peer->type) {
+		case NHRP_PEER_TYPE_CACHED_ROUTE:
+		case NHRP_PEER_TYPE_LOCAL_ROUTE:
+			str = "Next-hop-Address";
+			break;
+		case NHRP_PEER_TYPE_LOCAL_ADDR:
+			str = "Alias-Address";
+			break;
+		default:
+			str = "NBMA-Address";
+			break;
+		}
 		i += snprintf(&buf[i], len - i, "%s: %s\n",
-			peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ? "Next-hop-Address" :
-			peer->type == NHRP_PEER_TYPE_LOCAL ? "Alias-Address" :
-			"NBMA-Address",
+			str,
 			nhrp_address_format(&peer->next_hop_address,
 					    sizeof(tmp), tmp));
 	}
@@ -245,12 +256,27 @@ err:
 	return FALSE;
 }
 
+static void admin_route_show(void *ctx, const char *cmd)
+{
+	struct nhrp_peer_selector sel;
+
+	memset(&sel, 0, sizeof(sel));
+	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL_ROUTE);
+	if (!admin_parse_selector(ctx, cmd, &sel))
+		return;
+
+	admin_write(ctx, "Status: ok\n\n");
+	nhrp_peer_foreach(admin_show_peer, ctx, &sel);
+	admin_free_selector(&sel);
+}
+
 static void admin_cache_show(void *ctx, const char *cmd)
 {
 	struct nhrp_peer_selector sel;
 
 	memset(&sel, 0, sizeof(sel));
-	sel.type_mask = NHRP_PEER_TYPEMASK_ALL;
+	sel.type_mask = NHRP_PEER_TYPEMASK_ALL &
+		~BIT(NHRP_PEER_TYPE_LOCAL_ROUTE);
 	if (!admin_parse_selector(ctx, cmd, &sel))
 		return;
 
@@ -378,6 +404,7 @@ static struct {
 	const char *command;
 	void (*handler)(void *ctx, const char *cmd);
 } admin_handler[] = {
+	{ "route show",		admin_route_show },
 	{ "show",		admin_cache_show },
 	{ "cache show",		admin_cache_show },
 	{ "flush",		admin_cache_flush },

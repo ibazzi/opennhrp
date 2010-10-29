@@ -180,7 +180,7 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, saddr));
 
 	memset(&sel, 0, sizeof(sel));
-	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL);
+	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL_ADDR);
 	nhrp_peer_foreach(check_ipv4, &f, &sel);
 
 	/* A packet we send Traffic Indication about: snap only start */

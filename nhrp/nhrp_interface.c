@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <linux/rtnetlink.h>
 #include "nhrp_common.h"
 #include "nhrp_interface.h"
 #include "nhrp_address.h"
@@ -74,6 +75,7 @@ struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create)
 
 	iface = calloc(1, sizeof(struct nhrp_interface));
 	iface->holding_time = NHRP_DEFAULT_HOLDING_TIME;
+	iface->route_table = RT_TABLE_MAIN;
 	strncpy(iface->name, name, sizeof(iface->name));
 
 	list_init(&iface->peer_list);

@@ -563,7 +563,7 @@ static void netlink_addr_new(struct nlmsghdr *msg)
 	iface->protocol_address_prefix = ifa->ifa_prefixlen;
 
 	peer = nhrp_peer_alloc(iface);
-	peer->type = NHRP_PEER_TYPE_LOCAL;
+	peer->type = NHRP_PEER_TYPE_LOCAL_ADDR;
 	peer->afnum = AFNUM_RESERVED;
 	nhrp_address_set(&peer->protocol_address, ifa->ifa_family,
 			 RTA_PAYLOAD(rta[IFA_LOCAL]),
@@ -647,7 +647,7 @@ static void netlink_addr_del(struct nlmsghdr *nlmsg)
 
 	memset(&sel, 0, sizeof(sel));
 	sel.flags = NHRP_PEER_FIND_EXACT;
-	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL);
+	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL_ADDR);
 	sel.interface = iface;
 	sel.protocol_address = msg.address;
 	sel.prefix_length = sel.protocol_address.addr_len * 8;
@@ -667,31 +667,47 @@ static void netlink_route_new(struct nlmsghdr *msg)
 	struct nhrp_peer *peer;
 	struct rtmsg *rtm = NLMSG_DATA(msg);
 	struct rtattr *rta[RTA_MAX+1];
+	int type = 0;
 
 	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(rtm), RTM_PAYLOAD(msg));
 	if (rta[RTA_OIF] == NULL || rta[RTA_DST] == NULL)
 		return;
 
-	/* Consider only routes from main table */
-	if (rtm->rtm_table != RT_TABLE_MAIN || rtm->rtm_family != PF_INET)
+	if (rtm->rtm_family != PF_INET)
 		return;
 
-	/* Only consider routes for local interfaces that accept
-	 * shortcut connections */
 	iface = nhrp_interface_get_by_index(*(int*)RTA_DATA(rta[RTA_OIF]),
 					    FALSE);
 	if (iface == NULL)
 		return;
 
-	if (!(iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST))
+	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST) {
+		/* Local shortcut target routes */
+		if (rtm->rtm_table != RT_TABLE_MAIN)
+			return;
+		type = NHRP_PEER_TYPE_LOCAL_ADDR;
+	} else if (iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED) {
+		/* Routes which might get additional outbound
+		 * shortcuts */
+		 if (rtm->rtm_table != iface->route_table)
+			return;
+		type = NHRP_PEER_TYPE_LOCAL_ROUTE;
+	}
+	if (type == 0)
 		return;
 
 	peer = nhrp_peer_alloc(iface);
-	peer->type = NHRP_PEER_TYPE_LOCAL;
+	peer->type = type;
 	peer->afnum = AFNUM_RESERVED;
 	nhrp_address_set(&peer->protocol_address, rtm->rtm_family,
 			 RTA_PAYLOAD(rta[RTA_DST]),
 			 RTA_DATA(rta[RTA_DST]));
+	if (rta[RTA_GATEWAY] != NULL) {
+		nhrp_address_set(&peer->next_hop_address,
+				 rtm->rtm_family,
+				 RTA_PAYLOAD(rta[RTA_GATEWAY]),
+				 RTA_DATA(rta[RTA_GATEWAY]));
+	}
 	peer->protocol_type = nhrp_protocol_from_pf(rtm->rtm_family);
 	peer->prefix_length = rtm->rtm_dst_len;
 	nhrp_peer_insert(peer);
@@ -704,13 +720,14 @@ static void netlink_route_del(struct nlmsghdr *msg)
 	struct rtmsg *rtm = NLMSG_DATA(msg);
 	struct rtattr *rta[RTA_MAX+1];
 	struct nhrp_peer_selector sel;
+	int type = 0;
 
 	netlink_parse_rtattr(rta, RTA_MAX, RTM_RTA(rtm), RTM_PAYLOAD(msg));
 	if (rta[RTA_OIF] == NULL || rta[RTA_DST] == NULL)
 		return;
 
 	/* Consider only routes from main table */
-	if (rtm->rtm_table != RT_TABLE_MAIN || rtm->rtm_family != PF_INET)
+	if (rtm->rtm_family != PF_INET)
 		return;
 
 	/* Only consider routes for local interfaces that accept
@@ -720,16 +737,34 @@ static void netlink_route_del(struct nlmsghdr *msg)
 	if (iface == NULL)
 		return;
 
-	if (!(iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST))
+	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST) {
+		/* Local shortcut target routes */
+		if (rtm->rtm_table != RT_TABLE_MAIN)
+			return;
+		type = NHRP_PEER_TYPE_LOCAL_ADDR;
+	} else if (iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED) {
+		/* Routes which might get additional outbound
+		 * shortcuts */
+		 if (rtm->rtm_table != iface->route_table)
+			return;
+		type = NHRP_PEER_TYPE_LOCAL_ROUTE;
+	}
+	if (type == 0)
 		return;
 
 	memset(&sel, 0, sizeof(sel));
 	sel.flags = NHRP_PEER_FIND_EXACT;
-	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL);
+	sel.type_mask = BIT(type);
 	sel.interface = iface;
 	nhrp_address_set(&sel.protocol_address, rtm->rtm_family,
 			 RTA_PAYLOAD(rta[RTA_DST]),
 			 RTA_DATA(rta[RTA_DST]));
+	if (rta[RTA_GATEWAY] != NULL) {
+		nhrp_address_set(&sel.next_hop_address,
+				 rtm->rtm_family,
+				 RTA_PAYLOAD(rta[RTA_GATEWAY]),
+				 RTA_DATA(rta[RTA_GATEWAY]));
+	}
 	sel.prefix_length = rtm->rtm_dst_len;
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
 }

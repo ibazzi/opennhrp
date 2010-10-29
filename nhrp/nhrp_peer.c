@@ -36,12 +36,13 @@ const char * const nhrp_peer_type[] = {
 	[NHRP_PEER_TYPE_INCOMPLETE]	= "incomplete",
 	[NHRP_PEER_TYPE_NEGATIVE]	= "negative",
 	[NHRP_PEER_TYPE_CACHED]		= "cached",
-	[NHRP_PEER_TYPE_CACHED_ROUTE]	= "route",
+	[NHRP_PEER_TYPE_CACHED_ROUTE]	= "shortcut-route",
 	[NHRP_PEER_TYPE_DYNAMIC]	= "dynamic",
 	[NHRP_PEER_TYPE_DYNAMIC_NHS]	= "dynamic-nhs",
 	[NHRP_PEER_TYPE_STATIC]		= "static",
 	[NHRP_PEER_TYPE_STATIC_DNS]	= "dynamic-map",
-	[NHRP_PEER_TYPE_LOCAL]		= "local",
+	[NHRP_PEER_TYPE_LOCAL_ROUTE]	= "local-route",
+	[NHRP_PEER_TYPE_LOCAL_ADDR]	= "local",
 };
 
 static struct list_head local_peer_list = LIST_INITIALIZER(local_peer_list);
@@ -154,7 +155,7 @@ static const char *nhrp_cie_code_text(int ct)
 static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len,
 				   char *buf, int full)
 {
-	char tmp[NHRP_PEER_FORMAT_LEN];
+	char tmp[NHRP_PEER_FORMAT_LEN], *str;
 	int i = 0;
 
 	if (peer == NULL) {
@@ -167,12 +168,20 @@ static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len,
 		peer->prefix_length);
 
 	if (peer->next_hop_address.type != PF_UNSPEC) {
-		i += snprintf(&buf[i], len - i, " %s",
-			peer->type == NHRP_PEER_TYPE_CACHED_ROUTE ? "nexthop" :
-			peer->type == NHRP_PEER_TYPE_LOCAL ? "alias" :
-			"nbma");
-
-		i += snprintf(&buf[i], len - i, " %s",
+		switch (peer->type) {
+		case NHRP_PEER_TYPE_CACHED_ROUTE:
+		case NHRP_PEER_TYPE_LOCAL_ROUTE:
+			str = "nexthop";
+			break;
+		case NHRP_PEER_TYPE_LOCAL_ADDR:
+			str = "alias";
+			break;
+		default:
+			str = "nbma";
+			break;
+		}
+		i += snprintf(&buf[i], len - i, " %s %s",
+			str,
 			nhrp_address_format(&peer->next_hop_address,
 			sizeof(tmp), tmp));
 	}
@@ -377,7 +386,7 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_CACHED:
-	case NHRP_PEER_TYPE_LOCAL:
+	case NHRP_PEER_TYPE_LOCAL_ADDR:
 	case NHRP_PEER_TYPE_STATIC:
 	case NHRP_PEER_TYPE_DYNAMIC:
 	case NHRP_PEER_TYPE_DYNAMIC_NHS:
@@ -394,6 +403,7 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 						    sizeof(tmp), tmp));
 		break;
 	case NHRP_PEER_TYPE_CACHED_ROUTE:
+	case NHRP_PEER_TYPE_LOCAL_ROUTE:
 		envp[i++] = env("NHRP_NEXTHOP",
 			nhrp_address_format(&peer->next_hop_address,
 					    sizeof(tmp), tmp));
@@ -961,7 +971,7 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
 		packet->dst_protocol_address = peer->protocol_address;
 
 		memset(&sel, 0, sizeof(sel));
-		sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL);
+		sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL_ADDR);
 		nhrp_peer_foreach(nhrp_add_local_route_cie, packet, &sel);
 
 		nhrp_packet_extension(packet,
@@ -1184,10 +1194,10 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 		goto ret;
 	}
 
-	/* Check that we won't replace a local route */
+	/* Check that we won't replace a local address */
 	sel = (struct nhrp_peer_selector) {
 		.flags = NHRP_PEER_FIND_EXACT,
-		.type_mask = BIT(NHRP_PEER_TYPE_LOCAL),
+		.type_mask = BIT(NHRP_PEER_TYPE_LOCAL_ADDR),
 		.protocol_address = peer->protocol_address,
 		.prefix_length = cie->hdr.prefix_length,
 	};
@@ -1389,7 +1399,8 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 		break;
 	case NHRP_PEER_TYPE_INCOMPLETE:
 	case NHRP_PEER_TYPE_NEGATIVE:
-	case NHRP_PEER_TYPE_LOCAL:
+	case NHRP_PEER_TYPE_LOCAL_ADDR:
+	case NHRP_PEER_TYPE_LOCAL_ROUTE:
 		break;
 	default:
 		NHRP_BUG_ON("invalid peer type");
@@ -1505,9 +1516,12 @@ static void nhrp_peer_insert_cb(struct ev_timer *w, int revents)
 
 	nhrp_peer_cancel_async(peer);
 	switch (peer->type) {
-	case NHRP_PEER_TYPE_LOCAL:
+	case NHRP_PEER_TYPE_LOCAL_ADDR:
 		peer->flags |= NHRP_PEER_FLAG_UP;
 		forward_local_addresses_changed();
+		break;
+	case NHRP_PEER_TYPE_LOCAL_ROUTE:
+		peer->flags |= NHRP_PEER_FLAG_UP;
 		break;
 	case NHRP_PEER_TYPE_INCOMPLETE:
 		nhrp_peer_send_resolve(peer);
@@ -1551,8 +1565,10 @@ static void nhrp_peer_insert_cb(struct ev_timer *w, int revents)
 
 static void nhrp_peer_reinsert(struct nhrp_peer *peer, int type)
 {
-	NHRP_BUG_ON((peer->type == NHRP_PEER_TYPE_LOCAL) !=
-		    (type == NHRP_PEER_TYPE_LOCAL));
+	NHRP_BUG_ON((peer->type == NHRP_PEER_TYPE_LOCAL_ADDR) !=
+		    (type == NHRP_PEER_TYPE_LOCAL_ADDR));
+	NHRP_BUG_ON((peer->type == NHRP_PEER_TYPE_LOCAL_ROUTE) !=
+		    (type == NHRP_PEER_TYPE_LOCAL_ROUTE));
 
 	peer->flags &= ~NHRP_PEER_FLAG_REMOVED;
 	peer->type = type;
@@ -1594,16 +1610,21 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 	sel.interface = peer->interface;
 	sel.protocol_address = peer->protocol_address;
 	sel.prefix_length = peer->prefix_length;
-	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
+	switch (peer->type) {
+	case NHRP_PEER_TYPE_CACHED_ROUTE:
 		/* remove all existing shortcuts with same nexthop */
 		sel.flags = NHRP_PEER_FIND_SUBNET;
-		sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+		sel.type_mask |= BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
 		nhrp_peer_foreach(nhrp_peer_replace_shortcut, peer, &sel);
-	} else {
-		/* remove exact nbma protocol address matches */
+		break;
+	case NHRP_PEER_TYPE_LOCAL_ROUTE:
+		sel.type_mask |= BIT(NHRP_PEER_TYPE_LOCAL_ROUTE);
+	default:
+		/* remove exact protocol address matches */
 		sel.flags = NHRP_PEER_FIND_EXACT;
-		sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
+		sel.type_mask |= NHRP_PEER_TYPEMASK_REMOVABLE;
 		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+		break;
 	}
 
 	/* Keep a reference as long as we are on the list */
@@ -1612,13 +1633,13 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 		   nhrp_peer_type[peer->type],
 		   nhrp_peer_format(peer, sizeof(tmp), tmp));
 
-	if (peer->type == NHRP_PEER_TYPE_LOCAL)
+	if (peer->type == NHRP_PEER_TYPE_LOCAL_ADDR)
 		list_add(&peer->peer_list_entry, &local_peer_list);
 	else
 		list_add(&peer->peer_list_entry, &peer->interface->peer_list);
 
 	/* Start peers life */
-	if (nhrp_running || peer->type == NHRP_PEER_TYPE_LOCAL)
+	if (nhrp_running || peer->type == NHRP_PEER_TYPE_LOCAL_ADDR)
 		nhrp_peer_insert_cb(&peer->timer, 0);
 	else
 		nhrp_peer_schedule(peer, 0, &nhrp_peer_insert_cb);
@@ -1676,7 +1697,7 @@ static void nhrp_peer_remove_cb(struct ev_timer *w, int revents)
 	type = peer->type;
 	nhrp_peer_put(peer);
 
-	if (type == NHRP_PEER_TYPE_LOCAL)
+	if (type == NHRP_PEER_TYPE_LOCAL_ADDR)
 		forward_local_addresses_changed();
 }
 
@@ -1847,7 +1868,8 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 
 	/* Speed optimization: TYPE_LOCAL peers cannot be found from
 	 * other places */
-	if (sel != NULL && sel->type_mask == BIT(NHRP_PEER_TYPE_LOCAL))
+	if (sel != NULL &&
+	    sel->type_mask == BIT(NHRP_PEER_TYPE_LOCAL_ADDR))
 		return 0;
 
 	if (iface == NULL)
@@ -1966,7 +1988,8 @@ void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 		type = NHRP_PEER_FIND_EXACT;
 
 	/* Have we done something for this destination already? */
-	peer = nhrp_peer_route(iface, dst, type, 0);
+	peer = nhrp_peer_route(iface, dst, type,
+			       ~BIT(NHRP_PEER_TYPE_LOCAL_ROUTE));
 	if (peer != NULL)
 		return;
 

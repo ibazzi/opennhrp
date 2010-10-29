@@ -28,15 +28,16 @@
 #define NHRP_PEER_TYPE_DYNAMIC_NHS	0x05	/* Dynamic NHS from dns-map */
 #define NHRP_PEER_TYPE_STATIC		0x06	/* Static mapping from config file */
 #define NHRP_PEER_TYPE_STATIC_DNS	0x07	/* Static dns-map from config file */
-#define NHRP_PEER_TYPE_LOCAL		0x08	/* Learned from interface config */
-#define NHRP_PEER_TYPE_MAX		(NHRP_PEER_TYPE_LOCAL+1)
+#define NHRP_PEER_TYPE_LOCAL_ROUTE	0x08	/* Non-local destination, with local route */
+#define NHRP_PEER_TYPE_LOCAL_ADDR	0x09	/* Local destination (IP or off-NBMA subnet) */
+#define NHRP_PEER_TYPE_MAX		(NHRP_PEER_TYPE_LOCAL_ADDR+1)
 
 #define NHRP_PEER_TYPEMASK_ADJACENT \
 	(BIT(NHRP_PEER_TYPE_CACHED) | \
 	 BIT(NHRP_PEER_TYPE_DYNAMIC) | \
 	 BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) | \
 	 BIT(NHRP_PEER_TYPE_STATIC) | \
-	 BIT(NHRP_PEER_TYPE_LOCAL))
+	 BIT(NHRP_PEER_TYPE_LOCAL_ADDR))
 
 #define NHRP_PEER_TYPEMASK_REMOVABLE \
 	(BIT(NHRP_PEER_TYPE_INCOMPLETE) | \
@@ -53,7 +54,8 @@
 
 #define NHRP_PEER_TYPEMASK_ALL \
 	(NHRP_PEER_TYPEMASK_PURGEABLE | \
-	 BIT(NHRP_PEER_TYPE_LOCAL))
+	 BIT(NHRP_PEER_TYPE_LOCAL_ROUTE) | \
+	 BIT(NHRP_PEER_TYPE_LOCAL_ADDR))
 
 #define NHRP_PEER_FLAG_UNIQUE		0x01	/* Peer is unique; see RFC2332 */
 #define NHRP_PEER_FLAG_REGISTER		0x02	/* For TYPE_STATIC: send registration */

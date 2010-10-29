@@ -805,7 +805,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	else
 		dest = &packet->dst_protocol_address;
 
-	peer = nhrp_peer_route(iface, dest, 0, BIT(NHRP_PEER_TYPE_LOCAL));
+	peer = nhrp_peer_route(iface, dest, 0, BIT(NHRP_PEER_TYPE_LOCAL_ADDR));
 	packet->src_linklayer_address = *from;
 	packet->src_iface = iface;
 	packet->dst_peer = nhrp_peer_get(peer);
@@ -829,7 +829,8 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 		}
 	}
 
-	if (peer != NULL && peer->type == NHRP_PEER_TYPE_LOCAL)
+	if (peer != NULL &&
+	    peer->type == NHRP_PEER_TYPE_LOCAL_ADDR)
 		ret = nhrp_packet_receive_local(packet);
 	else
 		ret = nhrp_packet_forward(packet);
@@ -998,25 +999,26 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	if (packet->dst_peer != NULL) {
 		proto_nexthop = packet->dst_peer->next_hop_address;
 	} else {
-		r = kernel_route(packet->dst_iface, dst,
-				 &packet->dst_iface->protocol_address,
-				 &proto_nexthop, NULL);
-		if (!r) {
-			nhrp_error("No route to protocol address %s",
-				   nhrp_address_format(dst, sizeof(tmp), tmp));
-			return FALSE;
-		}
+		proto_nexthop = *dst;
+		do {
+			peer = nhrp_peer_route_full(
+				packet->dst_iface, &proto_nexthop, 0,
+				~(BIT(NHRP_PEER_TYPE_CACHED_ROUTE) |
+				  BIT(NHRP_PEER_TYPE_INCOMPLETE)),
+				src, cielist);
+			if (peer == NULL || peer->type == NHRP_PEER_TYPE_NEGATIVE) {
+				nhrp_error("No peer entry for protocol address %s",
+					   nhrp_address_format(&proto_nexthop,
+							       sizeof(tmp), tmp));
+				return FALSE;
+			}
+			if (peer->type != NHRP_PEER_TYPE_LOCAL_ROUTE)
+				break;
+			if (peer->next_hop_address.type == AF_UNSPEC)
+				break;
+			proto_nexthop = peer->next_hop_address;
+		} while (1);
 
-		peer = nhrp_peer_route_full(packet->dst_iface, &proto_nexthop, 0,
-					    ~(BIT(NHRP_PEER_TYPE_CACHED_ROUTE) |
-					      BIT(NHRP_PEER_TYPE_INCOMPLETE)),
-					    src, cielist);
-		if (peer == NULL || peer->type == NHRP_PEER_TYPE_NEGATIVE) {
-			nhrp_error("No peer entry for protocol address %s",
-				   nhrp_address_format(&proto_nexthop,
-						       sizeof(tmp), tmp));
-			return FALSE;
-		}
 		packet->dst_peer = nhrp_peer_get(peer);
 	}
 
@@ -1108,7 +1110,7 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 		nhrp_payload_set_raw(payload,
 			nhrp_buffer_copy(packet->dst_iface->auth_token));
 
-	if (packet->dst_peer->type == NHRP_PEER_TYPE_LOCAL) {
+	if (packet->dst_peer->type == NHRP_PEER_TYPE_LOCAL_ADDR) {
 		packet->src_iface = packet->dst_peer->interface;
 		return nhrp_packet_receive_local(packet);
 	}

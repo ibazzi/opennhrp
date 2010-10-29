@@ -33,6 +33,7 @@ struct nhrp_interface {
 	unsigned int flags;
 	unsigned int holding_time;
 	struct nhrp_buffer *auth_token;
+	unsigned int route_table;
 
 	/* Cached from kernel interface */
 	unsigned int index, link_index;
