@@ -36,7 +36,7 @@ const char * const nhrp_peer_type[] = {
 	[NHRP_PEER_TYPE_INCOMPLETE]	= "incomplete",
 	[NHRP_PEER_TYPE_NEGATIVE]	= "negative",
 	[NHRP_PEER_TYPE_CACHED]		= "cached",
-	[NHRP_PEER_TYPE_CACHED_ROUTE]	= "shortcut-route",
+	[NHRP_PEER_TYPE_SHORTCUT_ROUTE]	= "shortcut-route",
 	[NHRP_PEER_TYPE_DYNAMIC]	= "dynamic",
 	[NHRP_PEER_TYPE_DYNAMIC_NHS]	= "dynamic-nhs",
 	[NHRP_PEER_TYPE_STATIC]		= "static",
@@ -85,7 +85,7 @@ static struct list_head local_peer_list = LIST_INITIALIZER(local_peer_list);
  * ON ERROR for DYNAMIC: fork peer-down script (if was lower up)
  *			 delete peer
  *
- * CACHED_ROUTE:
+ * SHORTCUT_ROUTE:
  * 1. nhrp_peer_insert_cb: spawns route-up script, or schedules EXPIRE
  *
  * STATIC_DNS:
@@ -169,7 +169,7 @@ static char *nhrp_peer_format_full(struct nhrp_peer *peer, size_t len,
 
 	if (peer->next_hop_address.type != PF_UNSPEC) {
 		switch (peer->type) {
-		case NHRP_PEER_TYPE_CACHED_ROUTE:
+		case NHRP_PEER_TYPE_SHORTCUT_ROUTE:
 		case NHRP_PEER_TYPE_LOCAL_ROUTE:
 			str = "nexthop";
 			break;
@@ -402,7 +402,7 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 				nhrp_address_format(&peer->next_hop_nat_oa,
 						    sizeof(tmp), tmp));
 		break;
-	case NHRP_PEER_TYPE_CACHED_ROUTE:
+	case NHRP_PEER_TYPE_SHORTCUT_ROUTE:
 	case NHRP_PEER_TYPE_LOCAL_ROUTE:
 		envp[i++] = env("NHRP_NEXTHOP",
 			nhrp_address_format(&peer->next_hop_address,
@@ -507,10 +507,10 @@ static void nhrp_peer_renew(struct nhrp_peer *peer)
 
 	/* Renew the cached information: all related routes
 	 * or the peer itself */
-	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE) {
+	if (peer->type != NHRP_PEER_TYPE_SHORTCUT_ROUTE) {
 		memset(&sel, 0, sizeof(sel));
 		sel.flags = NHRP_PEER_FIND_UP;
-		sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+		sel.type_mask = BIT(NHRP_PEER_TYPE_SHORTCUT_ROUTE);
 		sel.interface = iface;
 		sel.next_hop_address = peer->protocol_address;
 		nhrp_peer_foreach(nhrp_peer_routes_renew, &num_routes, &sel);
@@ -541,7 +541,7 @@ static void nhrp_peer_expire_cb(struct ev_timer *w, int revents)
 	nhrp_peer_schedule(peer, peer->expire_time - ev_now(),
 			   nhrp_peer_remove_cb);
 
-	if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
+	if (peer->type == NHRP_PEER_TYPE_SHORTCUT_ROUTE) {
 		memset(&sel, 0, sizeof(sel));
 		sel.interface = peer->interface;
 		sel.protocol_address = peer->next_hop_address;
@@ -563,9 +563,9 @@ static void nhrp_peer_is_down(struct nhrp_peer *peer)
 		peer->flags &= ~(NHRP_PEER_FLAG_LOWER_UP | NHRP_PEER_FLAG_UP);
 
 	/* Check if there are routes using this peer as next-hop */
-	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE) {
+	if (peer->type != NHRP_PEER_TYPE_SHORTCUT_ROUTE) {
 		memset(&sel, 0, sizeof(sel));
-		sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+		sel.type_mask = BIT(NHRP_PEER_TYPE_SHORTCUT_ROUTE);
 		sel.interface = peer->interface;
 		sel.next_hop_address = peer->protocol_address;
 		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
@@ -629,9 +629,9 @@ static void nhrp_peer_is_up(struct nhrp_peer *peer)
 	peer->flags |= NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP;
 
 	/* Check if there are routes using this peer as next-hop*/
-	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE) {
+	if (peer->type != NHRP_PEER_TYPE_SHORTCUT_ROUTE) {
 		memset(&sel, 0, sizeof(sel));
-		sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+		sel.type_mask = BIT(NHRP_PEER_TYPE_SHORTCUT_ROUTE);
 		sel.interface = iface;
 		sel.next_hop_address = peer->protocol_address;
 		nhrp_peer_foreach(nhrp_peer_routes_up, NULL, &sel);
@@ -1234,7 +1234,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 
 	/* Off NBMA destination; a shortcut route */
 	np = nhrp_peer_alloc(iface);
-	np->type = NHRP_PEER_TYPE_CACHED_ROUTE;
+	np->type = NHRP_PEER_TYPE_SHORTCUT_ROUTE;
 	np->afnum = reply->hdr.afnum;
 	np->protocol_type = reply->hdr.protocol_type;
 	np->protocol_address = peer->protocol_address;
@@ -1366,7 +1366,7 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 	}
 
 	switch (peer->type) {
-	case NHRP_PEER_TYPE_CACHED_ROUTE:
+	case NHRP_PEER_TYPE_SHORTCUT_ROUTE:
 		if ((peer->flags & NHRP_PEER_FLAG_UP) &&
 		    !(peer->flags & NHRP_PEER_FLAG_REPLACED))
 			nhrp_peer_run_script(peer, "route-down", NULL);
@@ -1378,7 +1378,7 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 		if (!(peer->flags & NHRP_PEER_FLAG_REPLACED)) {
 			/* Remove cached routes using this entry as next-hop */
 			memset(&sel, 0, sizeof(sel));
-			sel.type_mask = BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+			sel.type_mask = BIT(NHRP_PEER_TYPE_SHORTCUT_ROUTE);
 			sel.interface = iface;
 			sel.next_hop_address = peer->protocol_address;
 			nhrp_peer_foreach(nhrp_peer_remove_matching, NULL,
@@ -1535,7 +1535,7 @@ static void nhrp_peer_insert_cb(struct ev_timer *w, int revents)
 	case NHRP_PEER_TYPE_STATIC_DNS:
 		nhrp_peer_dnsmap_restart_cb(w, 0);
 		break;
-	case NHRP_PEER_TYPE_CACHED_ROUTE:
+	case NHRP_PEER_TYPE_SHORTCUT_ROUTE:
 		if (peer->flags & NHRP_PEER_FLAG_UP)
 			nhrp_peer_script_route_up_done(&peer->child, 0);
 		else if (nhrp_peer_route(peer->interface,
@@ -1611,10 +1611,10 @@ void nhrp_peer_insert(struct nhrp_peer *peer)
 	sel.protocol_address = peer->protocol_address;
 	sel.prefix_length = peer->prefix_length;
 	switch (peer->type) {
-	case NHRP_PEER_TYPE_CACHED_ROUTE:
+	case NHRP_PEER_TYPE_SHORTCUT_ROUTE:
 		/* remove all existing shortcuts with same nexthop */
 		sel.flags = NHRP_PEER_FIND_SUBNET;
-		sel.type_mask |= BIT(NHRP_PEER_TYPE_CACHED_ROUTE);
+		sel.type_mask |= BIT(NHRP_PEER_TYPE_SHORTCUT_ROUTE);
 		nhrp_peer_foreach(nhrp_peer_replace_shortcut, peer, &sel);
 		break;
 	case NHRP_PEER_TYPE_LOCAL_ROUTE:
@@ -1893,7 +1893,7 @@ static int decide_route(void *ctx, struct nhrp_peer *peer)
 	struct route_decision *rd = (struct route_decision *) ctx;
 	int exact;
 
-	if (peer->type != NHRP_PEER_TYPE_CACHED_ROUTE) {
+	if (peer->type != NHRP_PEER_TYPE_SHORTCUT_ROUTE) {
 		/* Exclude addresses from CIE from routing decision
 		 * to avoid routing loops within NHS clusters. */
 		if (rd->exclude != NULL &&

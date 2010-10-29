@@ -1003,7 +1003,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 		do {
 			peer = nhrp_peer_route_full(
 				packet->dst_iface, &proto_nexthop, 0,
-				~(BIT(NHRP_PEER_TYPE_CACHED_ROUTE) |
+				~(BIT(NHRP_PEER_TYPE_SHORTCUT_ROUTE) |
 				  BIT(NHRP_PEER_TYPE_INCOMPLETE)),
 				src, cielist);
 			if (peer == NULL || peer->type == NHRP_PEER_TYPE_NEGATIVE) {

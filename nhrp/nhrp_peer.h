@@ -23,7 +23,7 @@
 #define NHRP_PEER_TYPE_INCOMPLETE	0x00	/* Resolution request sent */
 #define NHRP_PEER_TYPE_NEGATIVE		0x01	/* Negative cached */
 #define NHRP_PEER_TYPE_CACHED		0x02	/* Received/relayed resolution reply */
-#define NHRP_PEER_TYPE_CACHED_ROUTE	0x03	/* Received/relayed resolution for route */
+#define NHRP_PEER_TYPE_SHORTCUT_ROUTE	0x03	/* Received/relayed resolution for route */
 #define NHRP_PEER_TYPE_DYNAMIC		0x04	/* NHC registration */
 #define NHRP_PEER_TYPE_DYNAMIC_NHS	0x05	/* Dynamic NHS from dns-map */
 #define NHRP_PEER_TYPE_STATIC		0x06	/* Static mapping from config file */
@@ -43,7 +43,7 @@
 	(BIT(NHRP_PEER_TYPE_INCOMPLETE) | \
 	 BIT(NHRP_PEER_TYPE_NEGATIVE) | \
 	 BIT(NHRP_PEER_TYPE_CACHED) | \
-	 BIT(NHRP_PEER_TYPE_CACHED_ROUTE) | \
+	 BIT(NHRP_PEER_TYPE_SHORTCUT_ROUTE) | \
 	 BIT(NHRP_PEER_TYPE_DYNAMIC))
 
 #define NHRP_PEER_TYPEMASK_PURGEABLE \

@@ -418,7 +418,7 @@ static int remove_peer_by_nbma(void *ctx, struct nhrp_peer *peer)
 	struct nhrp_address *peer_nbma = NULL;
 
 	if (!nhrp_address_is_any_addr(nbma)) {
-		if (peer->type == NHRP_PEER_TYPE_CACHED_ROUTE) {
+		if (peer->type == NHRP_PEER_TYPE_SHORTCUT_ROUTE) {
 			struct nhrp_peer *nexthop;
 
 			nexthop = nhrp_peer_route(peer->interface,
