@@ -6,6 +6,23 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.12 - released 01/Nov/2010
+-----------------------------------------------------------------------------
+ - feature: preliminary support for policy routing. cache kernel routes for
+   each gre device and use them for routing lookups. nhrp shortcut routes
+   should be in separate routing table. this allows nhrp message routing to
+   always happen using bgp/ospf routes (for shortcut refreshes) and fixes
+   shortcuts to converge with the main routing information.
+ - feature: shortcut-target config option for subnet specific holding-time
+   overrides and aggregation of local subnet to "summary shortcut"
+ - fix: delete shortcut-routes if their gateway is removed to force renewal
+   of the route (shortcut gateway can change due to bgp/ospf routing change)
+ - fix: actually remove dynamic-nhs from peers if it's A entry is removed
+ - fix: disallow duplicate cached entries with dynamic-nhs entries
+ - randomize retry timer and increase script timeouts
+ - improve logging a bit
+
+-----------------------------------------------------------------------------
  opennhrp 0.11.5 - released 16/Mar/2010
 -----------------------------------------------------------------------------
  - clear negative cached entries for peers which sends resolution request
