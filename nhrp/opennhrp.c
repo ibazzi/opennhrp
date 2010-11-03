@@ -245,11 +245,11 @@ static int load_config(const char *config_file)
 		} else if (strcmp(word, "holding-time") == 0) {
 			peer = NULL;
 			read_word(in, &lineno, sizeof(word), word);
-			if (iface != NULL)
-				iface->holding_time = atoi(word);
-			else if (peer != NULL &&
+			if (peer != NULL &&
 				 peer->type == NHRP_PEER_TYPE_LOCAL_ADDR)
 				peer->holding_time = atoi(word);
+			else if (iface != NULL)
+				iface->holding_time = atoi(word);
 			else
 				rc = 7;
 		} else if (strcmp(word, "cisco-authentication") == 0) {
