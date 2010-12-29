@@ -37,6 +37,7 @@ struct nhrp_interface {
 
 	/* Cached from kernel interface */
 	unsigned int index, link_index;
+	uint32_t gre_key;
 	uint16_t afnum;
 	uint16_t mtu, nbma_mtu;
 	struct nhrp_address nbma_address;

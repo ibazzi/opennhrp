@@ -276,6 +276,16 @@ static char *env(const char *key, const char *value)
 	return buf;
 }
 
+static char *envu32(const char *key, uint32_t value)
+{
+	char *buf;
+	buf = malloc(strlen(key)+16);
+	if (buf == NULL)
+		return NULL;
+	sprintf(buf, "%s=%u", key, value);
+	return buf;
+}
+
 int nhrp_peer_event_ok(union nhrp_peer_event e, int revents)
 {
 	int status;
@@ -412,6 +422,7 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 		NHRP_BUG_ON("invalid peer type");
 	}
 	envp[i++] = env("NHRP_INTERFACE", peer->interface->name);
+	envp[i++] = envu32("NHRP_GRE_KEY", peer->interface->gre_key);
 	envp[i++] = NULL;
 
 	execve(nhrp_script_file, (char **) argv, envp);

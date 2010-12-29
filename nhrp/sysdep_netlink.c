@@ -24,6 +24,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <asm/types.h>
+#include <arpa/inet.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 #include <linux/ip.h>
@@ -460,6 +461,7 @@ static void netlink_link_new(struct nlmsghdr *msg)
 
 		/* try hard to get the interface nbma address */
 		do_get_ioctl(ifname, &cfg);
+		iface->gre_key = ntohl(cfg.i_key);
 		if (cfg.iph.saddr) {
 			nhrp_address_set(&iface->nbma_address, PF_INET,
 					 4, (uint8_t *) &cfg.iph.saddr);

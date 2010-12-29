@@ -37,6 +37,16 @@ static char *env(const char *key, const char *value)
 	return buf;
 }
 
+static char *envu32(const char *key, uint32_t value)
+{
+	char *buf;
+	buf = malloc(strlen(key)+16);
+	if (buf == NULL)
+		return NULL;
+	sprintf(buf, "%s=%u", key, value);
+	return buf;
+}
+
 void nhrp_interface_hash(struct nhrp_interface *iface)
 {
 	int iidx = iface->index & (NHRP_INDEX_HASH_SIZE - 1);
@@ -131,7 +141,7 @@ struct nhrp_interface *nhrp_interface_get_by_protocol(struct nhrp_address *addr)
 int nhrp_interface_run_script(struct nhrp_interface *iface, char *action)
 {
 	const char *argv[] = { nhrp_script_file, action, NULL };
-	char *envp[4];
+	char *envp[6];
 	pid_t pid;
 	int i = 0;
 
@@ -143,6 +153,7 @@ int nhrp_interface_run_script(struct nhrp_interface *iface, char *action)
 
 	envp[i++] = "NHRP_TYPE=INTERFACE";
 	envp[i++] = env("NHRP_INTERFACE", iface->name);
+	envp[i++] = envu32("NHRP_GRE_KEY", iface->gre_key);
 	envp[i++] = NULL;
 
 	execve(nhrp_script_file, (char **) argv, envp);
