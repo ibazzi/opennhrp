@@ -27,6 +27,8 @@
 #define NHRP_NEGATIVE_CACHE_TIME	(3*60)
 #define NHRP_EXPIRY_TIME		(5*60)
 
+#define NHRP_HOLDING_TIME_DIVISOR	3	/* See RFC-2332 5.2.3 */
+
 #define NHRP_RETRY_REGISTER_TIME	(30 + random()/(RAND_MAX/60))
 #define NHRP_RETRY_ERROR_TIME		(60 + random()/(RAND_MAX/120))
 
@@ -670,7 +672,8 @@ static void nhrp_peer_is_up(struct nhrp_peer *peer)
 	case NHRP_PEER_TYPE_DYNAMIC_NHS:
 		if (peer->flags & NHRP_PEER_FLAG_REGISTER) {
 			nhrp_peer_schedule(
-				peer, iface->holding_time - NHRP_EXPIRY_TIME,
+				peer, iface->holding_time /
+				NHRP_HOLDING_TIME_DIVISOR + 1,
 				nhrp_peer_send_register_cb);
 		}
 		break;
