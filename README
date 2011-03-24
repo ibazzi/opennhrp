@@ -53,13 +53,8 @@ This should work with the configuration example in opennhrp.conf(5).
 
 	IPSEC ENCRYPTION OF GRE PACKETS
 
-ipsec-tools CVS HEAD and 0.8 snapshot version contain now everything
-required to integrate it smoothly with OpenNHRP. Grab either of those.
-
-Or if you prefer to use a ipsec-tools release as a basis, check
-patches/ipsec-tools-0.7.diff. It was contributed by Steffen Schmidt.
-Applying that against ipsec-tools 0.7 release should give you working
-ipsec-tools installation too.
+ipsec-tools 0.8.0 or later is recommended. Earlier versions need patching
+for dmvpn to work properly.
 
 The ipsec-tools configuration I prefer to use is: encrypt all GRE
 traffic in transport mode. IPsec policy for that should be defined in

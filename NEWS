@@ -6,6 +6,15 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.12.1 - released 24/Mar/2011
+-----------------------------------------------------------------------------
+ - feature: export tunnel GRE key to opennhrp-script
+ - fix: build error against certain kernel versions and architectures
+ - fix: update registrations when 1/3 of the holding-time has passed as
+   per rfc recommendation
+ - fix: fix holding-time to apply properly to shortcut-target blocks
+
+-----------------------------------------------------------------------------
  opennhrp 0.12 - released 01/Nov/2010
 -----------------------------------------------------------------------------
  - feature: preliminary support for policy routing. cache kernel routes for

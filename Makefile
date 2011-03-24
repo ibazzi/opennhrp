@@ -2,7 +2,7 @@
 # Building opennhrp
 
 PACKAGE := opennhrp
-VERSION := 0.12
+VERSION := 0.12.1
 
 ##
 # Default directories
