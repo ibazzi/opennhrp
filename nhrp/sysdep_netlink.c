@@ -691,7 +691,8 @@ static void netlink_route_new(struct nlmsghdr *msg)
 	} else if (iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED) {
 		/* Routes which might get additional outbound
 		 * shortcuts */
-		 if (rtm->rtm_table != iface->route_table)
+		if (rtm->rtm_table != iface->route_table ||
+		    rtm->rtm_protocol == RTPROT_KERNEL)
 			return;
 		type = NHRP_PEER_TYPE_LOCAL_ROUTE;
 	}
@@ -728,12 +729,9 @@ static void netlink_route_del(struct nlmsghdr *msg)
 	if (rta[RTA_OIF] == NULL || rta[RTA_DST] == NULL)
 		return;
 
-	/* Consider only routes from main table */
 	if (rtm->rtm_family != PF_INET)
 		return;
 
-	/* Only consider routes for local interfaces that accept
-	 * shortcut connections */
 	iface = nhrp_interface_get_by_index(*(int*)RTA_DATA(rta[RTA_OIF]),
 					    FALSE);
 	if (iface == NULL)
@@ -747,7 +745,8 @@ static void netlink_route_del(struct nlmsghdr *msg)
 	} else if (iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED) {
 		/* Routes which might get additional outbound
 		 * shortcuts */
-		 if (rtm->rtm_table != iface->route_table)
+		if (rtm->rtm_table != iface->route_table ||
+		    rtm->rtm_protocol == RTPROT_KERNEL)
 			return;
 		type = NHRP_PEER_TYPE_LOCAL_ROUTE;
 	}
