@@ -6,6 +6,13 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.12.2 - released 7/Jul/2011
+-----------------------------------------------------------------------------
+ - fix: regression introduced in 0.12's policy routing changes that
+   shortcuts for in-NBMA network would not work unless using dynamic-map
+   NHS configuration (from David Ward)
+
+-----------------------------------------------------------------------------
  opennhrp 0.12.1 - released 24/Mar/2011
 -----------------------------------------------------------------------------
  - feature: export tunnel GRE key to opennhrp-script
