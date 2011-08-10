@@ -1003,9 +1003,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 		do {
 			peer = nhrp_peer_route_full(
 				packet->dst_iface, &proto_nexthop, 0,
-				~(BIT(NHRP_PEER_TYPE_SHORTCUT_ROUTE) |
-				  BIT(NHRP_PEER_TYPE_INCOMPLETE)),
-				src, cielist);
+				NHRP_PEER_TYPEMASK_ROUTE_VIA_NHS, src, cielist);
 			if (peer == NULL || peer->type == NHRP_PEER_TYPE_NEGATIVE) {
 				nhrp_error("No peer entry for protocol address %s",
 					   nhrp_address_format(&proto_nexthop,
@@ -1246,23 +1244,28 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 	return r;
 }
 
-int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
-			     uint8_t *pdu, size_t pdulen)
+int nhrp_packet_send_traffic(struct nhrp_interface *iface,
+			     struct nhrp_address *nbma_src,
+			     struct nhrp_address *protocol_src,
+			     struct nhrp_address *protocol_dst,
+			     int protocol_type, uint8_t *pdu, size_t pdulen)
 {
 	struct nhrp_rate_limit *rl;
 	struct nhrp_packet *p;
 	struct nhrp_payload *pl;
-	struct nhrp_address src, dst;
-	char tmp1[64], tmp2[64];
+	struct nhrp_peer *peer;
+	char tmp1[64], tmp2[64], tmp3[64], tmp4[64];
 	int r;
 
 	if (!(iface->flags & NHRP_INTERFACE_FLAG_REDIRECT))
 		return FALSE;
 
-	if (!nhrp_address_parse_packet(protocol_type, pdulen, pdu, &src, &dst))
+	/* Are we serving the NBMA source */
+	peer = nhrp_interface_find_peer(iface, nbma_src);
+	if (peer == NULL || peer->type != NHRP_PEER_TYPE_DYNAMIC)
 		return FALSE;
 
-	rl = get_rate_limit(&src, &dst);
+	rl = get_rate_limit(protocol_src, protocol_dst);
 	if (rl == NULL)
 		return FALSE;
 
@@ -1291,7 +1294,7 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
 		.type = NHRP_PACKET_TRAFFIC_INDICATION,
 		.hop_count = 1,
 	};
-	p->dst_protocol_address = src;
+	p->dst_protocol_address = *protocol_src;
 
 	pl = nhrp_packet_payload(p, NHRP_PAYLOAD_TYPE_RAW);
 	pl->u.raw = nhrp_buffer_alloc(pdulen);
@@ -1303,11 +1306,14 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface, int protocol_type,
 			      NHRP_EXTENSION_FLAG_COMPULSORY,
 			      NHRP_PAYLOAD_TYPE_CIE_LIST);
 
-	nhrp_info("Sending Traffic Indication about packet from %s to %s",
-		nhrp_address_format(&src, sizeof(tmp1), tmp1),
-		nhrp_address_format(&dst, sizeof(tmp2), tmp2));
+	nhrp_info("Sending Traffic Indication about packet from %s to %s (to %s/%s)",
+		nhrp_address_format(protocol_src, sizeof(tmp1), tmp1),
+		nhrp_address_format(protocol_dst, sizeof(tmp2), tmp2),
+		nhrp_address_format(&peer->protocol_address, sizeof(tmp3), tmp3),
+		nhrp_address_format(&peer->next_hop_address, sizeof(tmp4), tmp4));
 
 	p->dst_iface = iface;
+	p->dst_peer = nhrp_peer_get(peer);
 	r = nhrp_packet_send(p);
 	nhrp_packet_put(p);
 

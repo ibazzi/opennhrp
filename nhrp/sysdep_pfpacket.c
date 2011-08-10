@@ -52,11 +52,10 @@ enum {
 	LABEL_SKIP1,
 	LABEL_SKIPN,
 	LABEL_DROP,
-	LABEL_CHECK_MC,
-	LABEL_CHECK_MC_DROP,
-	LABEL_CHECK_IND,
-	LABEL_ACCEPT_MC,
-	LABEL_ACCEPT_IND,
+	LABEL_CHECK_MULTICAST,
+	LABEL_CHECK_MULTICAST_DESTINATION,
+	LABEL_CHECK_TRAFFIC_INDICATION,
+	LABEL_CHECK_NON_LOCAL_ADDRESS,
 	NUM_LABELS
 };
 
@@ -88,22 +87,12 @@ static void emit_jump(struct filter *f, __u16 code, __u32 k, __u8 jt, __u8 jf)
 	f->numops++;
 }
 
-static void patch_jump(struct filter *f, int new_label)
-{
-	NHRP_BUG_ON(BPF_CLASS(f->code[f->numops-1].code) != BPF_JMP);
-
-	if (f->code[f->numops-1].jf == LABEL_NEXT)
-		f->code[f->numops-1].jf = new_label;
-	if (f->code[f->numops-1].jt == LABEL_NEXT)
-		f->code[f->numops-1].jt = new_label;
-}
-
 static void mark(struct filter *f, int label)
 {
 	f->pos[label] = f->numops;
 }
 
-static int check_interface(void *ctx, struct nhrp_interface *iface)
+static int check_interface_multicast(void *ctx, struct nhrp_interface *iface)
 {
 	struct filter *f = (struct filter *) ctx;
 
@@ -114,15 +103,12 @@ static int check_interface(void *ctx, struct nhrp_interface *iface)
 
 	if (iface->mcast_mask || iface->mcast_numaddr)
 		emit_jump(f, BPF_JMP|BPF_JEQ|BPF_K, iface->index,
-			  LABEL_CHECK_MC, LABEL_NEXT);
-	else
-		emit_jump(f, BPF_JMP|BPF_JEQ|BPF_K, iface->index,
-			  LABEL_CHECK_MC_DROP, LABEL_NEXT);
+			  LABEL_CHECK_MULTICAST_DESTINATION, LABEL_NEXT);
 
 	return 0;
 }
 
-static int check_ipv4(void *ctx, struct nhrp_peer *peer)
+static int drop_matching_address(void *ctx, struct nhrp_peer *peer)
 {
 	struct filter *f = (struct filter *) ctx;
 	unsigned long addr, mask;
@@ -138,6 +124,24 @@ static int check_ipv4(void *ctx, struct nhrp_peer *peer)
 	} else {
 		emit_jump(f, BPF_JMP|BPF_JEQ|BPF_K, addr, LABEL_DROP, LABEL_NEXT);
 	}
+
+	return 0;
+}
+
+static int check_interface_traffic_indication(void *ctx, struct nhrp_interface *iface)
+{
+	struct filter *f = (struct filter *) ctx;
+
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
+		return 0;
+	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)
+		return 0;
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_REDIRECT))
+		return 0;
+
+	emit_jump(f, BPF_JMP|BPF_JEQ|BPF_K, iface->index,
+		  LABEL_CHECK_NON_LOCAL_ADDRESS, LABEL_NEXT);
+
 	return 0;
 }
 
@@ -150,50 +154,45 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 
 	memset(&f, 0, sizeof(f));
 
-	/* First, we are interested only on outgoing stuff */
-	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_PKTTYPE);
-	emit_jump(&f, BPF_JMP|BPF_JEQ|BPF_K,   PACKET_OUTGOING, LABEL_NEXT, LABEL_DROP);
-
 	/* Check for IPv4 */
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_PROTOCOL);
 	emit_jump(&f, BPF_JMP|BPF_JEQ|BPF_K,   ETH_P_IP, LABEL_NEXT, LABEL_DROP);
 
-	/* Check for valid interface */
+	/* Traffic indication checking is for incoming packets
+	 * Multicast checking is for outgoing packets */
+	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_PKTTYPE);
+	emit_jump(&f, BPF_JMP|BPF_JEQ|BPF_K, PACKET_OUTGOING,  LABEL_CHECK_MULTICAST, LABEL_NEXT);
+	emit_jump(&f, BPF_JMP|BPF_JEQ|BPF_K, PACKET_HOST, LABEL_CHECK_TRAFFIC_INDICATION, LABEL_DROP);
+
+	/* MULTICAST check - for interfaces that have MC forwarding enabled */
+	mark(&f, LABEL_CHECK_MULTICAST);
 	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_IFINDEX);
-	nhrp_interface_foreach(check_interface, &f);
-	patch_jump(&f, LABEL_DROP);
-
-	/* Check for multicast IPv4 destination - accept on match */
-	mark(&f, LABEL_CHECK_MC);
-	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, daddr));
-	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xe0000000, LABEL_NEXT, LABEL_CHECK_IND);
-	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xf0000000, LABEL_CHECK_IND, LABEL_ACCEPT_MC);
-
-	/* Check for multicast IPv4 destination - drop on match */
-	mark(&f, LABEL_CHECK_MC_DROP);
-	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, daddr));
-	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xe0000000, LABEL_NEXT, LABEL_CHECK_IND);
-	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xf0000000, LABEL_CHECK_IND, LABEL_DROP);
-
-	/* Check for non-local IPv4 source */
-	mark(&f, LABEL_CHECK_IND);
-	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, saddr));
-
-	memset(&sel, 0, sizeof(sel));
-	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL_ADDR);
-	nhrp_peer_foreach(check_ipv4, &f, &sel);
-
-	/* A packet we send Traffic Indication about: snap only start */
-	mark(&f, LABEL_ACCEPT_IND);
-	emit_stmt(&f, BPF_RET|BPF_K, 68);
-
-	/* Exit */
-	mark(&f, LABEL_DROP);
+	nhrp_interface_foreach(check_interface_multicast, &f);
 	emit_stmt(&f, BPF_RET|BPF_K, 0);
 
-	/* Multicast packets need to be captured fully as we resend them */
-	mark(&f, LABEL_ACCEPT_MC);
+	/* Check for multicast IPv4 destination - accept on match (all packet) */
+	mark(&f, LABEL_CHECK_MULTICAST_DESTINATION);
+	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, daddr));
+	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xe0000000, LABEL_NEXT, LABEL_DROP);
+	emit_jump(&f, BPF_JMP|BPF_JGE|BPF_K, 0xf0000000, LABEL_DROP, LABEL_NEXT);
 	emit_stmt(&f, BPF_RET|BPF_K, 65535);
+
+	/* TRAFFIC INDICATION check - is destination non-local
+	 * if yes, capture headers for NHRP traffic indication */
+	mark(&f, LABEL_CHECK_TRAFFIC_INDICATION);
+	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, SKF_AD_OFF+SKF_AD_IFINDEX);
+	nhrp_interface_foreach(check_interface_traffic_indication, &f);
+	emit_stmt(&f, BPF_RET|BPF_K, 0);
+
+	mark(&f, LABEL_CHECK_NON_LOCAL_ADDRESS);
+	memset(&sel, 0, sizeof(sel));
+	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL_ADDR);
+	emit_stmt(&f, BPF_LD |BPF_W  |BPF_ABS, offsetof(struct iphdr, daddr));
+	nhrp_peer_foreach(drop_matching_address, &f, &sel);
+	emit_stmt(&f, BPF_RET|BPF_K, 68);
+
+	mark(&f, LABEL_DROP);
+	emit_stmt(&f, BPF_RET|BPF_K, 0);
 
 	/* All ok so far? */
 	if (f.numops >= MAX_OPCODES) {
@@ -268,7 +267,7 @@ static void send_multicast(struct ev_idle *w, int revents)
 
 static void pfp_read_cb(struct ev_io *w, int revents)
 {
-	struct nhrp_address src, dst;
+	struct nhrp_address nbma_src, src, dst;
 	struct nhrp_interface *iface;
 	struct sockaddr_ll *lladdr;
 	struct iovec iov;
@@ -310,7 +309,8 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 		}
 
 		lladdr = &mcast_queue[mcast_head].lladdr;
-		if (lladdr->sll_pkttype != PACKET_OUTGOING)
+		if (lladdr->sll_pkttype != PACKET_OUTGOING &&
+		    lladdr->sll_pkttype != PACKET_HOST)
 			continue;
 
 		iface = nhrp_interface_get_by_index(lladdr->sll_ifindex, FALSE);
@@ -324,7 +324,8 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 					       &src, &dst))
 			return;
 
-		if (nhrp_address_is_multicast(&dst)) {
+		if (nhrp_address_is_multicast(&dst) &&
+		    lladdr->sll_pkttype == PACKET_OUTGOING) {
 			nhrp_debug("Multicast from %s to %s",
 				   nhrp_address_format(&src, sizeof(fr), fr),
 				   nhrp_address_format(&dst, sizeof(to), to));
@@ -341,8 +342,13 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 					ARRAY_SIZE(mcast_queue);
 
 			ev_idle_start(&mcast_route);
-		} else {
-			nhrp_packet_send_traffic(iface, lladdr->sll_protocol,
+		} else if (lladdr->sll_pkttype == PACKET_HOST) {
+			nhrp_address_set(&nbma_src, PF_INET,
+					 lladdr->sll_halen,
+					 lladdr->sll_addr);
+			nhrp_packet_send_traffic(iface,
+						 &nbma_src, &src, &dst,
+						 lladdr->sll_protocol,
 						 iov.iov_base, r);
 		}
 	}

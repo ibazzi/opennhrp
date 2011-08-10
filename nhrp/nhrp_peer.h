@@ -57,6 +57,14 @@
 	 BIT(NHRP_PEER_TYPE_LOCAL_ROUTE) | \
 	 BIT(NHRP_PEER_TYPE_LOCAL_ADDR))
 
+/* For routing via NHS */
+#define NHRP_PEER_TYPEMASK_ROUTE_VIA_NHS \
+	(BIT(NHRP_PEER_TYPE_DYNAMIC) | \
+	 BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) | \
+	 BIT(NHRP_PEER_TYPE_STATIC) | \
+	 BIT(NHRP_PEER_TYPE_LOCAL_ROUTE) | \
+	 BIT(NHRP_PEER_TYPE_LOCAL_ADDR))
+
 #define NHRP_PEER_FLAG_UNIQUE		0x01	/* Peer is unique; see RFC2332 */
 #define NHRP_PEER_FLAG_REGISTER		0x02	/* For TYPE_STATIC: send registration */
 #define NHRP_PEER_FLAG_CISCO		0x04	/* For TYPE_STATIC: peer is Cisco */
@@ -148,6 +156,7 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 int nhrp_peer_remove_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_purge_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_set_used_matching(void *ctx, struct nhrp_peer *peer);
+struct nhrp_peer *nhrp_peer_find_by_nbma(struct nhrp_interface *iface, struct nhrp_address *nbma);
 
 int nhrp_peer_event_ok(union nhrp_peer_event e, int revents);
 char *nhrp_peer_event_reason(union nhrp_peer_event e, int revents,
