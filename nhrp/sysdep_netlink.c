@@ -617,7 +617,7 @@ static int netlink_addr_purge_nbma(void *ctx, struct nhrp_peer *peer)
 	struct netlink_del_addr_msg *msg = (struct netlink_del_addr_msg *) ctx;
 
 	if (nhrp_address_cmp(&peer->my_nbma_address, &msg->address) == 0)
-		nhrp_peer_purge(peer);
+		nhrp_peer_purge(peer, "address-removed");
 
 	return 0;
 }

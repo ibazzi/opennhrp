@@ -1,3 +1,3 @@
 #!/bin/sh
 
-opennhrpctl cache purge nbma $REMOTE_ADDR local-nbma $LOCAL_ADDR
+opennhrpctl cache lowerdown nbma $REMOTE_ADDR local-nbma $LOCAL_ADDR

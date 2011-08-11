@@ -36,6 +36,13 @@ Purge entries from NHRP cache: cached entries are removed and permanent
 entries are forced down, up and finally reregistered.
 .RE
 
+.BI "[cache] lowerdown [" selector "]..."
+.RS
+Purge entries from NHRP cache with indication that lower layer failed:
+e.g. IPsec daemon detected dead-peer or received INITIIAL-CONTACT
+notification.
+.RE
+
 .BI "route show [" selector "]..."
 .RS
 Show the contents of locally cached kernel routing information

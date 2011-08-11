@@ -97,6 +97,7 @@ struct nhrp_peer {
 	struct list_head mcast_list_entry;
 	struct hlist_node nbma_hash_entry;
 
+	const char *purge_reason;
 	struct nhrp_interface *interface;
 	struct nhrp_peer *parent;
 	union {
@@ -147,7 +148,7 @@ int nhrp_peer_put(struct nhrp_peer *peer);
 
 void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);
-void nhrp_peer_purge(struct nhrp_peer *peer);
+void nhrp_peer_purge(struct nhrp_peer *peer, const char *purge_reason);
 
 int nhrp_peer_match(struct nhrp_peer *peer, struct nhrp_peer_selector *sel);
 
@@ -155,6 +156,7 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 		      struct nhrp_peer_selector *sel);
 int nhrp_peer_remove_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_purge_matching(void *count, struct nhrp_peer *peer);
+int nhrp_peer_lowerdown_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_set_used_matching(void *ctx, struct nhrp_peer *peer);
 struct nhrp_peer *nhrp_peer_find_by_nbma(struct nhrp_interface *iface, struct nhrp_address *nbma);
 

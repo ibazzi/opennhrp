@@ -396,6 +396,9 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 	sprintf(tmp, "%d", peer->prefix_length);
 	envp[i++] = env("NHRP_DESTPREFIX", tmp);
 
+	if (peer->purge_reason)
+		envp[i++] = env("NHRP_PEER_DOWN_REASON", peer->purge_reason);
+
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_CACHED:
 	case NHRP_PEER_TYPE_LOCAL_ADDR:
@@ -1389,27 +1392,28 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 	case NHRP_PEER_TYPE_DYNAMIC:
 	case NHRP_PEER_TYPE_STATIC:
 	case NHRP_PEER_TYPE_DYNAMIC_NHS:
-		if (!(peer->flags & NHRP_PEER_FLAG_REPLACED)) {
-			/* Remove cached routes using this entry as next-hop */
-			memset(&sel, 0, sizeof(sel));
-			sel.type_mask = BIT(NHRP_PEER_TYPE_SHORTCUT_ROUTE);
-			sel.interface = iface;
-			sel.next_hop_address = peer->protocol_address;
-			nhrp_peer_foreach(nhrp_peer_remove_matching, NULL,
-					  &sel);
+		if (peer->flags & NHRP_PEER_FLAG_REPLACED)
+			break;
 
-			/* Execute peer-down */
-			nhrp_peer_run_nhs_down(peer);
-			if (peer->flags & NHRP_PEER_FLAG_UP)
-				nhrp_peer_run_script(peer, "peer-down", NULL);
+		/* Remove cached routes using this entry as next-hop */
+		memset(&sel, 0, sizeof(sel));
+		sel.type_mask = BIT(NHRP_PEER_TYPE_SHORTCUT_ROUTE);
+		sel.interface = iface;
+		sel.next_hop_address = peer->protocol_address;
+		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL,
+				  &sel);
+
+		/* Execute peer-down */
+		nhrp_peer_run_nhs_down(peer);
+		if (peer->flags & NHRP_PEER_FLAG_UP) {
+			peer->purge_reason = "timeout";
+			nhrp_peer_run_script(peer, "peer-down", NULL);
 		}
 
 		/* Remove from arp cache */
-		if (!(peer->flags & NHRP_PEER_FLAG_REPLACED)) {
-			if (peer->protocol_address.type != PF_UNSPEC)
-				kernel_inject_neighbor(&peer->protocol_address,
-						       NULL, peer->interface);
-		}
+		if (peer->protocol_address.type != PF_UNSPEC)
+			kernel_inject_neighbor(&peer->protocol_address,
+					       NULL, peer->interface);
 		break;
 	case NHRP_PEER_TYPE_INCOMPLETE:
 	case NHRP_PEER_TYPE_NEGATIVE:
@@ -1667,11 +1671,12 @@ static void nhrp_peer_script_peer_down_done(union nhrp_peer_event e,
 	nhrp_peer_schedule(peer, 5, nhrp_peer_restart_cb);
 }
 
-void nhrp_peer_purge(struct nhrp_peer *peer)
+void nhrp_peer_purge(struct nhrp_peer *peer, const char *purge_reason)
 {
 	switch (peer->type) {
 	case NHRP_PEER_TYPE_STATIC:
 	case NHRP_PEER_TYPE_DYNAMIC_NHS:
+		peer->purge_reason = purge_reason;
 		nhrp_peer_run_nhs_down(peer);
 		nhrp_peer_is_down(peer);
 		nhrp_peer_cancel_async(peer);
@@ -1683,6 +1688,7 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 		nhrp_peer_schedule(peer, 0, nhrp_peer_dnsmap_restart_cb);
 		break;
 	default:
+		peer->purge_reason = purge_reason;
 		nhrp_peer_remove(peer);
 		break;
 	}
@@ -1691,11 +1697,18 @@ void nhrp_peer_purge(struct nhrp_peer *peer)
 int nhrp_peer_purge_matching(void *ctx, struct nhrp_peer *peer)
 {
 	int *count = (int *) ctx;
-
-	nhrp_peer_purge(peer);
+	nhrp_peer_purge(peer, "user-request");
 	if (count != NULL)
 		(*count)++;
+	return 0;
+}
 
+int nhrp_peer_lowerdown_matching(void *ctx, struct nhrp_peer *peer)
+{
+	int *count = (int *) ctx;
+	nhrp_peer_purge(peer, "lower-down");
+	if (count != NULL)
+		(*count)++;
 	return 0;
 }
 
@@ -1705,6 +1718,7 @@ static void nhrp_peer_remove_cb(struct ev_timer *w, int revents)
 	int type;
 
 	peer->flags |= NHRP_PEER_FLAG_REMOVED;
+	peer->purge_reason = "expired";
 	nhrp_peer_is_down(peer);
 	list_del(&peer->peer_list_entry);
 
