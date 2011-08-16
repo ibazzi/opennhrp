@@ -1156,10 +1156,16 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 					      sizeof(tmp), tmp),
 			  nhrp_error_indication_text(ec), ntohs(ec));
 
-		/* Negative and up: no route what so ever - do not
-		 * use static routes to send stuff to this address */
-		peer->flags |= NHRP_PEER_FLAG_UP;
-		nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
+		if (reply != NULL) {
+			/* We got reply that this address is not available -
+			 * negative cache it. */
+			peer->flags |= NHRP_PEER_FLAG_UP;
+			nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
+		} else {
+			/* Time out - NHS reachable, or packet lost multiple
+			 * times. Keep trying if still needed. */
+			nhrp_peer_remove(peer);
+		}
 		goto ret;
 	}
 

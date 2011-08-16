@@ -4,9 +4,6 @@ Open items that need work on OpenNHRP:
   management. alternatively, the script could return some special
   value meaning "try again soon".
 
-- when core has no other core links up yet, it should not negative cache
-  anything; instead it should give more time for those links to come up
-
 - offload multicast packet forwarding to kernel
 
 - use mmapped pf_packet interface
