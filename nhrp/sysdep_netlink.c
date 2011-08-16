@@ -376,14 +376,15 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 	nhrp_debug("NL-ARP(%s) who-has %s",
 		   iface->name, nhrp_address_format(&addr, sizeof(tmp), tmp));
 
-	peer = nhrp_peer_route(iface, &addr, 0, 0);
+	peer = nhrp_peer_route(iface, &addr, 0, ~BIT(NHRP_PEER_TYPE_LOCAL_ROUTE));
 	if (peer == NULL)
 		return;
 
 	if (peer->flags & NHRP_PEER_FLAG_UP)
 		kernel_inject_neighbor(&addr, &peer->next_hop_address, iface);
 
-	if (nhrp_address_cmp(&addr, &peer->protocol_address) != 0)
+	if (peer->next_hop_address.type != PF_UNSPEC &&
+	    nhrp_address_cmp(&addr, &peer->protocol_address) != 0)
 		nhrp_peer_traffic_indication(iface, peer->afnum, &addr);
 }
 
