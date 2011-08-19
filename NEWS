@@ -6,7 +6,23 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
- opennhrp 0.12.2 - released 7/Jul/2011
+ opennhrp 0.12.3 - released 19/Aug/2011
+-----------------------------------------------------------------------------
+ - feature: export reason why peer-down trigger was executed; and implement
+   'lowerdown' opennhrpctl command for racoon hook to indicate that the
+   IPsec SA has died (opennhrp-script can then avoid the unneccessary and
+   possibly harmful call to racoonctl)
+ - fix: route NHRP queries always via NHS (because ipsec initial-contact
+   mechanism for purging dead IPsec SAs triggers after NHRP rediscovery,
+   and if remote peer was rebooted, the direct link might be dead)
+ - fix: don't negative cache entries on timeout (timeout is indication of
+   temporary error: none of NHS' is reachable)
+ - fix: don't reply to kernel's ARP queries using local route entries.
+   this also prevents bad shortcut-routes if the local GRE prefix is
+   a sub-prefix of routed subnet over the GRE
+
+-----------------------------------------------------------------------------
+ opennhrp 0.12.2 - released 07/Jul/2011
 -----------------------------------------------------------------------------
  - fix: regression introduced in 0.12's policy routing changes that
    shortcuts for in-NBMA network would not work unless using dynamic-map
