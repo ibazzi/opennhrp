@@ -243,15 +243,16 @@ static int load_config(const char *config_file)
 			NEED_PEER();
 			peer->flags |= NHRP_PEER_FLAG_CISCO;
 		} else if (strcmp(word, "holding-time") == 0) {
-			peer = NULL;
 			read_word(in, &lineno, sizeof(word), word);
 			if (peer != NULL &&
-				 peer->type == NHRP_PEER_TYPE_LOCAL_ADDR)
+			    peer->type == NHRP_PEER_TYPE_LOCAL_ADDR) {
 				peer->holding_time = atoi(word);
-			else if (iface != NULL)
+			} else if (iface != NULL) {
 				iface->holding_time = atoi(word);
-			else
+				peer = NULL;
+			} else {
 				rc = 7;
+			}
 		} else if (strcmp(word, "cisco-authentication") == 0) {
 			struct nhrp_buffer *buf;
 			struct nhrp_cisco_authentication_extension *auth;
