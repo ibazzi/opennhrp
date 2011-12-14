@@ -477,10 +477,10 @@ static void netlink_link_new(struct nlmsghdr *msg)
 		if (cfg.iph.saddr) {
 			struct nhrp_address saddr;
 			nhrp_address_set(&saddr, PF_INET, 4, (uint8_t *) &cfg.iph.saddr);
-			if (nhrp_address_cmp(&iface->nbma_address, &saddr) || iface->link_index != -1) {
+			if (nhrp_address_cmp(&iface->nbma_address, &saddr) || iface->link_index) {
 				configuration_changed = TRUE;
 				iface->nbma_address = saddr;
-				iface->link_index = -1;
+				iface->link_index = 0;
 			}
 		} else if (cfg.link) {
 			if (cfg.link != iface->link_index) {
@@ -489,11 +489,11 @@ static void netlink_link_new(struct nlmsghdr *msg)
 				iface->link_index = cfg.link;
 			}
 		} else {
-			if (iface->link_index != -1 || iface->nbma_address.type != PF_UNSPEC) {
+			if (iface->link_index || iface->nbma_address.type != PF_UNSPEC) {
 				configuration_changed = TRUE;
 				/* Mark the interface as owning all NBMA addresses
 				 * this works when there's only one GRE interface */
-				iface->link_index = -1;
+				iface->link_index = 0;
 				nhrp_address_set_type(&iface->nbma_address, PF_UNSPEC);
 				nhrp_info("WARNING: Cannot figure out NBMA address for "
 					  "interface '%s'. Using route hints.", ifname);
@@ -515,7 +515,7 @@ static void netlink_link_new(struct nlmsghdr *msg)
 		/* Reset the interface values we detect later */
 		memset(&iface->nat_cie, 0, sizeof(iface->nat_cie));
 		iface->nbma_mtu = 0;
-		if (iface->link_index != -1) {
+		if (iface->link_index) {
 			/* Reenumerate addresses if needed */
 			netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETADDR);
 			netlink_read_cb(&talk_fd.io, EV_READ);

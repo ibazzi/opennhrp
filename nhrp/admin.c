@@ -384,7 +384,7 @@ static int admin_show_interface(void *ctx, struct nhrp_interface *iface)
 		iface->gre_key,
 		iface->mtu);
 
-	if (iface->link_index != -1) {
+	if (iface->link_index) {
 		struct nhrp_interface *link;
 
 		i += snprintf(&buf[i], len - i, "Link-Index: %d\n", iface->link_index);
