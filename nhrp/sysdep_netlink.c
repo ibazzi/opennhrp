@@ -436,6 +436,7 @@ static void netlink_link_new(struct nlmsghdr *msg)
 	struct rtattr *rta[IFLA_MAX+1];
 	const char *ifname;
 	struct ip_tunnel_parm cfg;
+	int configuration_changed = FALSE;
 
 	netlink_parse_rtattr(rta, IFLA_MAX, IFLA_RTA(ifi), IFLA_PAYLOAD(msg));
 	if (rta[IFLA_IFNAME] == NULL)
@@ -467,29 +468,36 @@ static void netlink_link_new(struct nlmsghdr *msg)
 	switch (ifi->ifi_type) {
 	case ARPHRD_IPGRE:
 		iface->afnum = AFNUM_INET;
-
 		/* try hard to get the interface nbma address */
 		do_get_ioctl(ifname, &cfg);
-		iface->gre_key = ntohl(cfg.i_key);
-		iface->nbma_mtu = 0;
+		if (iface->gre_key != ntohl(cfg.i_key)) {
+			configuration_changed = TRUE;
+			iface->gre_key = ntohl(cfg.i_key);
+		}
 		if (cfg.iph.saddr) {
-			nhrp_address_set(&iface->nbma_address, PF_INET,
-					 4, (uint8_t *) &cfg.iph.saddr);
-			iface->link_index = -1;
+			struct nhrp_address saddr;
+			nhrp_address_set(&saddr, PF_INET, 4, (uint8_t *) &cfg.iph.saddr);
+			if (nhrp_address_cmp(&iface->nbma_address, &saddr) || iface->link_index != -1) {
+				configuration_changed = TRUE;
+				iface->nbma_address = saddr;
+				iface->link_index = -1;
+			}
 		} else if (cfg.link) {
-			nhrp_address_set_type(&iface->nbma_address, PF_UNSPEC);
-			iface->link_index = cfg.link;
-			/* re-enumerate all addresses to get the current
-			 * situation for this link */
-			netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETADDR);
-			netlink_read_cb(&talk_fd.io, EV_READ);
+			if (cfg.link != iface->link_index) {
+				configuration_changed = TRUE;
+				nhrp_address_set_type(&iface->nbma_address, PF_UNSPEC);
+				iface->link_index = cfg.link;
+			}
 		} else {
-			/* Mark the interface as owning all NBMA addresses
-			 * this works when there's only one GRE interface */
-			iface->link_index = -1;
-			nhrp_address_set_type(&iface->nbma_address, PF_UNSPEC);
-			nhrp_error("Cannot figure out NBMA address for "
-				   "interface '%s'", ifname);
+			if (iface->link_index != -1 || iface->nbma_address.type != PF_UNSPEC) {
+				configuration_changed = TRUE;
+				/* Mark the interface as owning all NBMA addresses
+				 * this works when there's only one GRE interface */
+				iface->link_index = -1;
+				nhrp_address_set_type(&iface->nbma_address, PF_UNSPEC);
+				nhrp_info("WARNING: Cannot figure out NBMA address for "
+					  "interface '%s'. Using route hints.", ifname);
+			}
 		}
 		break;
 	}
@@ -498,6 +506,28 @@ static void netlink_link_new(struct nlmsghdr *msg)
 		netlink_configure_arp(iface, PF_INET);
 		netlink_link_arp_on(iface);
 		proc_icmp_redirect_off(iface->name);
+	}
+
+	if (configuration_changed) {
+		struct nhrp_peer_selector sel;
+		int count = 0;
+
+		/* Reset the interface values we detect later */
+		memset(&iface->nat_cie, 0, sizeof(iface->nat_cie));
+		iface->nbma_mtu = 0;
+		if (iface->link_index != -1) {
+			/* Reenumerate addresses if needed */
+			netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETADDR);
+			netlink_read_cb(&talk_fd.io, EV_READ);
+		}
+
+		/* Purge all NHRP entries for this interface */
+		memset(&sel, 0, sizeof(sel));
+		sel.type_mask = NHRP_PEER_TYPEMASK_PURGEABLE;
+		sel.interface = iface;
+		nhrp_peer_foreach(nhrp_peer_purge_matching, &count, &sel);
+		nhrp_info("Interface %s: GRE configuration changed. Purged %d peers.",
+			  ifname, count);
 	}
 }
 
