@@ -342,6 +342,80 @@ static void admin_cache_flush(void *ctx, const char *cmd)
 		    count);
 }
 
+static int admin_show_interface(void *ctx, struct nhrp_interface *iface)
+{
+	char buf[512], tmp[32];
+	size_t len = sizeof(buf);
+	int i = 0;
+
+	i += snprintf(&buf[i], len - i,
+		"Interface: %s\n"
+		"Index: %d\n",
+		iface->name,
+		iface->index);
+
+	if (iface->protocol_address.addr_len != 0) {
+		i += snprintf(&buf[i], len - i,
+			"Protocol-Address: %s/%d\n",
+			nhrp_address_format(&iface->protocol_address, sizeof(tmp), tmp),
+			iface->protocol_address_prefix);
+	}
+
+	if (iface->flags) {
+		i += snprintf(&buf[i], len - i,
+			"Flags:%s%s%s%s%s\n",
+			(iface->flags & NHRP_INTERFACE_FLAG_NON_CACHING) ? " non-caching" : "",
+			(iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT) ? " shortcut" : "",
+			(iface->flags & NHRP_INTERFACE_FLAG_REDIRECT) ? " redirect" : "",
+			(iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST) ? " shortcut-dest" : "",
+			(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED) ? " configured" : "");
+	}
+
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
+		goto done;
+
+	i += snprintf(&buf[i], len - i,
+		"Holding-Time: %u\n"
+		"Route-Table: %u\n"
+		"GRE-Key: %u\n"
+		"MTU: %u\n",
+		iface->holding_time,
+		iface->route_table,
+		iface->gre_key,
+		iface->mtu);
+
+	if (iface->link_index != -1) {
+		struct nhrp_interface *link;
+
+		i += snprintf(&buf[i], len - i, "Link-Index: %d\n", iface->link_index);
+		link = nhrp_interface_get_by_index(iface->link_index, FALSE);
+		if (link != NULL)
+			i += snprintf(&buf[i], len - i, "Link-Name: %s\n", link->name);
+	}
+
+	if (iface->nbma_address.addr_len != 0) {
+		i += snprintf(&buf[i], len - i,
+			"NBMA-MTU: %u\n"
+			"NBMA-Address: %s\n",
+			iface->nbma_mtu,
+			nhrp_address_format(&iface->nbma_address, sizeof(tmp), tmp));
+	}
+	if (iface->nat_cie.nbma_address.addr_len != 0) {
+		i += snprintf(&buf[i], len - i,
+			"NBMA-NAT-OA: %s\n",
+			nhrp_address_format(&iface->nat_cie.nbma_address, sizeof(tmp), tmp));
+	}
+done:
+	admin_write(ctx, "%s\n", buf);
+	return 0;
+}
+
+static void admin_interface_show(void *ctx, const char *cmd)
+{
+	admin_write(ctx, "Status: ok\n\n");
+	nhrp_interface_foreach(admin_show_interface, ctx);
+}
+
 static void admin_redirect_purge(void *ctx, const char *cmd)
 {
 	char keyword[64];
@@ -431,6 +505,7 @@ static struct {
 	{ "purge",		admin_cache_purge },
 	{ "cache purge",	admin_cache_purge },
 	{ "cache lowerdown",	admin_cache_lower_down },
+	{ "interface show",	admin_interface_show },
 	{ "redirect purge",	admin_redirect_purge },
 	{ "update nbma",	admin_update_nbma },
 };
