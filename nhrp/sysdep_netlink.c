@@ -230,6 +230,14 @@ static int netlink_enumerate(struct netlink_fd *fd, int family, int type)
 		      (struct sockaddr *) &addr, sizeof(addr)) >= 0;
 }
 
+static void netlink_read_cb(struct ev_io *w, int revents)
+{
+	struct netlink_fd *nfd = container_of(w, struct netlink_fd, io);
+
+	if (revents & EV_READ)
+		netlink_receive(nfd, NULL);
+}
+
 static int do_get_ioctl(const char *basedev, struct ip_tunnel_parm *p)
 {
 	struct ifreq ifr;
@@ -463,11 +471,18 @@ static void netlink_link_new(struct nlmsghdr *msg)
 		/* try hard to get the interface nbma address */
 		do_get_ioctl(ifname, &cfg);
 		iface->gre_key = ntohl(cfg.i_key);
+		iface->nbma_mtu = 0;
 		if (cfg.iph.saddr) {
 			nhrp_address_set(&iface->nbma_address, PF_INET,
 					 4, (uint8_t *) &cfg.iph.saddr);
+			iface->link_index = -1;
 		} else if (cfg.link) {
+			nhrp_address_set_type(&iface->nbma_address, PF_UNSPEC);
 			iface->link_index = cfg.link;
+			/* re-enumerate all addresses to get the current
+			 * situation for this link */
+			netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETADDR);
+			netlink_read_cb(&talk_fd.io, EV_READ);
 		} else {
 			/* Mark the interface as owning all NBMA addresses
 			 * this works when there's only one GRE interface */
@@ -782,14 +797,6 @@ static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
 	[RTM_NEWROUTE] = netlink_route_new,
 	[RTM_DELROUTE] = netlink_route_del,
 };
-
-static void netlink_read_cb(struct ev_io *w, int revents)
-{
-	struct netlink_fd *nfd = container_of(w, struct netlink_fd, io);
-
-	if (revents & EV_READ)
-		netlink_receive(nfd, NULL);
-}
 
 static void netlink_close(struct netlink_fd *fd)
 {
