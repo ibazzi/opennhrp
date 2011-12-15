@@ -54,9 +54,11 @@ void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes);
 
 /* Initializers for system dependant stuff */
 int forward_init(void);
+void forward_cleanup(void);
 int forward_local_addresses_changed(void);
 
 int kernel_init(void);
+void kernel_cleanup(void);
 int kernel_route(struct nhrp_interface *out_iface,
 		 struct nhrp_address *dest,
 		 struct nhrp_address *default_source,

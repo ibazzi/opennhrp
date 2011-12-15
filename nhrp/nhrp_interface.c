@@ -47,6 +47,17 @@ static char *envu32(const char *key, uint32_t value)
 	return buf;
 }
 
+void nhrp_interface_cleanup(void)
+{
+	struct nhrp_interface *iface, *n;
+
+	list_for_each_entry_safe(iface, n, &name_list, name_list_entry) {
+		list_del(&iface->name_list_entry);
+		hlist_del(&iface->index_list_entry);
+		free(iface);
+	}
+}
+
 void nhrp_interface_hash(struct nhrp_interface *iface)
 {
 	int iidx = iface->index & (NHRP_INDEX_HASH_SIZE - 1);

@@ -961,12 +961,18 @@ int kernel_init(void)
 	return TRUE;
 
 err_close_all:
+	kernel_cleanup();
+	return FALSE;
+}
+
+void kernel_cleanup(void)
+{
+	int i;
+
 	for (i = 0; i < ARRAY_SIZE(netlink_groups); i++)
 		netlink_close(&netlink_fds[i]);
 	ev_io_stop(&packet_io);
-	close(fd);
-
-	return FALSE;
+	close(packet_io.fd);
 }
 
 int kernel_route(struct nhrp_interface *out_iface,

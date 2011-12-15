@@ -152,6 +152,7 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 	struct filter f;
 	int i;
 
+	memset(&prog, 0, sizeof(prog));
 	memset(&f, 0, sizeof(f));
 
 	/* Check for IPv4 */
@@ -378,3 +379,10 @@ int forward_init(void)
 	return TRUE;
 }
 
+void forward_cleanup(void)
+{
+	ev_io_stop(&packet_io);
+	close(packet_io.fd);
+	ev_timer_stop(&install_filter_timer);
+	ev_idle_stop(&mcast_route);
+}

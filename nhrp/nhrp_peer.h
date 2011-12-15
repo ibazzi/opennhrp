@@ -142,6 +142,8 @@ struct nhrp_peer_selector {
 const char * const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
 typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);
 
+void nhrp_peer_cleanup(void);
+
 struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface);
 struct nhrp_peer *nhrp_peer_get(struct nhrp_peer *peer);
 int nhrp_peer_put(struct nhrp_peer *peer);

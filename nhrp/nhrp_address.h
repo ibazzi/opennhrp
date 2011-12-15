@@ -44,6 +44,7 @@ uint16_t nhrp_afnum_from_pf(uint16_t pf);
 uint16_t nhrp_pf_from_afnum(uint16_t afnum);
 
 int nhrp_address_init(void);
+void nhrp_address_cleanup(void);
 int nhrp_address_parse_packet(uint16_t protocol, size_t len, uint8_t *packet,
 			      struct nhrp_address *src,
 			      struct nhrp_address *dst);

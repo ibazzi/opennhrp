@@ -505,6 +505,15 @@ int main(int argc, char **argv)
 	nhrp_running = TRUE;
 	ev_loop(0);
 
+	nhrp_peer_cleanup();
+	ev_loop(EVLOOP_NONBLOCK);
+
+	kernel_cleanup();
+	forward_cleanup();
+	nhrp_interface_cleanup();
+	nhrp_address_cleanup();
+	ev_default_destroy();
+
 	return 0;
 }
 

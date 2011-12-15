@@ -441,3 +441,14 @@ int nhrp_address_init(void)
 
 	return TRUE;
 }
+
+void nhrp_address_cleanup(void)
+{
+	int i;
+
+	ev_timer_stop(&resolver.timeout);
+	ev_prepare_stop(&resolver.prepare);
+	for (i = 0; i < ARRAY_SIZE(resolver.fds); i++)
+		ev_io_stop(&resolver.fds[i]);
+	ares_destroy(resolver.channel);
+}

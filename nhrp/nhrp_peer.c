@@ -2058,3 +2058,8 @@ void nhrp_peer_dump_cache(void)
 	nhrp_peer_foreach(dump_peer, &num_total, NULL);
 	nhrp_info("Total %d peer cache entries", num_total);
 }
+
+void nhrp_peer_cleanup(void)
+{
+	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, NULL);
+}
