@@ -109,13 +109,13 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 
 	/* Send reply */
 	packet->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
+	packet->hdr.hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT;
 	packet->hdr.flags &= NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
 			     NHRP_FLAG_RESOLUTION_SOURCE_STABLE |
 			     NHRP_FLAG_RESOLUTION_UNIQUE |
 			     NHRP_FLAG_RESOLUTION_NAT;
 	packet->hdr.flags |= NHRP_FLAG_RESOLUTION_DESTINATION_STABLE |
 			     NHRP_FLAG_RESOLUTION_AUTHORATIVE;
-	packet->hdr.hop_count = 0;
 
 	cie = nhrp_cie_alloc();
 	if (cie == NULL)
@@ -391,9 +391,9 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	}
 
 	packet->hdr.type = NHRP_PACKET_REGISTRATION_REPLY;
+	packet->hdr.hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT;
 	packet->hdr.flags &= NHRP_FLAG_REGISTRATION_UNIQUE |
 			     NHRP_FLAG_REGISTRATION_NAT;
-	packet->hdr.hop_count = 0;
 
 	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	if (list_empty(&payload->u.cie_list)) {
@@ -457,8 +457,8 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 
 	flags = packet->hdr.flags;
 	packet->hdr.type = NHRP_PACKET_PURGE_REPLY;
+	packet->hdr.hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT;
 	packet->hdr.flags = 0;
-	packet->hdr.hop_count = 0;
 
 	if (!(flags & NHRP_FLAG_PURGE_NO_REPLY)) {
 		if (nhrp_packet_reroute(packet, NULL))

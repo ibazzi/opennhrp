@@ -20,7 +20,7 @@
 
 #define NHRP_MAX_EXTENSIONS		10
 
-#define NHRP_PACKET_HOP_COUNT_NO_RELAY	0xff
+#define NHRP_PACKET_DEFAULT_HOP_COUNT	16
 
 struct nhrp_interface;
 

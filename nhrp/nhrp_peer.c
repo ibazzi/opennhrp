@@ -781,6 +781,7 @@ static void nhrp_peer_send_protocol_purge(struct nhrp_peer *peer)
 		.protocol_type = peer->protocol_type,
 		.version = NHRP_VERSION_RFC2332,
 		.type = NHRP_PACKET_PURGE_REQUEST,
+		.hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT,
 		.flags = NHRP_FLAG_PURGE_NO_REPLY,
 	};
 	if (peer->flags & NHRP_PEER_FLAG_CISCO) {
@@ -983,7 +984,8 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
 			.afnum = peer->afnum,
 			.protocol_type = peer->protocol_type,
 			.version = NHRP_VERSION_RFC2332,
-			.type = NHRP_PACKET_PURGE_REQUEST
+			.type = NHRP_PACKET_PURGE_REQUEST,
+			.hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT,
 		};
 		packet->dst_protocol_address = peer->protocol_address;
 
@@ -1038,6 +1040,7 @@ static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents)
 		.protocol_type = peer->protocol_type,
 		.version = NHRP_VERSION_RFC2332,
 		.type = NHRP_PACKET_REGISTRATION_REQUEST,
+		.hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT,
 		.flags = NHRP_FLAG_REGISTRATION_UNIQUE |
 			 NHRP_FLAG_REGISTRATION_NAT
 	};
@@ -1059,7 +1062,7 @@ static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents)
 		 * address. */
 		nhrp_address_set_broadcast(&packet->dst_protocol_address,
 					   peer->prefix_length);
-		packet->hdr.hop_count = NHRP_PACKET_HOP_COUNT_NO_RELAY;
+		packet->hdr.hop_count = 0;
 	}
 
 
@@ -1290,6 +1293,7 @@ static void nhrp_peer_send_resolve(struct nhrp_peer *peer)
 		.protocol_type = peer->protocol_type,
 		.version = NHRP_VERSION_RFC2332,
 		.type = NHRP_PACKET_RESOLUTION_REQUEST,
+		.hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT,
 		.flags = NHRP_FLAG_RESOLUTION_SOURCE_IS_ROUTER |
 			 NHRP_FLAG_RESOLUTION_AUTHORATIVE |
 			 NHRP_FLAG_RESOLUTION_NAT

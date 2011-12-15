@@ -269,6 +269,7 @@ struct nhrp_packet *nhrp_packet_alloc(void)
 	struct nhrp_packet *packet;
 	packet = calloc(1, sizeof(struct nhrp_packet));
 	packet->ref = 1;
+	packet->hdr.hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT;
 	list_init(&packet->request_list_entry);
 	ev_timer_init(&packet->timeout, nhrp_packet_xmit_timeout_cb,
 		      PACKET_RETRY_INTERVAL, PACKET_RETRY_INTERVAL);
@@ -1072,10 +1073,6 @@ int nhrp_packet_route_and_send(struct nhrp_packet *packet)
 		packet->hdr.afnum = packet->dst_peer->afnum;
 	if (packet->hdr.protocol_type == 0)
 		packet->hdr.protocol_type = packet->dst_peer->protocol_type;
-	if (packet->hdr.hop_count == 0)
-		packet->hdr.hop_count = 16;
-	else if (packet->hdr.hop_count == NHRP_PACKET_HOP_COUNT_NO_RELAY)
-		packet->hdr.hop_count = 0;
 
 	/* RFC2332 5.3.1 */
 	payload = nhrp_packet_extension(
@@ -1213,8 +1210,8 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 
 	p = nhrp_packet_alloc();
 	p->hdr = error_packet->hdr;
-	p->hdr.hop_count = 0;
 	p->hdr.type = NHRP_PACKET_ERROR_INDICATION;
+	p->hdr.hop_count = 0;
 	p->hdr.u.error.code = indication_code;
 	p->hdr.u.error.offset = htons(offset);
 	p->dst_iface = error_packet->src_iface;
@@ -1292,7 +1289,7 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface,
 		.protocol_type = protocol_type,
 		.version = NHRP_VERSION_RFC2332,
 		.type = NHRP_PACKET_TRAFFIC_INDICATION,
-		.hop_count = 1,
+		.hop_count = 0,
 	};
 	p->dst_protocol_address = *protocol_src;
 
