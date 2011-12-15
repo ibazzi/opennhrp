@@ -393,8 +393,7 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 	envp[i++] = env("NHRP_DESTADDR",
 			nhrp_address_format(&peer->protocol_address,
 					    sizeof(tmp), tmp));
-	sprintf(tmp, "%d", peer->prefix_length);
-	envp[i++] = env("NHRP_DESTPREFIX", tmp);
+	envp[i++] = envu32("NHRP_DESTPREFIX", peer->prefix_length);
 
 	if (peer->purge_reason)
 		envp[i++] = env("NHRP_PEER_DOWN_REASON", peer->purge_reason);
@@ -408,10 +407,8 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 		envp[i++] = env("NHRP_DESTNBMA",
 			nhrp_address_format(&peer->next_hop_address,
 					    sizeof(tmp), tmp));
-		if (peer->mtu) {
-			sprintf(tmp, "%d", peer->mtu);
-			envp[i++] = env("NHRP_DESTMTU", tmp);
-		}
+		if (peer->mtu)
+			envp[i++] = envu32("NHRP_DESTMTU", peer->mtu);
 		if (peer->next_hop_nat_oa.type != PF_UNSPEC)
 			envp[i++] = env("NHRP_DESTNBMA_NAT_OA",
 				nhrp_address_format(&peer->next_hop_nat_oa,
