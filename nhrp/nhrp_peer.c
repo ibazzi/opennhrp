@@ -1429,6 +1429,7 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 	case NHRP_PEER_TYPE_NEGATIVE:
 	case NHRP_PEER_TYPE_LOCAL_ADDR:
 	case NHRP_PEER_TYPE_LOCAL_ROUTE:
+	case NHRP_PEER_TYPE_STATIC_DNS:
 		break;
 	default:
 		NHRP_BUG_ON("invalid peer type");
