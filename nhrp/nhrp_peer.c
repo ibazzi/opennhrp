@@ -433,6 +433,15 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 
 static void nhrp_peer_cancel_async(struct nhrp_peer *peer)
 {
+	if (peer->queued_packet) {
+		nhrp_packet_put(peer->queued_packet);
+		peer->queued_packet = NULL;
+	}
+	if (peer->request) {
+		nhrp_server_finish_request(peer->request);
+		peer->request = NULL;
+	}
+
 	nhrp_address_resolve_cancel(&peer->address_query);
 	ev_timer_stop(&peer->timer);
 	if (ev_is_active(&peer->child)) {

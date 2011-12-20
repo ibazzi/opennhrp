@@ -51,11 +51,13 @@ nhrp_server_record_request(struct nhrp_packet *packet)
 	return pr;
 }
 
-static void nhrp_server_finish_request(struct nhrp_pending_request *pr)
+void nhrp_server_finish_request(struct nhrp_pending_request *pr)
 {
 	list_del(&pr->request_list_entry);
 	if (pr->rpeer != NULL)
 		nhrp_peer_put(pr->rpeer);
+	if (pr->peer != NULL)
+		nhrp_peer_put(pr->peer);
 	if (pr->packet != NULL)
 		nhrp_packet_put(pr->packet);
 	free(pr);

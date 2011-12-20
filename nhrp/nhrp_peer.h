@@ -83,6 +83,7 @@
 
 struct nhrp_interface;
 struct nhrp_packet;
+struct nhrp_pending_request;
 
 union __attribute__ ((__transparent_union__)) nhrp_peer_event {
 	struct ev_timer *timer;
@@ -100,10 +101,8 @@ struct nhrp_peer {
 	const char *purge_reason;
 	struct nhrp_interface *interface;
 	struct nhrp_peer *parent;
-	union {
-		struct nhrp_packet *queued_packet;
-		struct nhrp_pending_request *request;
-	};
+	struct nhrp_packet *queued_packet;
+	struct nhrp_pending_request *request;
 
 	struct ev_timer timer;
 	struct ev_child child;
@@ -187,5 +186,7 @@ static inline struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *iface,
 void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 				  uint16_t afnum, struct nhrp_address *dst);
 void nhrp_peer_dump_cache(void);
+
+void nhrp_server_finish_request(struct nhrp_pending_request *pr);
 
 #endif
