@@ -100,6 +100,10 @@ static int netlink_add_rtattr_l(struct nlmsghdr *n, int maxlen, int type,
 	rta->rta_type = type;
 	rta->rta_len = len;
 	memcpy(RTA_DATA(rta), data, alen);
+#ifdef VALGRIND
+	/* Clear the padding area to avoid spurious warnings */
+	memset(RTA_DATA(rta) + alen, 0, RTA_ALIGN(len) - alen);
+#endif
 	n->nlmsg_len = NLMSG_ALIGN(n->nlmsg_len) + RTA_ALIGN(len);
 	return TRUE;
 }
@@ -241,6 +245,13 @@ static void netlink_read_cb(struct ev_io *w, int revents)
 static int do_get_ioctl(const char *basedev, struct ip_tunnel_parm *p)
 {
 	struct ifreq ifr;
+
+#ifdef VALGRIND
+	/* Valgrind does not have SIOCGETTUNNEL description, so clear
+	 * the memory structs to avoid spurious warnings */
+	memset(&ifr, 0, sizeof(ifr));
+	memset(p, 0, sizeof(*p));
+#endif
 
 	strncpy(ifr.ifr_name, basedev, IFNAMSIZ);
 	ifr.ifr_ifru.ifru_data = (void *) p;
