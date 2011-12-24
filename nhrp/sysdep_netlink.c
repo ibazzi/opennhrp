@@ -839,10 +839,15 @@ static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
 	[RTM_DELROUTE] = netlink_route_del,
 };
 
+static void netlink_stop_listening(struct netlink_fd *fd)
+{
+	ev_io_stop(&fd->io);
+}
+
 static void netlink_close(struct netlink_fd *fd)
 {
 	if (fd->fd >= 0) {
-		ev_io_stop(&fd->io);
+		netlink_stop_listening(fd);
 		close(fd->fd);
 		fd->fd = 0;
 	}
@@ -974,6 +979,15 @@ int kernel_init(void)
 err_close_all:
 	kernel_cleanup();
 	return FALSE;
+}
+
+void kernel_stop_listening(void)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(netlink_groups); i++)
+		netlink_stop_listening(&netlink_fds[i]);
+	ev_io_stop(&packet_io);
 }
 
 void kernel_cleanup(void)

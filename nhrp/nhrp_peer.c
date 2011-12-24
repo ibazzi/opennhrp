@@ -47,6 +47,7 @@ const char * const nhrp_peer_type[] = {
 	[NHRP_PEER_TYPE_LOCAL_ADDR]	= "local",
 };
 
+static int nhrp_peer_num_total = 0;
 static struct list_head local_peer_list = LIST_INITIALIZER(local_peer_list);
 
 /* Peer entrys life, pending callbacks and their call order are listed
@@ -431,7 +432,7 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 	exit(1);
 }
 
-static void nhrp_peer_cancel_async(struct nhrp_peer *peer)
+void nhrp_peer_cancel_async(struct nhrp_peer *peer)
 {
 	if (peer->queued_packet) {
 		nhrp_packet_put(peer->queued_packet);
@@ -1355,6 +1356,7 @@ struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface)
 {
 	struct nhrp_peer *p;
 
+	nhrp_peer_num_total++;
 	p = calloc(1, sizeof(struct nhrp_peer));
 	p->ref = 1;
 	p->interface = iface;
@@ -1392,6 +1394,12 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 	struct nhrp_peer_selector sel;
 
 	nhrp_peer_cancel_async(peer);
+
+	/* Remove from lists */
+	if (list_hashed(&peer->mcast_list_entry))
+		list_del(&peer->mcast_list_entry);
+	if (hlist_hashed(&peer->nbma_hash_entry))
+		hlist_del(&peer->nbma_hash_entry);
 
 	if (peer->parent != NULL) {
 		nhrp_peer_put(peer->parent);
@@ -1448,6 +1456,7 @@ static void nhrp_peer_release(struct nhrp_peer *peer)
 	}
 
 	free(peer);
+	nhrp_peer_num_total--;
 }
 
 int nhrp_peer_put(struct nhrp_peer *peer)
@@ -2067,10 +2076,16 @@ void nhrp_peer_dump_cache(void)
 
 	nhrp_info("Peer cache dump:");
 	nhrp_peer_foreach(dump_peer, &num_total, NULL);
-	nhrp_info("Total %d peer cache entries", num_total);
+	nhrp_info("Total %d peer cache entries, %d allocated entries",
+		  num_total, nhrp_peer_num_total);
 }
 
 void nhrp_peer_cleanup(void)
 {
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, NULL);
+
+	while (nhrp_peer_num_total > 0) {
+		nhrp_info("Waiting for peers to die, %d left", nhrp_peer_num_total);
+		ev_loop(EVLOOP_ONESHOT);
+	}
 }

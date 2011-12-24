@@ -196,7 +196,8 @@ static void nhrp_server_finish_reg(struct nhrp_pending_request *pr)
 	char tmp[64], tmp2[64];
 	struct nhrp_packet *packet = pr->packet;
 
-	if (nhrp_packet_reroute(packet, pr->rpeer)) {
+	if (pr->rpeer != NULL &&
+	    nhrp_packet_reroute(packet, pr->rpeer)) {
 		nhrp_info("Sending Registration Reply from proto src %s to %s",
 			  nhrp_address_format(&packet->dst_protocol_address,
 					      sizeof(tmp), tmp),
@@ -204,9 +205,6 @@ static void nhrp_server_finish_reg(struct nhrp_pending_request *pr)
 					      sizeof(tmp2), tmp2));
 
 		nhrp_packet_send(packet);
-	} else {
-		nhrp_packet_send_error(
-			packet, NHRP_ERROR_PROTOCOL_ADDRESS_UNREACHABLE, 0);
 	}
 
 	nhrp_server_finish_request(pr);
@@ -242,6 +240,8 @@ static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e, int revents)
 
 		cie->hdr.code = NHRP_CODE_SUCCESS;
 		nhrp_peer_insert(peer);
+		if (pr->rpeer == NULL)
+			pr->rpeer = nhrp_peer_get(peer);
 	} else {
 		if (revents == 0)
 			nhrp_error("[%s] Peer registration failed: "
@@ -254,9 +254,9 @@ static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e, int revents)
 							  reason));
 		cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
 		peer->flags |= NHRP_PEER_FLAG_REPLACED;
+		nhrp_peer_cancel_async(peer);
 	}
-	if (pr->rpeer == NULL)
-		pr->rpeer = nhrp_peer_get(peer);
+
 	nhrp_peer_put(peer);
 	pr->peer = NULL;
 

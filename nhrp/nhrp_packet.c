@@ -67,7 +67,7 @@ int nhrp_rate_limit_clear(struct nhrp_address *a, int pref)
 	for (i = 0; i < RATE_LIMIT_HASH_SIZE; i++) {
 		hlist_for_each_entry_safe(rl, c, n, &rate_limit_hash[i],
 					  hash_entry) {
-			if (a->addr == AF_UNSPEC ||
+			if (a->type == AF_UNSPEC ||
 			    nhrp_address_prefix_cmp(a, &rl->src, pref) == 0 ||
 			    nhrp_address_prefix_cmp(a, &rl->dst, pref) == 0) {
 				nhrp_rate_limit_delete(rl);

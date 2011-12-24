@@ -432,7 +432,10 @@ int usage(const char *prog)
 
 int main(int argc, char **argv)
 {
+	struct nhrp_address any;
 	int i, daemonmode = 0;
+
+	nhrp_address_set_type(&any, AF_UNSPEC);
 
 	for (i = 1; i < argc; i++) {
 		if (strlen(argv[i]) != 2 || argv[i][0] != '-')
@@ -504,14 +507,16 @@ int main(int argc, char **argv)
 
 	nhrp_running = TRUE;
 	ev_loop(0);
+	nhrp_running = FALSE;
 
-	nhrp_peer_cleanup();
-	ev_loop(EVLOOP_NONBLOCK);
-
-	kernel_cleanup();
 	forward_cleanup();
+	kernel_stop_listening();
+	nhrp_peer_cleanup();
+	kernel_cleanup();
 	nhrp_interface_cleanup();
+	nhrp_rate_limit_clear(&any, 0);
 	nhrp_address_cleanup();
+
 	ev_default_destroy();
 
 	return 0;
