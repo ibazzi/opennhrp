@@ -44,7 +44,13 @@ static inline int hlist_hashed(const struct hlist_node *n)
 
 static inline void hlist_del(struct hlist_node *n)
 {
-	*n->pprev = n->next;
+	struct hlist_node *next = n->next;
+	struct hlist_node **pprev = n->pprev;
+
+	*pprev = next;
+	if (next)
+		next->pprev = pprev;
+
 	n->next = NULL;
 	n->pprev = NULL;
 }
@@ -54,6 +60,8 @@ static inline void hlist_add_head(struct hlist_node *n, struct hlist_head *h)
 	struct hlist_node *first = h->first;
 
 	n->next = first;
+	if (first)
+		first->pprev = &n->next;
 	n->pprev = &h->first;
 	h->first = n;
 }
