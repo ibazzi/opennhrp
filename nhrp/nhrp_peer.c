@@ -2092,10 +2092,15 @@ void nhrp_peer_dump_cache(void)
 
 void nhrp_peer_cleanup(void)
 {
+	ev_tstamp prev = ev_now();
+
 	nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, NULL);
 
 	while (nhrp_peer_num_total > 0) {
-		nhrp_info("Waiting for peers to die, %d left", nhrp_peer_num_total);
+		if (ev_now() > prev + 5.0) {
+			nhrp_info("Waiting for peers to die, %d left", nhrp_peer_num_total);
+			prev = ev_now();
+		}
 		ev_loop(EVLOOP_ONESHOT);
 	}
 }
