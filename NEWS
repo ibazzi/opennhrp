@@ -6,6 +6,20 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.13 - released 25/Dec/2011
+-----------------------------------------------------------------------------
+ - feature: add admin "interfaces show" command to display information about
+   the interface cache
+ - feature: support GRE interface binding changes (update gre nbma address
+   properly, and purge peer cache) to support dual ISP setups with failover
+ - fix: send registration reply even when all bindings are rejected
+ - fix: fix really the holding-time to apply to shortcut-target
+ - fix: fix hop count handling
+ - fix: various memory leaks fixed
+ - fix: fix memory corruption in the hlist structure (would be visible when
+   opennhrp is acting as NHS with heavy traffic)
+
+-----------------------------------------------------------------------------
  opennhrp 0.12.3 - released 19/Aug/2011
 -----------------------------------------------------------------------------
  - feature: export reason why peer-down trigger was executed; and implement
