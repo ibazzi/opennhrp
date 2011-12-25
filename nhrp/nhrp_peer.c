@@ -1706,8 +1706,12 @@ void nhrp_peer_purge(struct nhrp_peer *peer, const char *purge_reason)
 		nhrp_peer_run_nhs_down(peer);
 		nhrp_peer_is_down(peer);
 		nhrp_peer_cancel_async(peer);
-		nhrp_peer_run_script(peer, "peer-down",
-				     nhrp_peer_script_peer_down_done);
+		if (peer->flags & NHRP_PEER_FLAG_LOWER_UP) {
+			nhrp_peer_run_script(peer, "peer-down",
+					     nhrp_peer_script_peer_down_done);
+		} else {
+			nhrp_peer_script_peer_down_done(&peer->child, 0);
+		}
 		nhrp_address_set_type(&peer->my_nbma_address, PF_UNSPEC);
 		break;
 	case NHRP_PEER_TYPE_STATIC_DNS:
