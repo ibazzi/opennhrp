@@ -168,6 +168,7 @@ char *nhrp_peer_event_reason(union nhrp_peer_event e, int revents,
 struct nhrp_peer *nhrp_peer_from_event(union nhrp_peer_event e, int revents);
 void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 			  void (*cb)(union nhrp_peer_event, int));
+void nhrp_peer_send_packet_queue(struct nhrp_peer *peer);
 int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
 			   struct nhrp_address *newaddr);
 

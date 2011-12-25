@@ -23,6 +23,7 @@
 struct nhrp_pending_request {
 	struct list_head request_list_entry;
 	int natted;
+	int num_ok, num_error;
 	struct nhrp_packet *packet;
 	struct nhrp_cie *cie;
 	struct nhrp_payload *payload;
@@ -54,8 +55,17 @@ nhrp_server_record_request(struct nhrp_packet *packet)
 void nhrp_server_finish_request(struct nhrp_pending_request *pr)
 {
 	list_del(&pr->request_list_entry);
-	if (pr->rpeer != NULL)
+	if (pr->rpeer != NULL) {
+		struct nhrp_peer *peer = pr->rpeer;
+		if (peer->flags & NHRP_PEER_FLAG_REPLACED) {
+			/* The route peer entry was not accepted. We still
+			 * send the replies here, and cancel anything pending
+			 * so it'll get deleted cleanly on next put(). */
+			nhrp_peer_send_packet_queue(peer);
+			nhrp_peer_cancel_async(peer);
+		}
 		nhrp_peer_put(pr->rpeer);
+	}
 	if (pr->peer != NULL)
 		nhrp_peer_put(pr->peer);
 	if (pr->packet != NULL)
@@ -198,13 +208,22 @@ static void nhrp_server_finish_reg(struct nhrp_pending_request *pr)
 
 	if (pr->rpeer != NULL &&
 	    nhrp_packet_reroute(packet, pr->rpeer)) {
-		nhrp_info("Sending Registration Reply from proto src %s to %s",
+		nhrp_info("Sending Registration Reply from proto src %s to %s (%d bindings accepted, %d rejected)",
+			  nhrp_address_format(&packet->dst_protocol_address,
+					      sizeof(tmp), tmp),
+			  nhrp_address_format(&packet->src_protocol_address,
+					      sizeof(tmp2), tmp2),
+			  pr->num_ok, pr->num_error);
+
+		nhrp_packet_send(packet);
+	} else {
+		/* We could not create route peer entry (likely out of memory),
+		 * so we can't do much more here. */
+		nhrp_info("Dropping Registration Reply from proto src %s to %s",
 			  nhrp_address_format(&packet->dst_protocol_address,
 					      sizeof(tmp), tmp),
 			  nhrp_address_format(&packet->src_protocol_address,
 					      sizeof(tmp2), tmp2));
-
-		nhrp_packet_send(packet);
 	}
 
 	nhrp_server_finish_request(pr);
@@ -238,10 +257,9 @@ static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e, int revents)
 		sel.prefix_length = peer->prefix_length;
 		nhrp_peer_foreach(remove_old_registrations, peer, &sel);
 
+		pr->num_ok++;
 		cie->hdr.code = NHRP_CODE_SUCCESS;
 		nhrp_peer_insert(peer);
-		if (pr->rpeer == NULL)
-			pr->rpeer = nhrp_peer_get(peer);
 	} else {
 		if (revents == 0)
 			nhrp_error("[%s] Peer registration failed: "
@@ -252,10 +270,12 @@ static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e, int revents)
 				   nhrp_peer_event_reason(e, revents,
 							  sizeof(reason),
 							  reason));
+		pr->num_error++;
 		cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
 		peer->flags |= NHRP_PEER_FLAG_REPLACED;
-		nhrp_peer_cancel_async(peer);
 	}
+	if (pr->rpeer == NULL)
+		pr->rpeer = nhrp_peer_get(peer);
 
 	nhrp_peer_put(peer);
 	pr->peer = NULL;
@@ -282,8 +302,11 @@ static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr)
 		/* Mark all remaining registration requests as failed
 		 * due to lack of memory, and send reply */
 		for (; cie->cie_list_entry.next != &pr->payload->u.cie_list;
-		     cie = list_next(&cie->cie_list_entry, struct nhrp_cie, cie_list_entry))
+		     cie = list_next(&cie->cie_list_entry, struct nhrp_cie, cie_list_entry)) {
+			pr->num_error++;
 			cie->hdr.code = NHRP_CODE_INSUFFICIENT_RESOURCES;
+		}
+		pr->num_error++;
 		cie->hdr.code = NHRP_CODE_INSUFFICIENT_RESOURCES;
 		nhrp_server_finish_reg(pr);
 		return;

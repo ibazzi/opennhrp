@@ -451,6 +451,16 @@ void nhrp_peer_cancel_async(struct nhrp_peer *peer)
 	}
 }
 
+void nhrp_peer_send_packet_queue(struct nhrp_peer *peer)
+{
+	if (peer->queued_packet == NULL)
+		return;
+
+	nhrp_packet_marshall_and_send(peer->queued_packet);
+	nhrp_packet_put(peer->queued_packet);
+	peer->queued_packet = NULL;
+}
+
 static void nhrp_peer_schedule(struct nhrp_peer *peer, ev_tstamp timeout,
 			       void (*cb)(struct ev_timer *w, int revents))
 {
@@ -660,11 +670,7 @@ static void nhrp_peer_is_up(struct nhrp_peer *peer)
 		nhrp_peer_foreach(nhrp_peer_routes_up, NULL, &sel);
 	}
 
-	if (peer->queued_packet != NULL) {
-		nhrp_packet_marshall_and_send(peer->queued_packet);
-		nhrp_packet_put(peer->queued_packet);
-		peer->queued_packet = NULL;
-	}
+	nhrp_peer_send_packet_queue(peer);
 
 	/* Schedule expiry or renewal */
 	switch (peer->type) {
