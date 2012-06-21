@@ -223,9 +223,9 @@ static int admin_parse_selector(void *ctx, const char *cmd,
 		} else if (strcmp(keyword, "local-nbma") == 0) {
 			if (sel->interface != NULL)
 				goto err_conflict;
-			sel->interface = nhrp_interface_get_by_nbma(&address);
+			sel->local_nbma_address = address;
 			if (sel->interface == NULL)
-				goto err_noiface;
+				sel->interface = nhrp_interface_get_by_nbma(&address);
 		} else {
 			admin_write(ctx,
 				    "Status: failed\n"
