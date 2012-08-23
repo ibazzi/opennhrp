@@ -979,7 +979,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 	struct nhrp_payload *payload;
 	struct nhrp_peer *peer;
 	char tmp[64];
-	int r;
+	int i, r;
 
 	if (packet->dst_iface == NULL) {
 		nhrp_error("nhrp_packet_route called without destination interface");
@@ -1005,7 +1005,7 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 		proto_nexthop = packet->dst_peer->next_hop_address;
 	} else {
 		proto_nexthop = *dst;
-		do {
+		for (i = 0; i < 4; i++) {
 			peer = nhrp_peer_route_full(
 				packet->dst_iface, &proto_nexthop, 0,
 				NHRP_PEER_TYPEMASK_ROUTE_VIA_NHS, src, cielist);
@@ -1020,7 +1020,12 @@ int nhrp_packet_route(struct nhrp_packet *packet)
 			if (peer->next_hop_address.type == AF_UNSPEC)
 				break;
 			proto_nexthop = peer->next_hop_address;
-		} while (1);
+		}
+		if (i >= 4) {
+			nhrp_error("Recursive routing for protocol address %s",
+				   nhrp_address_format(dst, sizeof(tmp), tmp));
+			return FALSE;
+		}
 
 		packet->dst_peer = nhrp_peer_get(peer);
 	}
