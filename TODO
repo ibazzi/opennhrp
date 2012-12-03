@@ -2,8 +2,6 @@ Ideas, and some definite tasks to do, in no particular order:
 
 - running out of filter code space
 
-- low holding-time for cached entries fail
-
 - hash lookup for peers based on protocol address; cache route lookups
   for incomplete entries
 
