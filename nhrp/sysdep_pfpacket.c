@@ -343,8 +343,10 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 					       &src, &dst))
 			return;
 
-		if (nhrp_address_is_multicast(&dst) &&
-		    lladdr->sll_pkttype == PACKET_OUTGOING) {
+		if (nhrp_address_is_multicast(&dst)) {
+			if (lladdr->sll_pkttype != PACKET_OUTGOING)
+				continue;
+
 			nhrp_debug("Multicast from %s to %s",
 				   nhrp_address_format(&src, sizeof(fr), fr),
 				   nhrp_address_format(&dst, sizeof(to), to));
@@ -361,7 +363,10 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 					ARRAY_SIZE(mcast_queue);
 
 			ev_idle_start(&mcast_route);
-		} else if (lladdr->sll_pkttype == PACKET_HOST) {
+		} else {
+			if (lladdr->sll_pkttype != PACKET_HOST)
+				continue;
+
 			nhrp_address_set(&nbma_src, PF_INET,
 					 lladdr->sll_halen,
 					 lladdr->sll_addr);
