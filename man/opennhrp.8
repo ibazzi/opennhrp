@@ -97,6 +97,11 @@ for more information how the script is executed.
 Currently only IPv4 over IPv4 networks using NBMA GRE tunnels is
 supported (you need Linux kernel 2.6.24-rc2 or later).
 .PP
+Most common bug report that DMVPN connectivity works only for
+one or two minutes and fails after that is caused by Linux kernel
+without CONFIG_ARPD. Double check that this is enabled before
+filing a bug report.
+.PP
 Replying with cached information to non-authorative resolution
 requests is not implemented.
 .PP
