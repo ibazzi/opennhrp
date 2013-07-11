@@ -1001,6 +1001,9 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
 			peer->interface->nat_cie = *cie;
 		}
 	}
+	if (payload == NULL || cie == NULL)
+		memset(&peer->interface->nat_cie, 0,
+		       sizeof(peer->interface->nat_cie));
 
 	/* If not re-registration, send a purge request for each subnet
 	 * we accept shortcuts to, to clear server redirection cache. */
