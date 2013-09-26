@@ -8,6 +8,7 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <malloc.h>
 #include <stddef.h>

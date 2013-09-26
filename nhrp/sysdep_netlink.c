@@ -64,7 +64,7 @@ static struct netlink_fd netlink_fds[ARRAY_SIZE(netlink_groups)];
 
 static struct ev_io packet_io;
 
-static u_int16_t translate_mtu(u_int16_t mtu)
+static uint16_t translate_mtu(uint16_t mtu)
 {
 	/* if mtu is ethernet standard, do not advertise it
 	 * pmtu should be working */
@@ -1001,7 +1001,7 @@ int kernel_route(struct nhrp_interface *out_iface,
 		 struct nhrp_address *dest,
 		 struct nhrp_address *default_source,
 		 struct nhrp_address *next_hop,
-		 u_int16_t *mtu)
+		 uint16_t *mtu)
 {
 	struct {
 		struct nlmsghdr 	n;

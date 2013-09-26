@@ -60,7 +60,7 @@ int kernel_route(struct nhrp_interface *out_iface,
 		 struct nhrp_address *dest,
 		 struct nhrp_address *default_source,
 		 struct nhrp_address *next_hop,
-		 u_int16_t *mtu);
+		 uint16_t *mtu);
 int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 		struct nhrp_address *to);
 int kernel_inject_neighbor(struct nhrp_address *neighbor,
