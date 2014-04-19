@@ -739,7 +739,7 @@ static void netlink_route_new(struct nlmsghdr *msg)
 
 	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST) {
 		/* Local shortcut target routes */
-		if (rtm->rtm_table != RT_TABLE_MAIN)
+		if (rtm->rtm_table != iface->route_table)
 			return;
 		type = NHRP_PEER_TYPE_LOCAL_ADDR;
 	} else if (iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED) {
