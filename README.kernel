@@ -1,0 +1,64 @@
+KERNEL REQUIREMENTS
+===================
+
+If possible use kernel 3.12.8 or later. Various issues existed before
+it. See below for list of known issues in various kernel versions.
+
+Kernels earlier than 3.12 need CONFIG_ARPD enabled in the configuration.
+Many distributions do not enable it by default, and you may need to
+compile your own kernel.
+
+KERNEL BUGS
+===========
+
+DMVPN and mGRE support in the kernel has been brittle. There are various
+regressions in multiple kernel versions.
+
+This list tries to collect them to one source of information:
+
+- 3.14 to ???: seems to break dmvpn, under investigation.
+
+- since dawn to 3.15-rc1: there can be few packets lost when a neighbour
+  entry is in NUD_PROBE state and there is continuous traffic to it.
+  Backported patch exist.
+
+- 3.9 to 3.11: GRO was implemented for GRE, but the hw capabilities
+  were not updated correctly. In practice forwarding from non-GRE
+  (physical) interface to GRE interface with gro/gso/tx offloads
+  enabled (also on the target interface) does not work properly.
+  Fixed in 3.11 and 3.10.27.
+
+- 3.6 to 3.11: PMTU is broken (due to routing cache removal) and
+  fixes made it eventually to the 3.11. Patches exist for 3.10, but
+  they were not approved to 3.10-stable.
+
+- since dawn to 3.11: a neighbour cache issue that can causes problems
+  with opennhrp, in case there's traffic forwarded to the mgre interface
+  before opennhrp is started. So this a potential race condition during
+  boot up. (I have patch to fix this on already late 2.6.x kernels,
+  but it was not accepted upstream as-is; the fix in 3.11 depends on
+  new feature introduced in that version).
+
+- 3.10 to 3.13: recvfrom() returned incorrect NBMA address, breaking
+  opennhrp hub's NAT detection. Fixed in 3.13, 3.12.8 and 3.10.27.
+
+- 3.10 to 3.11: sendto() was broken, causing opennhrp to not function
+  at all, fixed in 3.11, 3.10.12.
+
+- only in 3.10-rc: PMTU was broken due to GRE driver rewrite. Fixed
+  before 3.10.
+
+- 3.8 to 3.9: an incorrect GRE modification was done that broke NHRP
+  traffic over GRE. Fixed in 3.9 and 3.8.5.
+
+- 2.6.34 to 2.6.39: multicast traffic over mGRE was broken.
+
+- earlier than 2.6.35: serious performance issues, causing small
+  hroughput medium to large DMVPN networks
+
+- PMTU was broken and fixed during 2.6.34-rc cycle.
+
+- Even though around 2.6.24 is the first version where opennhrp started
+  to work, there has been various PMTU, performance, and functionality
+  bugs before 2.6.34. That's one of the first version I consider stable
+  wrt. to opennhrp functionality.

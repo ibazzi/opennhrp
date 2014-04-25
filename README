@@ -18,26 +18,6 @@ OpenNHRP links to:
   c-ares, which is licensed under the MIT License
 
 
-	KERNEL REQUIREMENTS
-
-You need a kernel with ip_gre patched to support sending and receiving
-using NBMA address. 
-
-The support was originally added to 2.6.24-rc2, but it contains a bug
-that prevents NAT detection. The latest fix is present in 2.6.24-rc7.
-
-Gentoo kernels: gentoo-sources-2.6.23-r1 and gentoo-sources-2.6.22-r10
-have the partitial support too (no NAT there either).
-
-For the brave who compile their own kernels, there are patches against
-vanilla 2.6.20 and 2.6.22 kernels in the patches directory. Or just
-upgrade to 2.6.24 or later and no patching is required. Though, there
-has been a major performance fixes in newer kernels, so 2.6.35 or later
-is strongly recommended.
-
-Also remember to turn on CONFIG_ARPD and CONFIG_NET_IPGRE in your kernel
-configuration.
-
 	SYSTEM REQUIREMENTS
 
 To compile OpenNHRP you need:
@@ -46,6 +26,9 @@ To compile OpenNHRP you need:
 - pkg-config
 - libev library (Ubuntu package: libev-dev)
 - c-ares library (Ubuntu package: libc-ares-dev)
+
+See also README.kernel for notes on specific kernel versions, and
+required configuration options.
 
 	COMPILING
 

@@ -95,10 +95,11 @@ for more information how the script is executed.
 
 .SH BUGS
 Currently only IPv4 over IPv4 networks using NBMA GRE tunnels is
-supported (you need Linux kernel 2.6.24-rc2 or later).
+supported.
 .PP
-Most common bug report that DMVPN connectivity works only for
-one or two minutes and fails after that is caused by Linux kernel
+Various kernel bugs exist. See README.kernel for details. Most
+common bug report that DMVPN connectivity works only for one or
+two minutes and fails after that is caused by Linux kernel
 without CONFIG_ARPD. Double check that this is enabled before
 filing a bug report.
 .PP
