@@ -75,8 +75,8 @@ static void admin_free_remote(struct admin_remote *rm)
 {
 	int fd = rm->io.fd;
 
-	ev_io_stop(&rm->io);
-	ev_timer_stop(&rm->timeout);
+	ev_io_stop(nhrp_loop, &rm->io);
+	ev_timer_stop(nhrp_loop, &rm->timeout);
 	shutdown(fd, SHUT_RDWR);
 	close(fd);
 	free(rm);
@@ -143,7 +143,7 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 		i += snprintf(&buf[i], len - i, "\n");
 	}
 	if (peer->expire_time) {
-		rel = (int) (peer->expire_time - ev_now());
+		rel = (int) (peer->expire_time - ev_now(nhrp_loop));
 		if (rel >= 0) {
 			i += snprintf(&buf[i], len - i, "Expires-In: %d:%02d\n",
 				      rel / 60, rel % 60);
@@ -512,7 +512,7 @@ static struct {
 	{ "update nbma",	admin_update_nbma },
 };
 
-static void admin_receive_cb(struct ev_io *w, int revents)
+static void admin_receive_cb(struct ev_loop *loop, struct ev_io *w, int revents)
 {
 	struct admin_remote *rm = container_of(w, struct admin_remote, io);
 	int fd = rm->io.fd;
@@ -552,7 +552,7 @@ err:
 	admin_free_remote(rm);
 }
 
-static void admin_timeout_cb(struct ev_timer *t, int revents)
+static void admin_timeout_cb(struct ev_loop *loop, struct ev_timer *t, int revents)
 {
 	admin_free_remote(container_of(t, struct admin_remote, timeout));
 }
@@ -572,9 +572,9 @@ static void admin_accept_cb(ev_io *w, int revents)
 	rm = calloc(1, sizeof(struct admin_remote));
 
 	ev_io_init(&rm->io, admin_receive_cb, cnx, EV_READ);
-	ev_io_start(&rm->io);
+	ev_io_start(nhrp_loop, &rm->io);
 	ev_timer_init(&rm->timeout, admin_timeout_cb, 10.0, 0.);
-	ev_timer_start(&rm->timeout);
+	ev_timer_start(nhrp_loop, &rm->timeout);
 }
 
 int admin_init(const char *opennhrp_socket)
@@ -599,7 +599,7 @@ int admin_init(const char *opennhrp_socket)
 		goto err_close;
 
 	ev_io_init(&accept_io, admin_accept_cb, fd, EV_READ);
-	ev_io_start(&accept_io);
+	ev_io_start(nhrp_loop, &accept_io);
 
 	return 1;
 

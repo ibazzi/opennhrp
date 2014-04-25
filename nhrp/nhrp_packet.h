@@ -9,7 +9,7 @@
 #ifndef NHRP_PACKET_H
 #define NHRP_PACKET_H
 
-#include "libev.h"
+#include <ev.h>
 #include "list.h"
 #include "nhrp_protocol.h"
 #include "nhrp_address.h"

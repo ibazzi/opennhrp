@@ -27,7 +27,8 @@
 #include <linux/if_arp.h>
 #include <linux/if_tunnel.h>
 
-#include "libev.h"
+#include <ev.h>
+
 #include "nhrp_common.h"
 #include "nhrp_interface.h"
 #include "nhrp_peer.h"
@@ -230,7 +231,7 @@ static int netlink_enumerate(struct netlink_fd *fd, int family, int type)
 		      (struct sockaddr *) &addr, sizeof(addr)) >= 0;
 }
 
-static void netlink_read_cb(struct ev_io *w, int revents)
+static void netlink_read_cb(struct ev_loop *loop, struct ev_io *w, int revents)
 {
 	struct netlink_fd *nfd = container_of(w, struct netlink_fd, io);
 
@@ -526,7 +527,7 @@ static void netlink_link_new(struct nlmsghdr *msg)
 		if (iface->link_index) {
 			/* Reenumerate addresses if needed */
 			netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETADDR);
-			netlink_read_cb(&talk_fd.io, EV_READ);
+			netlink_read_cb(nhrp_loop, &talk_fd.io, EV_READ);
 		}
 
 		/* Purge all NHRP entries for this interface */
@@ -842,7 +843,7 @@ static const netlink_dispatch_f route_dispatch[RTM_MAX] = {
 
 static void netlink_stop_listening(struct netlink_fd *fd)
 {
-	ev_io_stop(&fd->io);
+	ev_io_stop(nhrp_loop, &fd->io);
 }
 
 static void netlink_close(struct netlink_fd *fd)
@@ -886,7 +887,7 @@ static int netlink_open(struct netlink_fd *fd, int protocol, int groups)
 	}
 
 	ev_io_init(&fd->io, netlink_read_cb, fd->fd, EV_READ);
-	ev_io_start(&fd->io);
+	ev_io_start(nhrp_loop, &fd->io);
 
 	return TRUE;
 
@@ -895,7 +896,7 @@ error:
 	return FALSE;
 }
 
-static void pfpacket_read_cb(struct ev_io *w, int revents)
+static void pfpacket_read_cb(struct ev_loop *loop, struct ev_io *w, int revents)
 {
 	struct sockaddr_ll lladdr;
 	struct nhrp_interface *iface;
@@ -956,7 +957,7 @@ int kernel_init(void)
 
 	fcntl(fd, F_SETFD, FD_CLOEXEC);
 	ev_io_init(&packet_io, pfpacket_read_cb, fd, EV_READ);
-	ev_io_start(&packet_io);
+	ev_io_start(nhrp_loop, &packet_io);
 
 	for (i = 0; i < ARRAY_SIZE(netlink_groups); i++) {
 		netlink_fds[i].dispatch_size = sizeof(route_dispatch) / sizeof(route_dispatch[0]);
@@ -967,13 +968,13 @@ int kernel_init(void)
 	}
 
 	netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETLINK);
-	netlink_read_cb(&talk_fd.io, EV_READ);
+	netlink_read_cb(nhrp_loop, &talk_fd.io, EV_READ);
 
 	netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETADDR);
-	netlink_read_cb(&talk_fd.io, EV_READ);
+	netlink_read_cb(nhrp_loop, &talk_fd.io, EV_READ);
 
 	netlink_enumerate(&talk_fd, PF_UNSPEC, RTM_GETROUTE);
-	netlink_read_cb(&talk_fd.io, EV_READ);
+	netlink_read_cb(nhrp_loop, &talk_fd.io, EV_READ);
 
 	return TRUE;
 
@@ -988,7 +989,7 @@ void kernel_stop_listening(void)
 
 	for (i = 0; i < ARRAY_SIZE(netlink_groups); i++)
 		netlink_stop_listening(&netlink_fds[i]);
-	ev_io_stop(&packet_io);
+	ev_io_stop(nhrp_loop, &packet_io);
 }
 
 void kernel_cleanup(void)
@@ -997,7 +998,7 @@ void kernel_cleanup(void)
 
 	for (i = 0; i < ARRAY_SIZE(netlink_groups); i++)
 		netlink_close(&netlink_fds[i]);
-	ev_io_stop(&packet_io);
+	ev_io_stop(nhrp_loop, &packet_io);
 	close(packet_io.fd);
 }
 

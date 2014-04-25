@@ -20,7 +20,8 @@
 #include <linux/if_packet.h>
 #include <linux/ip.h>
 
-#include "libev.h"
+#include <ev.h>
+
 #include "nhrp_defines.h"
 #include "nhrp_common.h"
 #include "nhrp_interface.h"
@@ -160,7 +161,7 @@ static int check_interface_traffic_indication(void *ctx, struct nhrp_interface *
 	return 0;
 }
 
-static void install_filter_cb(struct ev_timer *w, int revents)
+static void install_filter_cb(struct ev_loop *loop, struct ev_timer *w, int revents)
 {
 	struct nhrp_peer_selector sel;
 	struct sock_fprog prog;
@@ -244,7 +245,7 @@ static void install_filter_cb(struct ev_timer *w, int revents)
 int forward_local_addresses_changed(void)
 {
 	if (install_filter_timer.cb != NULL)
-		ev_timer_start(&install_filter_timer);
+		ev_timer_start(nhrp_loop, &install_filter_timer);
 	return TRUE;
 }
 
@@ -256,7 +257,7 @@ static void send_multicast(struct ev_idle *w, int revents)
 	struct msghdr msg;
 
 	if (mcast_head == mcast_tail) {
-		ev_idle_stop(&mcast_route);
+		ev_idle_stop(nhrp_loop, &mcast_route);
 		return;
 	}
 
@@ -285,7 +286,7 @@ static void send_multicast(struct ev_idle *w, int revents)
 	}
 }
 
-static void pfp_read_cb(struct ev_io *w, int revents)
+static void pfp_read_cb(struct ev_loop *loop, struct ev_io *w, int revents)
 {
 	struct nhrp_address nbma_src, src, dst;
 	struct nhrp_interface *iface;
@@ -363,7 +364,7 @@ static void pfp_read_cb(struct ev_io *w, int revents)
 				mcast_tail = (mcast_tail + 1) %
 					ARRAY_SIZE(mcast_queue);
 
-			ev_idle_start(&mcast_route);
+			ev_idle_start(nhrp_loop, &mcast_route);
 		} else {
 			if (lladdr->sll_pkttype != PACKET_HOST)
 				continue;
@@ -392,10 +393,10 @@ int forward_init(void)
 	fcntl(fd, F_SETFD, FD_CLOEXEC);
 
 	ev_io_init(&packet_io, pfp_read_cb, fd, EV_READ);
-	ev_io_start(&packet_io);
+	ev_io_start(nhrp_loop, &packet_io);
 
 	ev_timer_init(&install_filter_timer, install_filter_cb, .01, .0);
-	install_filter_cb(&install_filter_timer, 0);
+	install_filter_cb(nhrp_loop, &install_filter_timer, 0);
 
 	ev_idle_init(&mcast_route, send_multicast);
 	ev_set_priority(&mcast_route, -1);
@@ -405,8 +406,8 @@ int forward_init(void)
 
 void forward_cleanup(void)
 {
-	ev_io_stop(&packet_io);
+	ev_io_stop(nhrp_loop, &packet_io);
 	close(packet_io.fd);
-	ev_timer_stop(&install_filter_timer);
-	ev_idle_stop(&mcast_route);
+	ev_timer_stop(nhrp_loop, &install_filter_timer);
+	ev_idle_stop(nhrp_loop, &mcast_route);
 }

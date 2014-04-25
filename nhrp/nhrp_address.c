@@ -31,7 +31,7 @@ struct nhrp_resolver {
 
 static struct nhrp_resolver resolver;
 
-static void ares_timeout_cb(struct ev_timer *w, int revents)
+static void ares_timeout_cb(struct ev_loop *loop, struct ev_timer *w, int revents)
 {
 	struct nhrp_resolver *r =
 		container_of(w, struct nhrp_resolver, timeout);
@@ -39,7 +39,7 @@ static void ares_timeout_cb(struct ev_timer *w, int revents)
 	ares_process(r->channel, NULL, NULL);
 }
 
-static void ares_prepare_cb(struct ev_prepare *w, int revents)
+static void ares_prepare_cb(struct ev_loop *loop, struct ev_prepare *w, int revents)
 {
 	struct nhrp_resolver *r =
 		container_of(w, struct nhrp_resolver, prepare);
@@ -48,13 +48,13 @@ static void ares_prepare_cb(struct ev_prepare *w, int revents)
 	tv = ares_timeout(r->channel, NULL, &tvbuf);
 	if (tv != NULL) {
 		r->timeout.repeat = tv->tv_sec + tv->tv_usec * 1e-6;
-		ev_timer_again(&r->timeout);
+		ev_timer_again(nhrp_loop, &r->timeout);
 	} else {
-		ev_timer_stop(&r->timeout);
+		ev_timer_stop(nhrp_loop, &r->timeout);
 	}
 }
 
-static void ares_io_cb(struct ev_io *w, int revents)
+static void ares_io_cb(struct ev_loop *loop, struct ev_io *w, int revents)
 {
 	ares_socket_t rfd = ARES_SOCKET_BAD, wfd = ARES_SOCKET_BAD;
 
@@ -89,12 +89,12 @@ static void ares_socket_cb(void *data, ares_socket_t fd,
 			NHRP_BUG_ON(fi == -1);
 			i = fi;
 		} else {
-			ev_io_stop(&r->fds[fi]);
+			ev_io_stop(nhrp_loop, &r->fds[fi]);
 		}
 		ev_io_set(&r->fds[i], fd, events);
-		ev_io_start(&r->fds[i]);
+		ev_io_start(nhrp_loop, &r->fds[i]);
 	} else if (i < ARRAY_SIZE(r->fds)) {
-		ev_io_stop(&r->fds[i]);
+		ev_io_stop(nhrp_loop, &r->fds[i]);
 		ev_io_set(&r->fds[i], 0, 0);
 	}
 }
@@ -431,7 +431,7 @@ int nhrp_address_init(void)
 
 	ev_timer_init(&resolver.timeout, ares_timeout_cb, 0.0, 0.0);
 	ev_prepare_init(&resolver.prepare, ares_prepare_cb);
-	ev_prepare_start(&resolver.prepare);
+	ev_prepare_start(nhrp_loop, &resolver.prepare);
 	for (i = 0; i < ARRAY_SIZE(resolver.fds); i++)
 		ev_init(&resolver.fds[i], ares_io_cb);
 
@@ -442,9 +442,9 @@ void nhrp_address_cleanup(void)
 {
 	int i;
 
-	ev_timer_stop(&resolver.timeout);
-	ev_prepare_stop(&resolver.prepare);
+	ev_timer_stop(nhrp_loop, &resolver.timeout);
+	ev_prepare_stop(nhrp_loop, &resolver.prepare);
 	for (i = 0; i < ARRAY_SIZE(resolver.fds); i++)
-		ev_io_stop(&resolver.fds[i]);
+		ev_io_stop(nhrp_loop, &resolver.fds[i]);
 	ares_destroy(resolver.channel);
 }

@@ -12,8 +12,9 @@
 #include <time.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <ev.h>
+
 #include "nhrp_address.h"
-#include "libev.h"
 #include "list.h"
 
 #define NHRP_PEER_TYPE_INCOMPLETE	0x00	/* Resolution request sent */
@@ -165,7 +166,7 @@ char *nhrp_peer_event_reason(union nhrp_peer_event e, int revents,
 			     size_t buflen, char *buf);
 struct nhrp_peer *nhrp_peer_from_event(union nhrp_peer_event e, int revents);
 void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
-			  void (*cb)(union nhrp_peer_event, int));
+			  void (*cb)(struct ev_loop *, union nhrp_peer_event, int));
 void nhrp_peer_send_packet_queue(struct nhrp_peer *peer);
 int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
 			   struct nhrp_address *newaddr);

@@ -16,9 +16,11 @@
 
 struct nhrp_interface;
 struct nhrp_address;
+struct ev_loop;
 
 extern const char *nhrp_config_file, *nhrp_script_file;
 extern int nhrp_running, nhrp_verbose;
+extern struct ev_loop *nhrp_loop;
 
 /* Logging */
 void nhrp_log(int level, const char *format, ...);
