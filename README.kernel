@@ -1,8 +1,14 @@
 KERNEL REQUIREMENTS
 ===================
 
-If possible use kernel 3.12.8 or later. Various issues existed before
-it. See below for list of known issues in various kernel versions.
+The linux kernel has had various major regressions, performance
+issues and subtle bugs (especially in pmtu). Here is a short list
+of some -stable kernels and the first point release that is supposedly
+working well with opennhrp/dmvpn:
+  3.12.8 or later
+  3.14.5 or later
+
+See below for list of known issues in various kernel versions.
 
 Kernels earlier than 3.12 need CONFIG_ARPD enabled in the configuration.
 Many distributions do not enable it by default, and you may need to
@@ -16,7 +22,12 @@ regressions in multiple kernel versions.
 
 This list tries to collect them to one source of information:
 
-- 3.14 to ???: seems to break dmvpn, under investigation.
+- 3.13 to 3.15: napi gro handling was broken, and would cause
+  immediate crash (apparently limited to 32-bit kernels).
+  Fixed in 3.15-rc6 and 3.14.5.
+
+- 3.14 to 3.15: ip_gre dst caching broke NBMA GRE tunnels.
+  Fixed in 3.15-rc6 and 3.14.5.
 
 - since dawn to 3.15-rc1: there can be few packets lost when a neighbour
   entry is in NUD_PROBE state and there is continuous traffic to it.
