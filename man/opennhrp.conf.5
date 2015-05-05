@@ -36,7 +36,7 @@ directive must be present to enable NHRP on that interface.
 These configuration keywords can appear only in the interface context.
 
 .PP
-.BI "map " protocol-address[/prefix] " " nbma-address " [register] [non-unique] [cisco]"
+.BI "map " protocol-address[/prefix] " " nbma-address " [register] [no-unique] [cisco]"
 .RS
 Creates static peer mapping of
 .I protocol-address
@@ -56,7 +56,7 @@ specifies that Registration Request should be sent to this peer on
 startup.
 .PP
 Use
-.B non-unique
+.B no-unique
 keyword to disable setting of unique flag for registration requests.
 This is required if the peer is running Cisco IOS and this node has
 a dynamic IP.
@@ -66,7 +66,7 @@ The deprecated
 keyword will fix statically the Registration Request ID so that
 a matching Purge Request can be sent if NBMA address has changed.
 Use
-.B non-unique
+.B no-unique
 instead on new installations.
 .RE
 
