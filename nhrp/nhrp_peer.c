@@ -1075,6 +1075,8 @@ static void nhrp_peer_send_register_cb(struct ev_loop *loop, struct ev_timer *w,
 		.flags = NHRP_FLAG_REGISTRATION_UNIQUE |
 			 NHRP_FLAG_REGISTRATION_NAT
 	};
+	if (peer->flags & NHRP_PEER_FLAG_REG_NON_UNIQUE)
+		packet->hdr.flags &= ~NHRP_FLAG_REGISTRATION_UNIQUE;
 	if (peer->flags & NHRP_PEER_FLAG_CISCO) {
 		/* Cisco IOS seems to require reqistration and purge
 		 * request id to match, so we need to used a fixed

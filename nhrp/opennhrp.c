@@ -240,6 +240,9 @@ static int load_config(const char *config_file)
 		} else if (strcmp(word, "cisco") == 0) {
 			NEED_PEER();
 			peer->flags |= NHRP_PEER_FLAG_CISCO;
+		} else if (strcmp(word, "non-unique") == 0) {
+			NEED_PEER();
+			peer->flags |= NHRP_PEER_FLAG_REG_NON_UNIQUE;
 		} else if (strcmp(word, "holding-time") == 0) {
 			read_word(in, &lineno, sizeof(word), word);
 			if (peer != NULL &&
