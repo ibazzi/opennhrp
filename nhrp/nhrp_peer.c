@@ -1210,14 +1210,18 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 	if (cie == NULL)
 		goto ret;
 
-	nhrp_info("Received Resolution Reply %s/%d is at proto %s nbma %s",
+	nhrp_info("Received Resolution Reply %s/%d is at proto %s nbma %s (code %d)",
 		  nhrp_address_format(&peer->protocol_address,
 				      sizeof(dst), dst),
 		  cie->hdr.prefix_length,
 		  nhrp_address_format(&cie->protocol_address,
 				      sizeof(tmp), tmp),
 		  nhrp_address_format(&cie->nbma_address,
-				      sizeof(nbma), nbma));
+				      sizeof(nbma), nbma),
+		  cie->hdr.code);
+
+	if (cie->hdr.code != NHRP_CODE_SUCCESS)
+		goto ret;
 
 	payload = nhrp_packet_extension(reply,
 					NHRP_EXTENSION_NAT_ADDRESS |
