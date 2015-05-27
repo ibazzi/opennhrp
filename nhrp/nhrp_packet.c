@@ -762,7 +762,8 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet)
 		return FALSE;
 	}
 
-	if (packet->dst_peer->next_hop_address.type != PF_UNSPEC) {
+	if (packet->dst_peer->next_hop_address.type != PF_UNSPEC &&
+	    packet->hdr.type == NHRP_PACKET_REGISTRATION_REQUEST) {
 		/* Broadcast destinations gets rewritten as if destinied to
 		 * our local address */
 		packet->dst_protocol_address =
