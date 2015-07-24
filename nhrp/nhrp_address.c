@@ -47,7 +47,10 @@ static void ares_prepare_cb(struct ev_loop *loop, struct ev_prepare *w, int reve
 
 	tv = ares_timeout(r->channel, NULL, &tvbuf);
 	if (tv != NULL) {
-		r->timeout.repeat = tv->tv_sec + tv->tv_usec * 1e-6;
+		if (tv->tv_sec || tv->tv_usec)
+			r->timeout.repeat = tv->tv_sec + tv->tv_usec * 1e-6;
+		else
+			r->timeout.repeat = 1e-6;
 		ev_timer_again(nhrp_loop, &r->timeout);
 	} else {
 		ev_timer_stop(nhrp_loop, &r->timeout);
