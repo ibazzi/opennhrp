@@ -35,7 +35,6 @@ const char *nhrp_config_file  = "/etc/opennhrp/opennhrp.conf";
 const char *nhrp_script_file  = "/etc/opennhrp/opennhrp-script";
 int nhrp_verbose = 0;
 int nhrp_running = FALSE;
-struct ev_loop *nhrp_loop;
 
 static int pid_file_fd;
 
@@ -78,7 +77,7 @@ static void handle_signal_cb(struct ev_signal *w, int revents)
 		break;
 	case SIGINT:
 	case SIGTERM:
-		ev_unloop(nhrp_loop, EVUNLOOP_ALL);
+		ev_unloop(EVUNLOOP_ALL);
 		break;
 	case SIGHUP:
 		memset(&sel, 0, sizeof(sel));
@@ -98,7 +97,7 @@ static void signal_init(void)
 	for (i = 0; i < ARRAY_SIZE(hook_signal); i++) {
 		ev_signal_init(&signal_event[i], handle_signal_cb,
 			       hook_signal[i]);
-		ev_signal_start(nhrp_loop, &signal_event[i]);
+		ev_signal_start(&signal_event[i]);
 	}
 }
 
@@ -403,7 +402,7 @@ static int daemonize(void)
 		goto err;
 	}
 
-	ev_loop_fork(nhrp_loop);
+	ev_default_fork();
 
 	return TRUE;
 
@@ -485,7 +484,7 @@ int main(int argc, char **argv)
 
 	nhrp_info("%s starting", nhrp_version_string);
 
-	nhrp_loop = ev_default_loop(0);
+	ev_default_loop(0);
 	signal_init();
 	server_init();
 	if (!nhrp_address_init())
@@ -507,7 +506,7 @@ int main(int argc, char **argv)
 	write_pid();
 
 	nhrp_running = TRUE;
-	ev_loop(nhrp_loop, 0);
+	ev_loop(0);
 	nhrp_running = FALSE;
 
 	forward_cleanup();
@@ -518,7 +517,7 @@ int main(int argc, char **argv)
 	nhrp_rate_limit_clear(&any, 0);
 	nhrp_address_cleanup();
 
-	ev_loop_destroy(nhrp_loop);
+	ev_default_destroy();
 
 	return 0;
 }

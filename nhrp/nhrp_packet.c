@@ -11,8 +11,8 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <netinet/in.h>
-#include <ev.h>
 
+#include "libev.h"
 #include "nhrp_common.h"
 #include "nhrp_packet.h"
 #include "nhrp_peer.h"
@@ -43,7 +43,7 @@ static struct hlist_head rate_limit_hash[RATE_LIMIT_HASH_SIZE];
 static ev_timer rate_limit_timer;
 static int num_rate_limit_entries = 0;
 
-static void nhrp_packet_xmit_timeout_cb(struct ev_loop *loop, struct ev_timer *w, int revents);
+static void nhrp_packet_xmit_timeout_cb(struct ev_timer *w, int revents);
 static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize,
 				    struct nhrp_packet *packet);
 
@@ -73,12 +73,12 @@ int nhrp_rate_limit_clear(struct nhrp_address *a, int pref)
 	}
 
 	if (num_rate_limit_entries == 0)
-		ev_timer_stop(nhrp_loop, &rate_limit_timer);
+		ev_timer_stop(&rate_limit_timer);
 
 	return ret;
 }
 
-static void prune_rate_limit_entries_cb(struct ev_loop *loop, struct ev_timer *w, int revents)
+static void prune_rate_limit_entries_cb(struct ev_timer *w, int revents)
 {
 	struct nhrp_rate_limit *rl;
 	struct hlist_node *c, *n;
@@ -88,13 +88,13 @@ static void prune_rate_limit_entries_cb(struct ev_loop *loop, struct ev_timer *w
 		hlist_for_each_entry_safe(rl, c, n, &rate_limit_hash[i],
 					  hash_entry) {
 
-			if (ev_now(nhrp_loop) > rl->rate_last + 2 * RATE_LIMIT_SILENCE)
+			if (ev_now() > rl->rate_last + 2 * RATE_LIMIT_SILENCE)
 				nhrp_rate_limit_delete(rl);
 		}
 	}
 
 	if (num_rate_limit_entries == 0)
-		ev_timer_stop(nhrp_loop, &rate_limit_timer);
+		ev_timer_stop(&rate_limit_timer);
 }
 
 static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src,
@@ -122,7 +122,7 @@ static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src,
 		ev_timer_init(&rate_limit_timer, prune_rate_limit_entries_cb,
 			      RATE_LIMIT_PURGE_INTERVAL,
 			      RATE_LIMIT_PURGE_INTERVAL);
-		ev_timer_start(nhrp_loop, &rate_limit_timer);
+		ev_timer_start(&rate_limit_timer);
 	}
 
 	num_rate_limit_entries++;
@@ -346,7 +346,7 @@ int nhrp_packet_reroute(struct nhrp_packet *packet, struct nhrp_peer *dst_peer)
 
 static void nhrp_packet_dequeue(struct nhrp_packet *packet)
 {
-	ev_timer_stop(nhrp_loop, &packet->timeout);
+	ev_timer_stop(&packet->timeout);
 	if (list_hashed(&packet->request_list_entry))
 		list_del(&packet->request_list_entry);
 	nhrp_packet_put(packet);
@@ -1159,7 +1159,7 @@ int nhrp_packet_send(struct nhrp_packet *packet)
 	return nhrp_packet_route_and_send(packet);
 }
 
-static void nhrp_packet_xmit_timeout_cb(struct ev_loop *loop, struct ev_timer *w, int revents)
+static void nhrp_packet_xmit_timeout_cb(struct ev_timer *w, int revents)
 {
 	struct nhrp_packet *packet =
 		container_of(w, struct nhrp_packet, timeout);
@@ -1172,7 +1172,7 @@ static void nhrp_packet_xmit_timeout_cb(struct ev_loop *loop, struct ev_timer *w
 
 		list_add(&packet->request_list_entry, &pending_requests);
 	} else {
-		ev_timer_stop(nhrp_loop, &packet->timeout);
+		ev_timer_stop(&packet->timeout);
 		if (packet->dst_peer == NULL)
 			nhrp_error("nhrp_packet_xmit_timeout: no destination peer!");
 		if (packet->handler != NULL)
@@ -1198,7 +1198,7 @@ int nhrp_packet_send_request(struct nhrp_packet *pkt,
 	packet->handler = handler;
 	packet->handler_ctx = ctx;
 	list_add(&packet->request_list_entry, &pending_requests);
-	ev_timer_again(nhrp_loop, &packet->timeout);
+	ev_timer_again(&packet->timeout);
 
 	return nhrp_packet_send(packet);
 }
@@ -1273,22 +1273,22 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface,
 		return FALSE;
 
 	/* If silence period has elapsed, reset algorithm */
-	if (ev_now(nhrp_loop) > rl->rate_last + RATE_LIMIT_SILENCE)
+	if (ev_now() > rl->rate_last + RATE_LIMIT_SILENCE)
 		rl->rate_tokens = 0;
 
 	/* Too many ignored redirects; just update time of last packet */
 	if (rl->rate_tokens >= RATE_LIMIT_MAX_TOKENS) {
-		rl->rate_last = ev_now(nhrp_loop);
+		rl->rate_last = ev_now();
 		return FALSE;
 	}
 
 	/* Check for load limit; set rate_last to last sent redirect */
 	if (rl->rate_tokens != 0 &&
-	    ev_now(nhrp_loop) < rl->rate_last + RATE_LIMIT_SEND_INTERVAL)
+	    ev_now() < rl->rate_last + RATE_LIMIT_SEND_INTERVAL)
 		return FALSE;
 
 	rl->rate_tokens++;
-	rl->rate_last = ev_now(nhrp_loop);
+	rl->rate_last = ev_now();
 
 	p = nhrp_packet_alloc();
 	p->hdr = (struct nhrp_packet_header) {

@@ -43,7 +43,7 @@ nhrp_server_record_request(struct nhrp_packet *packet)
 		num_pending_requests++;
 		list_add(&pr->request_list_entry, &request_list);
 		pr->packet = nhrp_packet_get(packet);
-		pr->now = ev_now(nhrp_loop);
+		pr->now = ev_now();
 	}
 	return pr;
 }
@@ -225,7 +225,7 @@ static void nhrp_server_finish_reg(struct nhrp_pending_request *pr)
 	nhrp_server_finish_request(pr);
 }
 
-static void nhrp_server_finish_cie_reg_cb(struct ev_loop *loop, union nhrp_peer_event e, int revents)
+static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e, int revents)
 {
 	struct nhrp_peer *peer;
 	struct nhrp_pending_request *pr;
@@ -347,7 +347,7 @@ static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr)
 	if (nhrp_peer_foreach(find_one, peer, &sel) != 0) {
 		cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
 		peer->flags |= NHRP_PEER_FLAG_REPLACED;
-		nhrp_server_finish_cie_reg_cb(nhrp_loop, &peer->child, 0);
+		nhrp_server_finish_cie_reg_cb(&peer->child, 0);
 	} else {
 		nhrp_peer_run_script(peer, "peer-register",
 				     nhrp_server_finish_cie_reg_cb);

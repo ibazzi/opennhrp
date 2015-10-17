@@ -1,25 +1,18 @@
 progs-y			+= opennhrp
-opennhrp-objs		+= opennhrp.o nhrp_address.o nhrp_packet.o \
+opennhrp-objs		+= libev.o opennhrp.o nhrp_address.o nhrp_packet.o \
 			   nhrp_peer.o nhrp_server.o nhrp_interface.o admin.o \
 			   sysdep_netlink.o sysdep_pfpacket.o \
 			   sysdep_syslog.o
 
+CFLAGS_libev.o		+= -Wno-unused -Wno-comment -Wno-parentheses
 CFLAGS_opennhrp.o	+= -DOPENNHRP_VERSION=\"$(FULL_VERSION)\" \
 			   -DOPENNHRP_ADMIN_SOCKET=\"$(STATEDIR)/opennhrp.socket\"
 LIBS_opennhrp		+= -lm
-
 ifeq ($(shell pkg-config --exists libcares && echo "yes"),yes)
 CFLAGS			+=$(shell pkg-config --cflags libcares)
 LIBS_opennhrp  		+=$(shell pkg-config --libs libcares)
 else
 LIBS_opennhrp  		+= -lcares
-endif
-
-ifeq ($(shell pkg-config --exists libev && echo "yes"),yes)
-CFLAGS			+=$(shell pkg-config --cflags libev)
-LIBS_opennhrp  		+=$(shell pkg-config --libs libev)
-else
-LIBS_opennhrp  		+= -lev
 endif
 
 progs-y			+= opennhrpctl
