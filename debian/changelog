@@ -1,0 +1,5 @@
+opennhrp (0.14.1-1) unstable; urgency=low
+
+  * Initial release (Closes: #nnnn)  <nnnn is the bug number of your ITP>
+
+ -- ibazzi <ibazzi@qq.com>  Sat, 17 Oct 2015 19:14:47 +0800
