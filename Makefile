@@ -7,7 +7,7 @@ VERSION := 0.14.1
 ##
 # Default directories
 
-DESTDIR=
+DESTDIR?=
 SBINDIR=/usr/sbin
 CONFDIR=/etc/opennhrp
 MANDIR=/usr/share/man
