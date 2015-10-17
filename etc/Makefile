@@ -1,4 +1,4 @@
-ETCFILES := opennhrp.conf opennhrp-script racoon-ph1down.sh racoon-ph1dead.sh
+ETCFILES := opennhrp.conf opennhrp-script
 
 install:
 	$(INSTALLDIR) $(DESTDIR)$(CONFDIR)
