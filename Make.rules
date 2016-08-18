@@ -69,11 +69,11 @@ LD		:= $(CROSS_COMPILE)ld
 INSTALL		:= install
 INSTALLDIR	:= $(INSTALL) -d
 
-CFLAGS		?= -g -O2 -I${LIBDIR}/include
+CFLAGS		?= -g -O2 -I${INCLUDEDIR}
 CFLAGS_ALL	:= -Wall -Wstrict-prototypes -D_GNU_SOURCE -std=gnu99
 CFLAGS_ALL	+= $(CFLAGS)
 
-LDFLAGS		?= -g -L${LIBDIR}/lib
+LDFLAGS		?= -g -L${LIBDIR}
 LDFLAGS_ALL	+= $(LDFLAGS)
 
 export CC LD INSTALL INSTALLDIR CFLAGS_ALL LDFLAGS_ALL
