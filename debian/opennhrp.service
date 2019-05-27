@@ -1,0 +1,13 @@
+[Unit]
+Description=OpenNextHopResolutionProtocol
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/sbin/opennhrp -c /etc/opennhrp/opennhrp.conf -s /etc/opennhrp/opennhrp-script -p /var/run/opennhrp.pid
+
+[Install]
+WantedBy=multi-user.target
+
