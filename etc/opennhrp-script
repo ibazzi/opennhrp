@@ -1,5 +1,7 @@
 #!/bin/sh
 
+USER_SCRIPT=/etc/opennhrp/user-script
+
 case $1 in
 interface-up)
 	ip route flush proto 42 dev $NHRP_INTERFACE
@@ -29,5 +31,7 @@ route-down)
 	ip route flush cache
 	;;
 esac
+
+[ -x $USER_SCRIPT ] && $USER_SCRIPT "$@"
 
 exit 0
