@@ -137,7 +137,7 @@ struct nhrp_peer_selector {
 	struct nhrp_address local_nbma_address;
 };
 
-const char * const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
+extern const char * const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
 typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);
 
 void nhrp_peer_cleanup(void);
