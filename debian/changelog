@@ -1,3 +1,21 @@
+opennhrp (0.15-1) unstable; urgency=low
+
+  * feat(admin): add dynamic mapping and configuration reload functions
+  * ADD user script support
+  * add systemd support
+  * add missing init.d script
+  * fix compile
+  * enable deb package
+  * remove ipsec
+  * fixed cross compile
+  * Revert "remove bundled libev, and depend it to be a system library"
+  * fix race condition to stop processing dns requests
+  * modify packet destination only for registration requests
+  * do not establish shortcut entry if cie code indicates failure
+  * support non-unique registration
+
+ -- Antigravity <antigravity@google.com>  Tue, 21 Jul 2026 08:22:00 +0800
+
 opennhrp (0.14.1-1) unstable; urgency=low
 
   * Initial release (Closes: #nnnn)  <nnnn is the bug number of your ITP>

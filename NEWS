@@ -6,6 +6,23 @@ Detailed changelog is available via Git history via web:
 http://opennhrp.git.sf.net/git/gitweb.cgi?p=opennhrp;a=blob;f=NEWS;hb=HEAD
 
 -----------------------------------------------------------------------------
+ opennhrp 0.15 - released 21/Jul/2026
+-----------------------------------------------------------------------------
+ - feat(admin): add dynamic mapping and configuration reload functions
+ - feature: ADD user script support
+ - feature: add systemd support
+ - feature: add missing init.d script
+ - fix: compilation issues
+ - build: enable deb package creation
+ - build: remove ipsec
+ - build: fix cross compilation
+ - build: revert "remove bundled libev, and depend it to be a system library"
+ - fix: race condition to stop processing dns requests
+ - fix: modify packet destination only for registration requests
+ - fix: do not establish shortcut entry if cie code indicates failure
+ - feature: support non-unique registration (no-unique)
+
+-----------------------------------------------------------------------------
  opennhrp 0.14.1 - released 30/Jan/2013
 -----------------------------------------------------------------------------
  - fix: recover from dns lookup failure of dynamic-map entries

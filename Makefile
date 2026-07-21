@@ -2,7 +2,7 @@
 # Building opennhrp
 
 PACKAGE := opennhrp
-VERSION := 0.14.1
+VERSION := 0.15
 
 ##
 # Default directories
@@ -32,3 +32,18 @@ include Make.rules
 install:
 	$(INSTALLDIR) $(DESTDIR)$(DOCDIR)
 	$(INSTALL) README $(DESTDIR)$(DOCDIR)
+
+deb:
+	rm -rf build/src
+	mkdir -p build/src
+	find . -maxdepth 1 ! -name '.' ! -name 'build' ! -name '.git' -exec cp -a {} build/src/ \;
+	cd build/src && dpkg-buildpackage -us -uc -b
+	rm -rf build/src
+
+clean: clean-build
+
+clean-build:
+	rm -rf build
+
+
+
