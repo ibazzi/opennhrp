@@ -495,6 +495,124 @@ err:
 	return;
 }
 
+static void admin_config_reload(void *ctx, const char *cmd)
+{
+	if (nhrp_reload_config()) {
+		admin_write(ctx, "Status: ok\n");
+	} else {
+		admin_write(ctx,
+			    "Status: failed\n"
+			    "Reason: config-reload-error\n");
+	}
+}
+
+static void admin_map_add(void *ctx, const char *cmd)
+{
+	char word[64], ifname[64] = "", pstr[64] = "", nbstr[64] = "";
+	struct nhrp_interface *iface = NULL;
+	struct nhrp_address paddr, nbma_addr;
+	struct nhrp_address *nbma_ptr = NULL;
+	const char *nbma_host = NULL;
+	uint8_t prefix_length = 0;
+	unsigned int flags = 0;
+
+	nhrp_address_set_type(&paddr, PF_UNSPEC);
+	nhrp_address_set_type(&nbma_addr, PF_UNSPEC);
+
+	while (parse_word(&cmd, sizeof(word), word)) {
+		if (strcmp(word, "interface") == 0 || strcmp(word, "iface") == 0 || strcmp(word, "dev") == 0) {
+			if (parse_word(&cmd, sizeof(ifname), ifname))
+				iface = nhrp_interface_get_by_name(ifname, FALSE);
+		} else if (strcmp(word, "protocol") == 0) {
+			parse_word(&cmd, sizeof(pstr), pstr);
+		} else if (strcmp(word, "nbma") == 0) {
+			parse_word(&cmd, sizeof(nbstr), nbstr);
+		} else if (strcmp(word, "register") == 0) {
+			flags |= NHRP_PEER_FLAG_REGISTER;
+		} else if (strcmp(word, "cisco") == 0) {
+			flags |= NHRP_PEER_FLAG_CISCO;
+		} else if (strcmp(word, "no-unique") == 0) {
+			flags |= NHRP_PEER_FLAG_REG_NON_UNIQUE;
+		} else {
+			if (ifname[0] == 0) {
+				snprintf(ifname, sizeof(ifname), "%s", word);
+				iface = nhrp_interface_get_by_name(ifname, FALSE);
+			} else if (pstr[0] == 0) {
+				snprintf(pstr, sizeof(pstr), "%s", word);
+			} else if (nbstr[0] == 0) {
+				snprintf(nbstr, sizeof(nbstr), "%s", word);
+			}
+		}
+	}
+
+	if (iface == NULL) {
+		admin_write(ctx, "Status: failed\nReason: interface-not-found\n");
+		return;
+	}
+	if (!nhrp_address_parse(pstr, &paddr, &prefix_length)) {
+		admin_write(ctx, "Status: failed\nReason: invalid-protocol-address\n");
+		return;
+	}
+	if (nbstr[0] == 0) {
+		admin_write(ctx, "Status: failed\nReason: missing-nbma-address\n");
+		return;
+	}
+
+	if (nhrp_address_parse(nbstr, &nbma_addr, NULL))
+		nbma_ptr = &nbma_addr;
+	else
+		nbma_host = nbstr;
+
+	if (nhrp_peer_add_static(iface, &paddr, prefix_length, nbma_ptr, nbma_host, flags) != NULL) {
+		admin_write(ctx, "Status: ok\n");
+	} else {
+		admin_write(ctx, "Status: failed\nReason: add-static-failed\n");
+	}
+}
+
+static void admin_map_del(void *ctx, const char *cmd)
+{
+	char word[64], ifname[32] = "", pstr[64] = "";
+	struct nhrp_interface *iface = NULL;
+	struct nhrp_address paddr;
+
+	nhrp_address_set_type(&paddr, PF_UNSPEC);
+
+	while (parse_word(&cmd, sizeof(word), word)) {
+		if (strcmp(word, "interface") == 0 || strcmp(word, "iface") == 0 || strcmp(word, "dev") == 0) {
+			if (parse_word(&cmd, sizeof(ifname), ifname))
+				iface = nhrp_interface_get_by_name(ifname, FALSE);
+		} else if (strcmp(word, "protocol") == 0) {
+			parse_word(&cmd, sizeof(pstr), pstr);
+		} else {
+			if (iface == NULL && (iface = nhrp_interface_get_by_name(word, FALSE)) != NULL)
+				continue;
+			if (pstr[0] == 0)
+				snprintf(pstr, sizeof(pstr), "%s", word);
+		}
+	}
+
+	if (!nhrp_address_parse(pstr, &paddr, NULL)) {
+		admin_write(ctx, "Status: failed\nReason: invalid-protocol-address\n");
+		return;
+	}
+
+	if (nhrp_peer_del_static(iface, &paddr)) {
+		admin_write(ctx, "Status: ok\n");
+	} else {
+		admin_write(ctx, "Status: failed\nReason: entry-not-found\n");
+	}
+}
+
+static void admin_config_save(void *ctx, const char *cmd)
+{
+	if (nhrp_save_config()) {
+		admin_write(ctx, "Status: ok\n");
+	} else {
+		admin_write(ctx, "Status: failed\nReason: config-save-error\n");
+	}
+}
+
 static struct {
 	const char *command;
 	void (*handler)(void *ctx, const char *cmd);
@@ -510,6 +628,12 @@ static struct {
 	{ "interface show",	admin_interface_show },
 	{ "redirect purge",	admin_redirect_purge },
 	{ "update nbma",	admin_update_nbma },
+	{ "reload",		admin_config_reload },
+	{ "config reload",	admin_config_reload },
+	{ "map add",		admin_map_add },
+	{ "map del",		admin_map_del },
+	{ "map save",		admin_config_save },
+	{ "config save",	admin_config_save },
 };
 
 static void admin_receive_cb(struct ev_io *w, int revents)

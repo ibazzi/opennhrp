@@ -70,5 +70,7 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor,
 int log_init(void);
 int admin_init(const char *socket);
 void server_init(void);
+int nhrp_reload_config(void);
+int nhrp_save_config(void);
 
 #endif

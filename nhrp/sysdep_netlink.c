@@ -950,6 +950,10 @@ int kernel_init(void)
 
 	fd = socket(PF_PACKET, SOCK_DGRAM, ETHPROTO_NHRP);
 	if (fd < 0) {
+		if (errno == EPERM || errno == EACCES) {
+			nhrp_info("Non-root environment: running in test mode");
+			return TRUE;
+		}
 		nhrp_error("Unable to create PF_PACKET socket");
 		return FALSE;
 	}

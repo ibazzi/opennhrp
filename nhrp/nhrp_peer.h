@@ -71,6 +71,7 @@
 #define NHRP_PEER_FLAG_REPLACED		0x80	/* Peer has been replaced */
 #define NHRP_PEER_FLAG_REMOVED		0x100	/* Deleted, but not removed from cache yet */
 #define NHRP_PEER_FLAG_MARK		0x200	/* Can be used to temporarily mark peers */
+#define NHRP_PEER_FLAG_CONFIGURED	0x400	/* Explicitly configured in config file */
 
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02
@@ -137,7 +138,7 @@ struct nhrp_peer_selector {
 	struct nhrp_address local_nbma_address;
 };
 
-const char * const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
+extern const char * const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
 typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);
 
 void nhrp_peer_cleanup(void);
@@ -187,6 +188,22 @@ static inline struct nhrp_peer *nhrp_peer_route(struct nhrp_interface *iface,
 void nhrp_peer_traffic_indication(struct nhrp_interface *iface,
 				  uint16_t afnum, struct nhrp_address *dst);
 void nhrp_peer_dump_cache(void);
+
+void nhrp_peer_mark_static(void);
+void nhrp_peer_sweep_marked_static(void);
+struct nhrp_peer *nhrp_peer_find_marked_static(struct nhrp_interface *iface,
+						uint8_t type,
+						struct nhrp_address *proto_addr,
+						struct nhrp_address *nbma_addr,
+						const char *nbma_hostname);
+struct nhrp_peer *nhrp_peer_add_static(struct nhrp_interface *iface,
+					struct nhrp_address *proto_addr,
+					uint8_t prefix_length,
+					struct nhrp_address *nbma_addr,
+					const char *nbma_hostname,
+					unsigned int flags);
+int nhrp_peer_del_static(struct nhrp_interface *iface,
+			 struct nhrp_address *proto_addr);
 
 void nhrp_server_finish_request(struct nhrp_pending_request *pr);
 

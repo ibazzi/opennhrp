@@ -2136,3 +2136,154 @@ void nhrp_peer_cleanup(void)
 		ev_loop(EVLOOP_ONESHOT);
 	}
 }
+
+static int mark_static_peer_cb(void *ctx, struct nhrp_peer *peer)
+{
+	if (peer->flags & NHRP_PEER_FLAG_CONFIGURED)
+		peer->flags |= NHRP_PEER_FLAG_MARK;
+	return 0;
+}
+
+void nhrp_peer_mark_static(void)
+{
+	struct nhrp_peer_selector sel;
+
+	memset(&sel, 0, sizeof(sel));
+	sel.type_mask = BIT(NHRP_PEER_TYPE_STATIC) |
+			BIT(NHRP_PEER_TYPE_STATIC_DNS) |
+			BIT(NHRP_PEER_TYPE_LOCAL_ADDR);
+	nhrp_peer_foreach(mark_static_peer_cb, NULL, &sel);
+}
+
+static int sweep_marked_peer_cb(void *ctx, struct nhrp_peer *peer)
+{
+	if (peer->flags & NHRP_PEER_FLAG_MARK) {
+		nhrp_peer_remove(peer);
+	}
+	return 0;
+}
+
+void nhrp_peer_sweep_marked_static(void)
+{
+	struct nhrp_peer_selector sel;
+
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_MARK;
+	sel.type_mask = BIT(NHRP_PEER_TYPE_STATIC) |
+			BIT(NHRP_PEER_TYPE_STATIC_DNS) |
+			BIT(NHRP_PEER_TYPE_LOCAL_ADDR);
+	nhrp_peer_foreach(sweep_marked_peer_cb, NULL, &sel);
+}
+
+static int find_first_peer_cb(void *ctx, struct nhrp_peer *peer)
+{
+	struct nhrp_peer **res = (struct nhrp_peer **) ctx;
+	*res = peer;
+	return 1;
+}
+
+struct nhrp_peer *nhrp_peer_find_marked_static(struct nhrp_interface *iface,
+						uint8_t type,
+						struct nhrp_address *proto_addr,
+						struct nhrp_address *nbma_addr,
+						const char *nbma_hostname)
+{
+	struct nhrp_peer_selector sel;
+	struct nhrp_peer *peer = NULL;
+
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_MARK | NHRP_PEER_FIND_EXACT;
+	sel.type_mask = BIT(type);
+	sel.interface = iface;
+	sel.protocol_address = *proto_addr;
+	if (nbma_addr && nbma_addr->type != AF_UNSPEC)
+		sel.next_hop_address = *nbma_addr;
+	sel.hostname = nbma_hostname;
+
+	nhrp_peer_foreach(find_first_peer_cb, &peer, &sel);
+	return peer;
+}
+
+struct nhrp_peer *nhrp_peer_add_static(struct nhrp_interface *iface,
+					struct nhrp_address *proto_addr,
+					uint8_t prefix_length,
+					struct nhrp_address *nbma_addr,
+					const char *nbma_hostname,
+					unsigned int flags)
+{
+	struct nhrp_peer_selector sel;
+	struct nhrp_peer *peer = NULL;
+
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_EXACT;
+	sel.type_mask = BIT(NHRP_PEER_TYPE_STATIC);
+	sel.interface = iface;
+	sel.protocol_address = *proto_addr;
+
+	nhrp_peer_foreach(find_first_peer_cb, &peer, &sel);
+
+	if (peer != NULL) {
+		/* Existing static map - update NBMA and flags */
+		if (nbma_hostname != NULL) {
+			if (peer->nbma_hostname)
+				free(peer->nbma_hostname);
+			peer->nbma_hostname = strdup(nbma_hostname);
+			nhrp_address_set_type(&peer->next_hop_address, PF_UNSPEC);
+		} else if (nbma_addr != NULL) {
+			if (peer->nbma_hostname) {
+				free(peer->nbma_hostname);
+				peer->nbma_hostname = NULL;
+			}
+			peer->next_hop_address = *nbma_addr;
+		}
+		peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
+		peer->flags = (peer->flags & ~(NHRP_PEER_FLAG_REGISTER | NHRP_PEER_FLAG_CISCO | NHRP_PEER_FLAG_REG_NON_UNIQUE)) | flags;
+
+		nhrp_peer_cancel_async(peer);
+		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
+			nhrp_peer_schedule(peer, 0, nhrp_peer_send_register_cb);
+		else
+			nhrp_peer_schedule(peer, 0, nhrp_peer_restart_cb);
+
+		return peer;
+	}
+
+	/* Create new static map */
+	peer = nhrp_peer_alloc(iface);
+	peer->type = NHRP_PEER_TYPE_STATIC;
+	peer->protocol_address = *proto_addr;
+	peer->prefix_length = prefix_length ? prefix_length : (proto_addr->addr_len * 8);
+	peer->protocol_type = nhrp_protocol_from_pf(proto_addr->type);
+	if (nbma_hostname != NULL)
+		peer->nbma_hostname = strdup(nbma_hostname);
+	else if (nbma_addr != NULL)
+		peer->next_hop_address = *nbma_addr;
+	peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
+	peer->flags |= flags | NHRP_PEER_FLAG_CONFIGURED;
+
+	nhrp_peer_insert(peer);
+	nhrp_peer_put(peer);
+
+	return peer;
+}
+
+int nhrp_peer_del_static(struct nhrp_interface *iface,
+			 struct nhrp_address *proto_addr)
+{
+	struct nhrp_peer_selector sel;
+	struct nhrp_peer *peer = NULL;
+
+	memset(&sel, 0, sizeof(sel));
+	sel.flags = NHRP_PEER_FIND_EXACT;
+	sel.type_mask = BIT(NHRP_PEER_TYPE_STATIC);
+	sel.interface = iface;
+	sel.protocol_address = *proto_addr;
+
+	nhrp_peer_foreach(find_first_peer_cb, &peer, &sel);
+
+	if (peer == NULL)
+		return FALSE;
+
+	nhrp_peer_remove(peer);
+	return TRUE;
+}

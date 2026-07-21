@@ -72,6 +72,26 @@ daemon of the real
 of dynamically discovered NHS.
 .RE
 
+.B "reload"
+.RS
+Reload configuration file (/etc/opennhrp/opennhrp.conf) differentially without restarting opennhrp daemon. Dynamic peer registrations from Spoke clients remain untouched.
+.RE
+
+.BI "map add " interface " " protocol-address " " nbma-address|hostname " [register] [cisco] [no-unique]"
+.RS
+Add a new static map or update an existing static map dynamically at runtime in memory.
+.RE
+
+.BI "map del [" interface "] " protocol-address
+.RS
+Delete an existing static map dynamically at runtime from memory.
+.RE
+
+.B "map save"
+.RS
+Save current configuration and all static maps from memory to configuration file (/etc/opennhrp/opennhrp.conf).
+.RE
+
 The following selectors can be used to limit which cache entries will
 be effected:
 

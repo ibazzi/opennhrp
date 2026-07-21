@@ -63,7 +63,7 @@ route-up)
 	;;
 route-down)
 	echo "Route $NHRP_DESTADDR/$NHRP_DESTPREFIX is down"
-	ip route del $NHRP_DESTADDR/$NHRP_DESTPREFIX proto 42
+	ip route del $NHRP_DESTADDR/$NHRP_DESTPREFIX proto 42 2>/dev/null || true
 	ip route flush cache
 	;;
 esac

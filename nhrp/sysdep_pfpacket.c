@@ -385,6 +385,10 @@ int forward_init(void)
 
 	fd = socket(PF_PACKET, SOCK_DGRAM, ntohs(ETH_P_ALL));
 	if (fd < 0) {
+		if (errno == EPERM || errno == EACCES) {
+			nhrp_info("Non-root environment: forward_init in test mode");
+			return TRUE;
+		}
 		nhrp_error("Unable to create PF_PACKET socket");
 		return FALSE;
 	}

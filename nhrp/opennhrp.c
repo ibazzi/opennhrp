@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <linux/rtnetlink.h>
 
 #include "nhrp_common.h"
 #include "nhrp_peer.h"
@@ -69,8 +70,6 @@ void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes)
 
 static void handle_signal_cb(struct ev_signal *w, int revents)
 {
-	struct nhrp_peer_selector sel;
-
 	switch (w->signum) {
 	case SIGUSR1:
 		nhrp_peer_dump_cache();
@@ -80,9 +79,7 @@ static void handle_signal_cb(struct ev_signal *w, int revents)
 		ev_unloop(EVUNLOOP_ALL);
 		break;
 	case SIGHUP:
-		memset(&sel, 0, sizeof(sel));
-		sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
-		nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
+		nhrp_reload_config();
 		break;
 	}
 }
@@ -149,8 +146,9 @@ static int load_config(const char *config_file)
 		"keyword valid only for 'interace' and 'shortcut-target' definition",
 	};
 	struct nhrp_interface *iface = NULL;
-	struct nhrp_peer *peer = NULL;
-	struct nhrp_address paddr;
+	struct nhrp_peer *peer = NULL, *exist = NULL;
+	struct nhrp_address paddr, nbma_addr;
+	uint8_t prefix_length;
 	char word[32], nbma[32], addr[32];
 	FILE *in;
 	int lineno = 1, rc = -1;
@@ -178,61 +176,89 @@ static int load_config(const char *config_file)
 				rc = 1;
 				break;
 			}
-			peer = nhrp_peer_alloc(iface);
-			peer->type = NHRP_PEER_TYPE_LOCAL_ADDR;
-			peer->afnum = AFNUM_RESERVED;
-			if (!nhrp_address_parse(addr, &peer->protocol_address,
-						&peer->prefix_length)) {
+			if (!nhrp_address_parse(addr, &paddr, &prefix_length)) {
 				rc = 4;
 				break;
 			}
-			peer->protocol_type = nhrp_protocol_from_pf(peer->protocol_address.type);
-			nhrp_peer_insert(peer);
-			nhrp_peer_put(peer);
+			exist = nhrp_peer_find_marked_static(iface, NHRP_PEER_TYPE_LOCAL_ADDR, &paddr, NULL, NULL);
+			if (exist != NULL) {
+				exist->flags &= ~NHRP_PEER_FLAG_MARK;
+				exist->flags |= NHRP_PEER_FLAG_CONFIGURED;
+				peer = exist;
+			} else {
+				peer = nhrp_peer_alloc(iface);
+				peer->type = NHRP_PEER_TYPE_LOCAL_ADDR;
+				peer->afnum = AFNUM_RESERVED;
+				peer->protocol_address = paddr;
+				peer->prefix_length = prefix_length;
+				peer->protocol_type = nhrp_protocol_from_pf(paddr.type);
+				peer->flags |= NHRP_PEER_FLAG_CONFIGURED;
+				nhrp_peer_insert(peer);
+				nhrp_peer_put(peer);
+			}
 		} else if (strcmp(word, "dynamic-map") == 0) {
 			NEED_INTERFACE();
 			read_word(in, &lineno, sizeof(addr), addr);
 			read_word(in, &lineno, sizeof(nbma), nbma);
 
-			peer = nhrp_peer_alloc(iface);
-			peer->type = NHRP_PEER_TYPE_STATIC_DNS;
-			if (!nhrp_address_parse(addr, &peer->protocol_address,
-						&peer->prefix_length)) {
+			if (!nhrp_address_parse(addr, &paddr, &prefix_length)) {
 				rc = 4;
 				break;
 			}
-			if (!nhrp_address_is_network(&peer->protocol_address,
-						     peer->prefix_length)) {
+			if (!nhrp_address_is_network(&paddr, prefix_length)) {
 				rc = 5;
 				break;
 			}
-			peer->protocol_type = nhrp_protocol_from_pf(
-				peer->protocol_address.type);
-			peer->nbma_hostname = strdup(nbma);
-			peer->afnum = nhrp_afnum_from_pf(
-				peer->next_hop_address.type);
-			nhrp_peer_insert(peer);
-			nhrp_peer_put(peer);
+			exist = nhrp_peer_find_marked_static(iface, NHRP_PEER_TYPE_STATIC_DNS, &paddr, NULL, nbma);
+			if (exist != NULL) {
+				exist->flags &= ~NHRP_PEER_FLAG_MARK;
+				exist->flags |= NHRP_PEER_FLAG_CONFIGURED;
+				peer = exist;
+			} else {
+				peer = nhrp_peer_alloc(iface);
+				peer->type = NHRP_PEER_TYPE_STATIC_DNS;
+				peer->protocol_address = paddr;
+				peer->prefix_length = prefix_length;
+				peer->protocol_type = nhrp_protocol_from_pf(paddr.type);
+				peer->nbma_hostname = strdup(nbma);
+				peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
+				peer->flags |= NHRP_PEER_FLAG_CONFIGURED;
+				nhrp_peer_insert(peer);
+				nhrp_peer_put(peer);
+			}
 		} else if (strcmp(word, "map") == 0) {
 			NEED_INTERFACE();
 			read_word(in, &lineno, sizeof(addr), addr);
 			read_word(in, &lineno, sizeof(nbma), nbma);
 
-			peer = nhrp_peer_alloc(iface);
-			peer->type = NHRP_PEER_TYPE_STATIC;
-			if (!nhrp_address_parse(addr, &peer->protocol_address,
-						&peer->prefix_length)) {
+			if (!nhrp_address_parse(addr, &paddr, &prefix_length)) {
 				rc = 4;
 				break;
 			}
-			peer->protocol_type = nhrp_protocol_from_pf(
-				peer->protocol_address.type);
-			if (!nhrp_address_parse(nbma, &peer->next_hop_address,
-						NULL))
-				peer->nbma_hostname = strdup(nbma);
-			peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
-			nhrp_peer_insert(peer);
-			nhrp_peer_put(peer);
+			nhrp_address_set_type(&nbma_addr, PF_UNSPEC);
+			char *nbma_host = NULL;
+			if (!nhrp_address_parse(nbma, &nbma_addr, NULL))
+				nbma_host = nbma;
+
+			exist = nhrp_peer_find_marked_static(iface, NHRP_PEER_TYPE_STATIC, &paddr, &nbma_addr, nbma_host);
+			if (exist != NULL) {
+				exist->flags &= ~NHRP_PEER_FLAG_MARK;
+				exist->flags |= NHRP_PEER_FLAG_CONFIGURED;
+				peer = exist;
+			} else {
+				peer = nhrp_peer_alloc(iface);
+				peer->type = NHRP_PEER_TYPE_STATIC;
+				peer->protocol_address = paddr;
+				peer->prefix_length = prefix_length;
+				peer->protocol_type = nhrp_protocol_from_pf(paddr.type);
+				peer->next_hop_address = nbma_addr;
+				if (nbma_host != NULL)
+					peer->nbma_hostname = strdup(nbma_host);
+				peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
+				peer->flags |= NHRP_PEER_FLAG_CONFIGURED;
+				nhrp_peer_insert(peer);
+				nhrp_peer_put(peer);
+			}
 		} else if (strcmp(word, "register") == 0) {
 			NEED_PEER();
 			peer->flags |= NHRP_PEER_FLAG_REGISTER;
@@ -520,5 +546,125 @@ int main(int argc, char **argv)
 	ev_default_destroy();
 
 	return 0;
+}
+
+int nhrp_reload_config(void)
+{
+	nhrp_info("Reloading configuration file %s", nhrp_config_file);
+	nhrp_peer_mark_static();
+	if (!load_config(nhrp_config_file)) {
+		nhrp_error("Failed to reload configuration file %s", nhrp_config_file);
+		return FALSE;
+	}
+	nhrp_peer_sweep_marked_static();
+	nhrp_info("Configuration reloaded successfully");
+	return TRUE;
+}
+
+struct save_ctx {
+	FILE *fp;
+	struct nhrp_interface *iface;
+};
+
+static int save_peer_config(void *ctx, struct nhrp_peer *peer)
+{
+	FILE *fp = ((struct save_ctx *) ctx)->fp;
+	char pbuf[64], nbuf[64];
+
+	if (!(peer->flags & NHRP_PEER_FLAG_CONFIGURED))
+		return 0;
+
+	nhrp_address_format(&peer->protocol_address, sizeof(pbuf), pbuf);
+
+	switch (peer->type) {
+	case NHRP_PEER_TYPE_LOCAL_ADDR:
+		fprintf(fp, "  shortcut-target %s/%d\n", pbuf, peer->prefix_length);
+		break;
+	case NHRP_PEER_TYPE_STATIC_DNS:
+		fprintf(fp, "  dynamic-map %s/%d %s\n", pbuf, peer->prefix_length,
+			peer->nbma_hostname ? peer->nbma_hostname : "");
+		break;
+	case NHRP_PEER_TYPE_STATIC:
+		if (peer->nbma_hostname != NULL)
+			fprintf(fp, "  map %s/%d %s", pbuf, peer->prefix_length, peer->nbma_hostname);
+		else {
+			nhrp_address_format(&peer->next_hop_address, sizeof(nbuf), nbuf);
+			fprintf(fp, "  map %s/%d %s", pbuf, peer->prefix_length, nbuf);
+		}
+		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
+			fprintf(fp, " register");
+		if (peer->flags & NHRP_PEER_FLAG_CISCO)
+			fprintf(fp, " cisco");
+		if (peer->flags & NHRP_PEER_FLAG_REG_NON_UNIQUE)
+			fprintf(fp, " no-unique");
+		fprintf(fp, "\n");
+		break;
+	}
+	return 0;
+}
+
+static int save_iface_config(void *ctx, struct nhrp_interface *iface)
+{
+	FILE *fp = (FILE *) ctx;
+	struct nhrp_peer_selector sel;
+	struct save_ctx sctx = { fp, iface };
+
+	if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
+		return 0;
+
+	fprintf(fp, "interface %s\n", iface->name);
+
+	memset(&sel, 0, sizeof(sel));
+	sel.interface = iface;
+	sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL_ADDR) |
+			BIT(NHRP_PEER_TYPE_STATIC_DNS) |
+			BIT(NHRP_PEER_TYPE_STATIC);
+	nhrp_peer_foreach(save_peer_config, &sctx, &sel);
+
+	if (iface->holding_time != 0)
+		fprintf(fp, "  holding-time %u\n", iface->holding_time);
+	if (iface->route_table != 0 && iface->route_table != RT_TABLE_MAIN)
+		fprintf(fp, "  route-table %u\n", iface->route_table);
+	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT)
+		fprintf(fp, "  shortcut\n");
+	if (iface->flags & NHRP_INTERFACE_FLAG_REDIRECT)
+		fprintf(fp, "  redirect\n");
+	if (iface->flags & NHRP_INTERFACE_FLAG_NON_CACHING)
+		fprintf(fp, "  non-caching\n");
+	if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)
+		fprintf(fp, "  shortcut-destination\n");
+
+	fprintf(fp, "\n");
+	return 0;
+}
+
+int nhrp_save_config(void)
+{
+	char tmp_file[1024];
+	FILE *fp;
+
+	snprintf(tmp_file, sizeof(tmp_file), "%s.tmp", nhrp_config_file);
+	fp = fopen(tmp_file, "w");
+	if (fp == NULL) {
+		nhrp_error("Unable to open temporary config file %s: %s",
+			   tmp_file, strerror(errno));
+		return FALSE;
+	}
+
+	fprintf(fp, "# OpenNHRP Configuration File (saved automatically)\n\n");
+	nhrp_interface_foreach(save_iface_config, fp);
+
+	fflush(fp);
+	fclose(fp);
+
+	if (rename(tmp_file, nhrp_config_file) != 0) {
+		nhrp_error("Failed to rename %s to %s: %s",
+			   tmp_file, nhrp_config_file, strerror(errno));
+		unlink(tmp_file);
+		return FALSE;
+	}
+
+	nhrp_info("Configuration saved successfully to %s", nhrp_config_file);
+	return TRUE;
 }
 

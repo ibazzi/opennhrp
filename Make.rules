@@ -49,7 +49,7 @@ export srctree objtree
 
 TAGPREFIX	?= v
 
-GIT_REV := $(shell test -d .git && git describe || echo exported)
+GIT_REV := $(shell test -d .git && git describe 2>/dev/null || echo exported)
 ifneq ($(GIT_REV), exported)
 FULL_VERSION	:= $(patsubst $(TAGPREFIX)%,%,$(GIT_REV))
 else
@@ -69,11 +69,11 @@ LD		:= $(CROSS_COMPILE)ld
 INSTALL		:= install
 INSTALLDIR	:= $(INSTALL) -d
 
-CFLAGS		?= -g -O2 -I${INCLUDEDIR}
+CFLAGS		?= -g -O2 $(if $(INCLUDEDIR),-I${INCLUDEDIR})
 CFLAGS_ALL	:= -Wall -Wstrict-prototypes -D_GNU_SOURCE -std=gnu99
 CFLAGS_ALL	+= $(CFLAGS)
 
-LDFLAGS		?= -g -L${LIBDIR}
+LDFLAGS		?= -g $(if $(LIBDIR),-L${LIBDIR})
 LDFLAGS_ALL	+= $(LDFLAGS)
 
 export CC LD INSTALL INSTALLDIR CFLAGS_ALL LDFLAGS_ALL
