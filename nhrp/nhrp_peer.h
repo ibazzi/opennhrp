@@ -159,6 +159,7 @@ int nhrp_peer_foreach(nhrp_peer_enumerator e, void *ctx,
 int nhrp_peer_remove_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_purge_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_lowerdown_matching(void *count, struct nhrp_peer *peer);
+int nhrp_peer_reregister_matching(void *count, struct nhrp_peer *peer);
 int nhrp_peer_set_used_matching(void *ctx, struct nhrp_peer *peer);
 struct nhrp_peer *nhrp_peer_find_by_nbma(struct nhrp_interface *iface, struct nhrp_address *nbma);
 

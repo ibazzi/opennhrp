@@ -43,6 +43,13 @@ e.g. IPsec daemon detected dead-peer or received INITIIAL-CONTACT
 notification.
 .RE
 
+.BI "[cache] renew [" selector "]..."
+.RS
+Immediately send a new registration request for matching static maps that
+were configured with the \fBregister\fR option. Static maps without that
+option are not affected.
+.RE
+
 .BI "route show [" selector "]..."
 .RS
 Show the contents of locally cached kernel routing information

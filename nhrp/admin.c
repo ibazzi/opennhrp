@@ -324,6 +324,25 @@ static void admin_cache_lower_down(void *ctx, const char *cmd)
 		    count);
 }
 
+static void admin_cache_renew(void *ctx, const char *cmd)
+{
+	struct nhrp_peer_selector sel;
+	int count = 0;
+
+	memset(&sel, 0, sizeof(sel));
+	sel.type_mask = BIT(NHRP_PEER_TYPE_STATIC);
+	if (!admin_parse_selector(ctx, cmd, &sel))
+		return;
+
+	nhrp_peer_foreach(nhrp_peer_reregister_matching, &count, &sel);
+	admin_free_selector(&sel);
+
+	admin_write(ctx,
+		    "Status: ok\n"
+		    "Entries-Affected: %d\n",
+		    count);
+}
+
 static void admin_cache_flush(void *ctx, const char *cmd)
 {
 	struct nhrp_peer_selector sel;
@@ -625,6 +644,8 @@ static struct {
 	{ "purge",		admin_cache_purge },
 	{ "cache purge",	admin_cache_purge },
 	{ "cache lowerdown",	admin_cache_lower_down },
+	{ "renew",		admin_cache_renew },
+	{ "cache renew",	admin_cache_renew },
 	{ "interface show",	admin_interface_show },
 	{ "redirect purge",	admin_redirect_purge },
 	{ "update nbma",	admin_update_nbma },

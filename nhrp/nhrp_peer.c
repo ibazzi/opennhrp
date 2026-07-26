@@ -1774,6 +1774,20 @@ int nhrp_peer_lowerdown_matching(void *ctx, struct nhrp_peer *peer)
 	return 0;
 }
 
+int nhrp_peer_reregister_matching(void *ctx, struct nhrp_peer *peer)
+{
+	int *count = (int *) ctx;
+
+	if (!(peer->flags & NHRP_PEER_FLAG_REGISTER))
+		return 0;
+
+	nhrp_peer_schedule(peer, 0, nhrp_peer_send_register_cb);
+	if (count != NULL)
+		(*count)++;
+
+	return 0;
+}
+
 static void nhrp_peer_remove_cb(struct ev_timer *w, int revents)
 {
 	struct nhrp_peer *peer = container_of(w, struct nhrp_peer, timer);
