@@ -121,6 +121,7 @@ struct nhrp_peer {
 	/* NHRP_PEER_TYPE_ROUTE: protocol addr., others: NBMA addr. */
 	struct nhrp_address next_hop_address;
 	struct nhrp_address next_hop_nat_oa;
+	struct nhrp_address local_connect_address;
 };
 
 struct nhrp_peer_selector {
@@ -202,10 +203,18 @@ struct nhrp_peer *nhrp_peer_add_static(struct nhrp_interface *iface,
 					uint8_t prefix_length,
 					struct nhrp_address *nbma_addr,
 					const char *nbma_hostname,
+					struct nhrp_address *local_nbma_addr,
 					unsigned int flags);
 int nhrp_peer_del_static(struct nhrp_interface *iface,
 			 struct nhrp_address *proto_addr);
 
 void nhrp_server_finish_request(struct nhrp_pending_request *pr);
+
+static inline struct nhrp_address *nhrp_peer_active_nbma(struct nhrp_peer *peer)
+{
+	if (peer != NULL && peer->local_connect_address.type != PF_UNSPEC)
+		return &peer->local_connect_address;
+	return &peer->next_hop_address;
+}
 
 #endif

@@ -35,13 +35,20 @@ directive must be present to enable NHRP on that interface.
 .SH "INTERFACE CONTEXT"
 These configuration keywords can appear only in the interface context.
 
-.PP
-.BI "map " protocol-address[/prefix] " " nbma-address " [register] [no-unique] [cisco]"
+.BI "map " protocol-address[/prefix] " " nbma-address " [local-nbma " local-nbma-address "] [register] [no-unique] [cisco]"
 .RS
 Creates static peer mapping of
 .I protocol-address
 to
 .IR nbma-address .
+.PP
+The optional keyword
+.BI "local-nbma " local-nbma-address
+overrides the local kernel neighbor/tunnel mapping to
+.I local-nbma-address
+while advertising
+.I nbma-address
+in Registration Requests.
 .PP
 If the
 .I prefix

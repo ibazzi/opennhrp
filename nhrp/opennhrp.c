@@ -262,6 +262,13 @@ static int load_config(const char *config_file)
 		} else if (strcmp(word, "register") == 0) {
 			NEED_PEER();
 			peer->flags |= NHRP_PEER_FLAG_REGISTER;
+		} else if (strcmp(word, "local-nbma") == 0) {
+			NEED_PEER();
+			read_word(in, &lineno, sizeof(word), word);
+			if (!nhrp_address_parse(word, &peer->local_connect_address, NULL)) {
+				rc = 4;
+				break;
+			}
 		} else if (strcmp(word, "cisco") == 0) {
 			NEED_PEER();
 			peer->flags |= NHRP_PEER_FLAG_CISCO;
@@ -590,6 +597,11 @@ static int save_peer_config(void *ctx, struct nhrp_peer *peer)
 		else {
 			nhrp_address_format(&peer->next_hop_address, sizeof(nbuf), nbuf);
 			fprintf(fp, "  map %s/%d %s", pbuf, peer->prefix_length, nbuf);
+		}
+		if (peer->local_connect_address.type != PF_UNSPEC) {
+			char lbuf[64];
+			nhrp_address_format(&peer->local_connect_address, sizeof(lbuf), lbuf);
+			fprintf(fp, " local-nbma %s", lbuf);
 		}
 		if (peer->flags & NHRP_PEER_FLAG_REGISTER)
 			fprintf(fp, " register");

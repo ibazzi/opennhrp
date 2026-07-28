@@ -123,6 +123,11 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
 		i += snprintf(&buf[i], len - i, "Hostname: %s\n",
 			      peer->nbma_hostname);
 	}
+	if (peer->local_connect_address.type != PF_UNSPEC) {
+		i += snprintf(&buf[i], len - i, "Local-NBMA-Address: %s\n",
+			nhrp_address_format(&peer->local_connect_address,
+					    sizeof(tmp), tmp));
+	}
 	if (peer->next_hop_nat_oa.type != PF_UNSPEC) {
 		i += snprintf(&buf[i], len - i, "NBMA-NAT-OA-Address: %s\n",
 			nhrp_address_format(&peer->next_hop_nat_oa,
@@ -529,14 +534,15 @@ static void admin_map_add(void *ctx, const char *cmd)
 {
 	char word[64], ifname[64] = "", pstr[64] = "", nbstr[64] = "";
 	struct nhrp_interface *iface = NULL;
-	struct nhrp_address paddr, nbma_addr;
-	struct nhrp_address *nbma_ptr = NULL;
+	struct nhrp_address paddr, nbma_addr, local_nbma_addr;
+	struct nhrp_address *nbma_ptr = NULL, *local_nbma_ptr = NULL;
 	const char *nbma_host = NULL;
 	uint8_t prefix_length = 0;
 	unsigned int flags = 0;
 
 	nhrp_address_set_type(&paddr, PF_UNSPEC);
 	nhrp_address_set_type(&nbma_addr, PF_UNSPEC);
+	nhrp_address_set_type(&local_nbma_addr, PF_UNSPEC);
 
 	while (parse_word(&cmd, sizeof(word), word)) {
 		if (strcmp(word, "interface") == 0 || strcmp(word, "iface") == 0 || strcmp(word, "dev") == 0) {
@@ -546,6 +552,11 @@ static void admin_map_add(void *ctx, const char *cmd)
 			parse_word(&cmd, sizeof(pstr), pstr);
 		} else if (strcmp(word, "nbma") == 0) {
 			parse_word(&cmd, sizeof(nbstr), nbstr);
+		} else if (strcmp(word, "local-nbma") == 0) {
+			char lnbstr[64];
+			if (parse_word(&cmd, sizeof(lnbstr), lnbstr) &&
+			    nhrp_address_parse(lnbstr, &local_nbma_addr, NULL))
+				local_nbma_ptr = &local_nbma_addr;
 		} else if (strcmp(word, "register") == 0) {
 			flags |= NHRP_PEER_FLAG_REGISTER;
 		} else if (strcmp(word, "cisco") == 0) {
@@ -582,7 +593,7 @@ static void admin_map_add(void *ctx, const char *cmd)
 	else
 		nbma_host = nbstr;
 
-	if (nhrp_peer_add_static(iface, &paddr, prefix_length, nbma_ptr, nbma_host, flags) != NULL) {
+	if (nhrp_peer_add_static(iface, &paddr, prefix_length, nbma_ptr, nbma_host, local_nbma_ptr, flags) != NULL) {
 		admin_write(ctx, "Status: ok\n");
 	} else {
 		admin_write(ctx, "Status: failed\nReason: add-static-failed\n");

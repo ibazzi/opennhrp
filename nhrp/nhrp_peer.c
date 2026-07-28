@@ -418,7 +418,7 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
 	case NHRP_PEER_TYPE_DYNAMIC:
 	case NHRP_PEER_TYPE_DYNAMIC_NHS:
 		envp[i++] = env("NHRP_DESTNBMA",
-			nhrp_address_format(&peer->next_hop_address,
+			nhrp_address_format(nhrp_peer_active_nbma(peer),
 					    sizeof(tmp), tmp));
 		if (peer->mtu)
 			envp[i++] = envu32("NHRP_DESTMTU", peer->mtu);
@@ -735,7 +735,7 @@ static void nhrp_peer_script_peer_up_done(union nhrp_peer_event e, int revents)
 					       sizeof(tmp), tmp));
 
 		kernel_inject_neighbor(&peer->protocol_address,
-				       &peer->next_hop_address,
+				       nhrp_peer_active_nbma(peer),
 				       peer->interface);
 		nhrp_peer_lower_is_up(peer);
 	} else {
@@ -2223,6 +2223,7 @@ struct nhrp_peer *nhrp_peer_add_static(struct nhrp_interface *iface,
 					uint8_t prefix_length,
 					struct nhrp_address *nbma_addr,
 					const char *nbma_hostname,
+					struct nhrp_address *local_nbma_addr,
 					unsigned int flags)
 {
 	struct nhrp_peer_selector sel;
@@ -2250,6 +2251,10 @@ struct nhrp_peer *nhrp_peer_add_static(struct nhrp_interface *iface,
 			}
 			peer->next_hop_address = *nbma_addr;
 		}
+		if (local_nbma_addr != NULL)
+			peer->local_connect_address = *local_nbma_addr;
+		else
+			nhrp_address_set_type(&peer->local_connect_address, PF_UNSPEC);
 		peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
 		peer->flags = (peer->flags & ~(NHRP_PEER_FLAG_REGISTER | NHRP_PEER_FLAG_CISCO | NHRP_PEER_FLAG_REG_NON_UNIQUE)) | flags;
 
@@ -2272,6 +2277,8 @@ struct nhrp_peer *nhrp_peer_add_static(struct nhrp_interface *iface,
 		peer->nbma_hostname = strdup(nbma_hostname);
 	else if (nbma_addr != NULL)
 		peer->next_hop_address = *nbma_addr;
+	if (local_nbma_addr != NULL)
+		peer->local_connect_address = *local_nbma_addr;
 	peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
 	peer->flags |= flags | NHRP_PEER_FLAG_CONFIGURED;
 

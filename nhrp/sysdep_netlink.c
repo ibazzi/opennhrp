@@ -396,7 +396,7 @@ static void netlink_neigh_request(struct nlmsghdr *msg)
 		return;
 
 	if (peer->flags & NHRP_PEER_FLAG_UP)
-		kernel_inject_neighbor(&addr, &peer->next_hop_address, iface);
+		kernel_inject_neighbor(&addr, nhrp_peer_active_nbma(peer), iface);
 
 	if (peer->next_hop_address.type != PF_UNSPEC &&
 	    nhrp_address_cmp(&addr, &peer->protocol_address) != 0)
