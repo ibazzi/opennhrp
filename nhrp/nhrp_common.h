@@ -66,11 +66,17 @@ int kernel_send(uint8_t *packet, size_t bytes, struct nhrp_interface *out,
 int kernel_inject_neighbor(struct nhrp_address *neighbor,
 			   struct nhrp_address *hwaddr,
 			   struct nhrp_interface *dev);
+typedef void (*kernel_neighbor_callback)(void *ctx, int status);
+int kernel_inject_neighbor_async(struct nhrp_address *neighbor,
+				 struct nhrp_address *hwaddr,
+				 struct nhrp_interface *dev,
+				 kernel_neighbor_callback callback, void *ctx);
 
 int log_init(void);
 int admin_init(const char *socket);
 void server_init(void);
 int nhrp_reload_config(void);
+int nhrp_reload_managed(void);
 int nhrp_save_config(void);
 
 #endif

@@ -1,0 +1,8 @@
+#!/bin/sh
+
+bin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+bundle_dir=$(CDPATH= cd -- "$bin_dir/.." && pwd)
+LD_LIBRARY_PATH="$bundle_dir/lib"
+export LD_LIBRARY_PATH
+program=$(basename "$0")
+exec "$bin_dir/$program.bin" "$@"

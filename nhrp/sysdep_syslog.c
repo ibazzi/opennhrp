@@ -7,45 +7,50 @@
  */
 
 #include <errno.h>
+#include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
-#include <stdarg.h>
 
-#include "nhrp_defines.h"
 #include "nhrp_common.h"
+#include "nhrp_defines.h"
 
-int log_init(void)
-{
-	openlog("opennhrp", LOG_PERROR | LOG_PID, LOG_DAEMON);
+int log_init(void) {
+  int options = LOG_PID;
 
-	return TRUE;
+  /* systemd forwards stdout/stderr and syslog to the journal. Avoid
+   * duplicating every message there, while retaining foreground logging
+   * for direct and test invocations. */
+  if (getenv("JOURNAL_STREAM") == NULL)
+    options |= LOG_PERROR;
+  openlog("opennhrp", options, LOG_DAEMON);
+
+  return TRUE;
 }
 
-void nhrp_log(int level, const char *format, ...)
-{
-	va_list va;
-	int l;
+void nhrp_log(int level, const char *format, ...) {
+  va_list va;
+  int l;
 
-	switch (level) {
-	case NHRP_LOG_ERROR:
-		l = LOG_ERR;
-		break;
-	case NHRP_LOG_INFO:
-		l = LOG_INFO;
-		break;
-	case NHRP_LOG_DEBUG:
-	default:
-		l = LOG_DEBUG;
-		break;
-	}
+  switch (level) {
+  case NHRP_LOG_ERROR:
+    l = LOG_ERR;
+    break;
+  case NHRP_LOG_INFO:
+    l = LOG_INFO;
+    break;
+  case NHRP_LOG_DEBUG:
+  default:
+    l = LOG_DEBUG;
+    break;
+  }
 
-	va_start(va, format);
-	vsyslog(l, format, va);
-	va_end(va);
+  va_start(va, format);
+  vsyslog(l, format, va);
+  va_end(va);
 }
 
-void nhrp_perror(const char *message)
-{
-	nhrp_error("%s: %s", message, strerror(errno));
+void nhrp_perror(const char *message) {
+  nhrp_error("%s: %s", message, strerror(errno));
 }

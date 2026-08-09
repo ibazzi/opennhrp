@@ -1,4 +1,4 @@
-.TH OPENNHRP.CONF 5 "27 Oct 2010" "" "OpenNHRP Documentation"
+.TH OPENNHRP.CONF 5 "18 Aug 2026" "" "OpenNHRP Documentation"
 
 .SH NAME
 opennhrp.conf \- NHRP daemon configuration file
@@ -35,6 +35,56 @@ directive must be present to enable NHRP on that interface.
 .SH "INTERFACE CONTEXT"
 These configuration keywords can appear only in the interface context.
 
+.BI "enable-ha " "[member-id " id "] [advertise " nbma-address "] ..."
+.RS
+Enables managed Hub HA on this interface. Only one interface in an
+.B opennhrp
+process may enable Hub HA. Existing state is loaded from the managed state
+directory. If all managed identity files are absent, the first member is
+initialized atomically as Primary; incomplete or invalid state is rejected and
+never overwritten.
+.PP
+The member ID defaults to the hostname when it is a valid HA member ID. Up to
+four unique IPv4 addresses may be advertised in preference order. Each address
+may be used for Hub control connections and for Spoke NHRP/GRE traffic. If no
+address is specified, one defaults to the GRE local NBMA endpoint, not the
+interface protocol address. A Backup must complete
+.B opennhrpctl ha join
+before its first start with this directive.
+.PP
+An explicit address list is declarative and may be changed on any Hub. The
+member submits its own list over the authenticated Hub connection; the current
+Leader updates the manifest and replicates it to the other members. A running
+Hub applies the change after configuration reload. The configured list is a
+complete replacement, so unchanged addresses must remain in the directive.
+.PP
+The current Leader also appends the authenticated TCP source address observed
+for a member when it is not already configured. A later authenticated source
+change replaces that observed address. Explicit addresses remain preferred;
+the observed address is last and the combined list is limited to four.
+.PP
+The daemon starts and supervises the matching
+.B opennhrp-ha hub
+coordinator after the administrative socket is ready.
+.PP
+Three or more active Hubs require a Hub majority. Exactly two active Hubs may
+use an external Manager Witness; without it, one or two Hubs retain legacy
+availability-first election. Learners do not vote until registration state is
+synchronized and the Leader promotes them to active.
+.RE
+
+.BI "ha-health-target " ipv4-address
+.RS
+Adds an IPv4 ICMP Echo target for managed Hub network health. Up to four
+unique unicast targets may be configured after
+.BR enable-ha .
+Each probe round succeeds when any target replies. The interval increases from
+one to two, four, eight, then ten seconds while healthy, and returns to one
+second after a failed round. Three consecutive failed rounds isolate the Hub;
+ten consecutive successful recovery rounds allow it to rejoin. If no target is
+configured, Hub availability continues to depend only on the mGRE interface.
+.RE
+
 .BI "map " protocol-address[/prefix] " " nbma-address " [local-nbma " local-nbma-address "] [register] [no-unique] [cisco]"
 .RS
 Creates static peer mapping of
@@ -62,6 +112,29 @@ The optional keyword
 specifies that Registration Request should be sent to this peer on
 startup.
 .PP
+A static registering map also sends a non-compulsory HA capability probe.
+Ordinary Hubs ignore it and retain traditional registration behavior. A
+managed Hub returns a Hub List, causing the Spoke to keep warm registrations
+to all learned Hubs and atomically transfer ownership from the static map to
+the selected HA neighbor. The daemon starts and supervises one Spoke
+coordinator per interface.
+.PP
+When the registering bootstrap map has
+.BR local-nbma ,
+the Hub member that returned the trusted initial Hub List inherits that local
+address. The inherited address remains attached to that member across HA
+failover and failback; it does not follow the current Leader role.
+.PP
+The optional Spoke keyring is loaded automatically from
+.IR /etc/opennhrp/ha/interface.keys .
+If it exists, it must be a valid mode-0600 keyring and HA authentication is
+required. If it has never existed, discovery is allowed without authentication
+and a warning is logged; the underlay or an external secure transport must then
+provide trust. Previously authenticated state is never downgraded when the
+keyring disappears. Tests and isolated instances may override the directory
+with
+.BR OPENNHRP_HA_KEY_DIR .
+.PP
 Use
 .B no-unique
 keyword to disable setting of unique flag for registration requests.
@@ -75,6 +148,16 @@ a matching Purge Request can be sent if NBMA address has changed.
 Use
 .B no-unique
 instead on new installations.
+.RE
+
+.BI "ha-local-nbma " member-id " " local-nbma-address
+.RS
+Overrides the local kernel neighbor and tunnel destination for one HA Hub
+member learned on this interface. The member is identified by its stable HA
+member ID and does not need to have been discovered when configuration is
+loaded. Registration identity and reply validation continue to use the Hub's
+advertised NBMA address. If omitted, a non-bootstrap member uses its advertised
+NBMA address. An explicit override takes precedence over bootstrap inheritance.
 .RE
 
 .BI "dynamic-map " protocol-address/prefix " " nbma-domain-name
@@ -232,6 +315,14 @@ interface gre1
 interface eth1
   shortcut-destination
 
+.fi
+
+.PP
+Shared logical gateway Spoke example:
+.PP
+.nf
+interface gre-ha
+  map 10.20.0.1/24 150.158.214.148 register
 .fi
 
 .SH "SEE ALSO"

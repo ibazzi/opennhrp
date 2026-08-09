@@ -14,6 +14,8 @@
 
 #include "libev.h"
 #include "nhrp_common.h"
+#include "nhrp_extension.h"
+#include "nhrp_ha.h"
 #include "nhrp_packet.h"
 #include "nhrp_peer.h"
 #include "nhrp_interface.h"
@@ -42,6 +44,7 @@ static struct list_head pending_requests = LIST_INITIALIZER(pending_requests);
 static struct hlist_head rate_limit_hash[RATE_LIMIT_HASH_SIZE];
 static ev_timer rate_limit_timer;
 static int num_rate_limit_entries = 0;
+static int misdirected_registration_warned = 0;
 
 static void nhrp_packet_xmit_timeout_cb(struct ev_timer *w, int revents);
 static int unmarshall_packet_header(uint8_t **pdu, size_t *pdusize,
@@ -269,6 +272,7 @@ struct nhrp_packet *nhrp_packet_alloc(void)
 	struct nhrp_packet *packet;
 	packet = calloc(1, sizeof(struct nhrp_packet));
 	packet->ref = 1;
+	packet->max_retries = PACKET_RETRIES;
 	packet->hdr.hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT;
 	list_init(&packet->request_list_entry);
 	ev_timer_init(&packet->timeout, nhrp_packet_xmit_timeout_cb,
@@ -291,9 +295,13 @@ struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
 					   uint32_t extension, int payload_type)
 {
 	struct nhrp_payload *p;
+	uint16_t type = extension & 0x7fff;
+	int i;
 
-	p = packet->extension_by_type[extension & 0x7fff];
-	if (p != NULL) {
+	for (i = 0; i < packet->num_extensions; i++) {
+		p = &packet->extension_by_order[i];
+		if ((p->extension_type & 0x7fff) != type)
+			continue;
 		if (payload_type == NHRP_PAYLOAD_TYPE_ANY ||
 		    payload_type == p->payload_type)
 			return p;
@@ -305,10 +313,13 @@ struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
 
 	if (extension & NHRP_EXTENSION_FLAG_NOCREATE)
 		return NULL;
+	if (packet->num_extensions >= NHRP_MAX_EXTENSIONS + 1) {
+		nhrp_error("Too many NHRP extensions");
+		return NULL;
+	}
 
 	p = &packet->extension_by_order[packet->num_extensions++];
 	p->extension_type = extension & 0xffff;
-	packet->extension_by_type[extension & 0x7fff] = p;
 	if (payload_type != NHRP_PAYLOAD_TYPE_ANY)
 		nhrp_payload_set_type(p, payload_type);
 
@@ -612,6 +623,13 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 
 	pos = &pdu[extension_offset];
 	pduleft = pdusize - extension_offset;
+	if (nhrp_extension_wire_validate(pos, pduleft,
+					 NHRP_MAX_EXTENSIONS) !=
+	    NHRP_EXTENSION_WIRE_OK) {
+		nhrp_packet_send_error(packet, NHRP_ERROR_INVALID_EXTENSION,
+				       extension_offset);
+		return FALSE;
+	}
 	do {
 		struct nhrp_extension_header eh;
 		int extension_type, payload_type;
@@ -634,9 +652,14 @@ static int unmarshall_packet(uint8_t *pdu, size_t pdusize, struct nhrp_packet *p
 		    ntohs(eh.length) == 0)
 			payload_type = NHRP_PAYLOAD_TYPE_NONE;
 
-		if (!unmarshall_payload(&pos, &pduleft, packet,
+		struct nhrp_payload *extension;
+
+		extension = nhrp_packet_extension(packet, ntohs(eh.type),
+						  NHRP_PAYLOAD_TYPE_ANY);
+		if (extension == NULL ||
+		    !unmarshall_payload(&pos, &pduleft, packet,
 					payload_type, ntohs(eh.length),
-					nhrp_packet_extension(packet, ntohs(eh.type), NHRP_PAYLOAD_TYPE_ANY))) {
+					extension)) {
 			nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ERROR, pos - pdu);
 			return FALSE;
 		}
@@ -777,7 +800,7 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 			struct nhrp_interface *iface,
 			struct nhrp_address *from)
 {
-	char tmp[64];
+	char tmp[64], tmp2[64];
 	struct nhrp_packet *packet;
 	struct nhrp_address *dest;
 	struct nhrp_peer *peer;
@@ -834,7 +857,20 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
 	if (peer != NULL &&
 	    peer->type == NHRP_PEER_TYPE_LOCAL_ADDR)
 		ret = nhrp_packet_receive_local(packet);
-	else
+	else if (packet->hdr.type == NHRP_PACKET_REGISTRATION_REQUEST) {
+		if (!misdirected_registration_warned) {
+			nhrp_error("Dropping Registration Request from proto src %s to "
+				   "non-local proto dst %s on %s; check NHS address "
+				   "configuration",
+				nhrp_address_format(&packet->src_protocol_address,
+						    sizeof(tmp), tmp),
+				nhrp_address_format(&packet->dst_protocol_address,
+						    sizeof(tmp2), tmp2),
+				iface->name);
+			misdirected_registration_warned = TRUE;
+		}
+		ret = TRUE;
+	} else
 		ret = nhrp_packet_forward(packet);
 
 	packet->req_pdu = NULL;
@@ -1044,8 +1080,13 @@ int nhrp_packet_marshall_and_send(struct nhrp_packet *packet)
 				       sizeof(tmp[1]), tmp[1]),
 		   nhrp_address_format(&packet->dst_protocol_address,
 				       sizeof(tmp[2]), tmp[2]),
-		   nhrp_address_format(&packet->dst_peer->next_hop_address,
+		   nhrp_address_format(nhrp_peer_active_nbma(packet->dst_peer),
 				       sizeof(tmp[3]), tmp[3]));
+
+	if (!nhrp_ha_prepare_outgoing(packet)) {
+		nhrp_error("HA response authentication failed");
+		return FALSE;
+	}
 
 	size = marshall_packet(pdu, sizeof(pdu), packet);
 	if (size < 0) {
@@ -1054,7 +1095,7 @@ int nhrp_packet_marshall_and_send(struct nhrp_packet *packet)
 	}
 
 	if (!kernel_send(pdu, size, packet->dst_iface,
-			 &packet->dst_peer->next_hop_address))
+			 nhrp_peer_active_nbma(packet->dst_peer)))
 		return FALSE;
 
 	return TRUE;
@@ -1167,7 +1208,7 @@ static void nhrp_packet_xmit_timeout_cb(struct ev_timer *w, int revents)
 	list_del(&packet->request_list_entry);
 
 	if (packet->dst_peer != NULL &&
-	    ++packet->retry < PACKET_RETRIES) {
+	    ++packet->retry < packet->max_retries) {
 		nhrp_packet_marshall_and_send(packet);
 
 		list_add(&packet->request_list_entry, &pending_requests);
@@ -1201,6 +1242,16 @@ int nhrp_packet_send_request(struct nhrp_packet *pkt,
 	ev_timer_again(&packet->timeout);
 
 	return nhrp_packet_send(packet);
+}
+
+int nhrp_packet_send_request_timed(
+	struct nhrp_packet *pkt,
+	void (*handler)(void *ctx, struct nhrp_packet *packet), void *ctx,
+	ev_tstamp timeout, int max_retries)
+{
+	pkt->max_retries = max_retries;
+	ev_timer_set(&pkt->timeout, timeout, timeout);
+	return nhrp_packet_send_request(pkt, handler, ctx);
 }
 
 int nhrp_packet_send_error(struct nhrp_packet *error_packet,

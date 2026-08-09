@@ -14,7 +14,7 @@
 #include "nhrp_protocol.h"
 #include "nhrp_address.h"
 
-#define NHRP_MAX_EXTENSIONS		10
+#define NHRP_MAX_EXTENSIONS		16
 
 #define NHRP_PACKET_DEFAULT_HOP_COUNT	16
 
@@ -55,14 +55,16 @@ struct nhrp_packet {
 	struct nhrp_address		dst_protocol_address;
 
 	int				num_extensions;
-	struct nhrp_payload		extension_by_order[NHRP_MAX_EXTENSIONS];
-	struct nhrp_payload *		extension_by_type[NHRP_MAX_EXTENSIONS];
+	/* Slot zero is the mandatory payload. The remaining slots preserve
+	 * extension wire order. */
+	struct nhrp_payload		extension_by_order[NHRP_MAX_EXTENSIONS + 1];
 
 	struct list_head		request_list_entry;
 	struct ev_timer			timeout;
 	void				(*handler)(void *ctx, struct nhrp_packet *packet);
 	void *				handler_ctx;
 	int				retry;
+	int				max_retries;
 
 	uint8_t *			req_pdu;
 	size_t				req_pdulen;
@@ -110,6 +112,10 @@ int nhrp_packet_send(struct nhrp_packet *packet);
 int nhrp_packet_send_request(struct nhrp_packet *packet,
 			     void (*handler)(void *ctx, struct nhrp_packet *packet),
 			     void *ctx);
+int nhrp_packet_send_request_timed(
+	struct nhrp_packet *packet,
+	void (*handler)(void *ctx, struct nhrp_packet *packet), void *ctx,
+	ev_tstamp timeout, int max_retries);
 int nhrp_packet_send_error(struct nhrp_packet *error_packet,
 			   uint16_t indication_code, uint16_t offset);
 int nhrp_packet_send_traffic(struct nhrp_interface *iface,

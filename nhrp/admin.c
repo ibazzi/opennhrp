@@ -12,12 +12,15 @@
 #include <fcntl.h>
 #include <malloc.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/un.h>
 #include <sys/socket.h>
 
 #include "nhrp_common.h"
+#include "nhrp_ha.h"
+#include "nhrp_ha_hub.h"
 #include "nhrp_peer.h"
 #include "nhrp_address.h"
 #include "nhrp_interface.h"
@@ -25,11 +28,18 @@
 static struct ev_io accept_io;
 
 struct admin_remote {
+	struct list_head monitor_list_entry;
 	struct ev_timer timeout;
 	struct ev_io io;
 	int num_read;
+	int monitor;
+	int deferred;
+	int in_handler;
+	char monitor_interface[16];
 	char cmd[512];
 };
+
+static struct list_head ha_monitors = LIST_INITIALIZER(ha_monitors);
 
 static int parse_word(const char **bufptr, size_t len, char *word)
 {
@@ -67,6 +77,8 @@ static void admin_write(void *ctx, const char *format, ...)
 	va_start(ap, format);
 	len = vsnprintf(msg, sizeof(msg), format, ap);
 	va_end(ap);
+	if (len >= sizeof(msg))
+		len = sizeof(msg) - 1;
 
 	admin_raw_write(ctx, msg, len);
 }
@@ -75,11 +87,31 @@ static void admin_free_remote(struct admin_remote *rm)
 {
 	int fd = rm->io.fd;
 
+	if (list_hashed(&rm->monitor_list_entry))
+		list_del(&rm->monitor_list_entry);
 	ev_io_stop(&rm->io);
 	ev_timer_stop(&rm->timeout);
 	shutdown(fd, SHUT_RDWR);
 	close(fd);
 	free(rm);
+}
+
+void admin_ha_notify(struct nhrp_interface *iface)
+{
+	struct admin_remote *remote, *next;
+	char buffer[16384];
+	size_t length;
+
+	list_for_each_entry_safe(remote, next, &ha_monitors,
+				 monitor_list_entry) {
+		if (remote->monitor_interface[0] != 0 &&
+		    strcmp(remote->monitor_interface, iface->name) != 0)
+			continue;
+		length = nhrp_ha_render(buffer, sizeof(buffer),
+					remote->monitor_interface, TRUE);
+		if (write(remote->io.fd, buffer, length) != length)
+			admin_free_remote(remote);
+	}
 }
 
 static int admin_show_peer(void *ctx, struct nhrp_peer *peer)
@@ -530,6 +562,15 @@ static void admin_config_reload(void *ctx, const char *cmd)
 	}
 }
 
+static void admin_managed_reload(void *ctx, const char *cmd) {
+  if (nhrp_reload_managed()) {
+    admin_write(ctx, "Status: ok\n");
+  } else {
+    admin_write(ctx, "Status: failed\n"
+                     "Reason: managed-state-reload-error\n");
+  }
+}
+
 static void admin_map_add(void *ctx, const char *cmd)
 {
 	char word[64], ifname[64] = "", pstr[64] = "", nbstr[64] = "";
@@ -643,10 +684,428 @@ static void admin_config_save(void *ctx, const char *cmd)
 	}
 }
 
+static int admin_ha_parse_common(void *ctx, const char *cmd,
+				 char *interface_name, size_t interface_size,
+				 int *json)
+{
+	char keyword[64], value[64];
+
+	while (parse_word(&cmd, sizeof(keyword), keyword)) {
+		if (!parse_word(&cmd, sizeof(value), value)) {
+			admin_write(ctx, "Status: failed\nReason: missing-argument\n");
+			return FALSE;
+		}
+		if (strcmp(keyword, "interface") == 0) {
+			if (strlen(value) >= interface_size)
+				goto invalid;
+			strcpy(interface_name, value);
+		} else if (strcmp(keyword, "format") == 0 &&
+			   strcmp(value, "json") == 0 && json != NULL) {
+			*json = TRUE;
+		} else {
+		invalid:
+			admin_write(ctx, "Status: failed\nReason: invalid-argument\n");
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+static void admin_ha_show(void *ctx, const char *cmd)
+{
+	char interface_name[16] = "";
+	char buffer[16384];
+	int json = FALSE;
+	size_t length;
+
+	if (!admin_ha_parse_common(ctx, cmd, interface_name,
+				   sizeof(interface_name), &json))
+		return;
+	admin_write(ctx, "Status: ok\n\n");
+	length = nhrp_ha_render(buffer, sizeof(buffer), interface_name, json);
+	admin_raw_write(ctx, buffer, length);
+}
+
+static void admin_ha_monitor(void *ctx, const char *cmd)
+{
+	struct admin_remote *remote = ctx;
+	char buffer[16384];
+	int json = TRUE;
+	size_t length;
+
+	if (!admin_ha_parse_common(ctx, cmd, remote->monitor_interface,
+				   sizeof(remote->monitor_interface), &json))
+		return;
+	length = nhrp_ha_render(buffer, sizeof(buffer),
+				remote->monitor_interface, TRUE);
+	admin_raw_write(ctx, buffer, length);
+	remote->monitor = TRUE;
+	ev_timer_stop(&remote->timeout);
+	list_add_tail(&remote->monitor_list_entry, &ha_monitors);
+}
+
+static void admin_ha_activate_done(void *ctx, int status,
+				   const char *reason, uint32_t generation)
+{
+	struct admin_remote *remote = ctx;
+
+	if (status == 0)
+		admin_write(remote, "Status: ok\nGeneration: %u\nReason: %s\n",
+			    generation, reason);
+	else
+		admin_write(remote,
+			    "Status: failed\nReason: %s\nError: %d\nGeneration: %u\n",
+			    reason, -status, generation);
+	remote->deferred = FALSE;
+	if (!remote->in_handler)
+		admin_free_remote(remote);
+}
+
+static void admin_ha_activate(void *ctx, const char *cmd)
+{
+	struct admin_remote *remote = ctx;
+	struct nhrp_address protocol;
+	char keyword[64], value[64];
+	char interface_name[16] = "";
+	char member_id[64] = "";
+	uint32_t generation = 0;
+	int have_protocol = FALSE, have_generation = FALSE;
+	const char *reason = "invalid-argument";
+
+	while (parse_word(&cmd, sizeof(keyword), keyword)) {
+		if (!parse_word(&cmd, sizeof(value), value))
+			goto invalid;
+		if (strcmp(keyword, "interface") == 0) {
+			if (strlen(value) >= sizeof(interface_name))
+				goto invalid;
+			strcpy(interface_name, value);
+		} else if (strcmp(keyword, "protocol") == 0) {
+			if (!nhrp_address_parse(value, &protocol, NULL))
+				goto invalid;
+			have_protocol = TRUE;
+		} else if (strcmp(keyword, "member") == 0) {
+			if (strlen(value) >= sizeof(member_id))
+				goto invalid;
+			strcpy(member_id, value);
+		} else if (strcmp(keyword, "expect-generation") == 0) {
+			char *end = NULL;
+			unsigned long parsed = strtoul(value, &end, 10);
+
+			if (end == value || *end != 0 || parsed > UINT32_MAX)
+				goto invalid;
+			generation = parsed;
+			have_generation = TRUE;
+		} else {
+			goto invalid;
+		}
+	}
+	if (interface_name[0] == 0 || member_id[0] == 0 || !have_protocol ||
+	    !have_generation)
+		goto invalid;
+
+	remote->deferred = TRUE;
+	if (nhrp_ha_activate(interface_name, &protocol, member_id, generation,
+			     admin_ha_activate_done, remote, &reason))
+		return;
+	remote->deferred = FALSE;
+	admin_write(ctx, "Status: failed\nReason: %s\n", reason);
+	return;
+
+invalid:
+	admin_write(ctx, "Status: failed\nReason: invalid-argument\n");
+}
+
+static int parse_u64(const char *text, uint64_t *value)
+{
+	char *end = NULL;
+	unsigned long long parsed;
+
+	errno = 0;
+	parsed = strtoull(text, &end, 10);
+	if (errno != 0 || end == text || *end != 0)
+		return FALSE;
+	*value = parsed;
+	return TRUE;
+}
+
+static void admin_ha_hub_role(void *ctx, const char *cmd)
+{
+	struct nhrp_interface *iface = NULL;
+	enum nhrp_ha_hub_role role = NHRP_HA_HUB_UNMANAGED;
+	char keyword[64], value[64];
+	uint64_t term = 0, index = 0;
+
+	while (parse_word(&cmd, sizeof(keyword), keyword)) {
+		if (!parse_word(&cmd, sizeof(value), value))
+			goto invalid;
+		if (strcmp(keyword, "interface") == 0) {
+			iface = nhrp_interface_get_by_name(value, FALSE);
+		} else if (strcmp(keyword, "role") == 0) {
+			if (strcmp(value, "leader") == 0)
+				role = NHRP_HA_HUB_LEADER;
+			else if (strcmp(value, "standby") == 0)
+				role = NHRP_HA_HUB_STANDBY;
+			else
+				goto invalid;
+		} else if (strcmp(keyword, "term") == 0) {
+			if (!parse_u64(value, &term))
+				goto invalid;
+		} else if (strcmp(keyword, "index") == 0) {
+			if (!parse_u64(value, &index))
+				goto invalid;
+		} else {
+			goto invalid;
+		}
+	}
+	if (iface == NULL || role == NHRP_HA_HUB_UNMANAGED || term == 0 ||
+	    !nhrp_ha_hub_set_role(iface, role, term, index))
+		goto invalid;
+	admin_write(ctx, "Status: ok\n");
+	return;
+
+invalid:
+	admin_write(ctx, "Status: failed\nReason: invalid-argument\n");
+}
+
+static void admin_ha_hub_show(void *ctx, const char *cmd)
+{
+	struct nhrp_interface *iface = NULL;
+	char keyword[64], value[64];
+	char buffer[2048];
+	int json = FALSE;
+	size_t length;
+
+	while (parse_word(&cmd, sizeof(keyword), keyword)) {
+		if (!parse_word(&cmd, sizeof(value), value))
+			goto invalid;
+		if (strcmp(keyword, "interface") == 0)
+			iface = nhrp_interface_get_by_name(value, FALSE);
+		else if (strcmp(keyword, "format") == 0 &&
+			 strcmp(value, "json") == 0)
+			json = TRUE;
+		else
+			goto invalid;
+	}
+	if (iface == NULL)
+		goto invalid;
+	admin_write(ctx, "Status: ok\n\n");
+	length = nhrp_ha_hub_status_render(iface, buffer, sizeof(buffer), json);
+	admin_raw_write(ctx, buffer, length);
+	return;
+
+invalid:
+	admin_write(ctx, "Status: failed\nReason: invalid-argument\n");
+}
+
+static void admin_ha_cluster_set(void *ctx, const char *cmd)
+{
+	struct nhrp_interface *iface = NULL;
+	char keyword[64], value[64], leader[64] = "";
+	uint64_t term = 0, commit_index = 0;
+
+	while (parse_word(&cmd, sizeof(keyword), keyword)) {
+		if (!parse_word(&cmd, sizeof(value), value))
+			goto invalid;
+		if (strcmp(keyword, "interface") == 0)
+			iface = nhrp_interface_get_by_name(value, FALSE);
+		else if (strcmp(keyword, "term") == 0) {
+			if (!parse_u64(value, &term))
+				goto invalid;
+		} else if (strcmp(keyword, "commit-index") == 0) {
+			if (!parse_u64(value, &commit_index))
+				goto invalid;
+		} else if (strcmp(keyword, "leader") == 0) {
+			if (strlen(value) >= sizeof(leader))
+				goto invalid;
+			strcpy(leader, value);
+		} else
+			goto invalid;
+	}
+	if (iface == NULL || leader[0] == 0 ||
+	    !nhrp_ha_set_cluster_state(iface, term, commit_index, leader))
+		goto invalid;
+	admin_write(ctx, "Status: ok\n");
+	return;
+
+invalid:
+	admin_write(ctx, "Status: failed\nReason: invalid-argument\n");
+}
+
+static void admin_ha_registration_snapshot(void *ctx, const char *cmd)
+{
+	struct nhrp_interface *iface = NULL;
+	char keyword[64], value[64];
+	char digest[65];
+	char *buffer;
+	uint64_t parsed;
+	size_t offset = 0, limit = 128, total, length;
+
+	while (parse_word(&cmd, sizeof(keyword), keyword)) {
+		if (!parse_word(&cmd, sizeof(value), value))
+			goto invalid;
+		if (strcmp(keyword, "interface") == 0) {
+			iface = nhrp_interface_get_by_name(value, FALSE);
+		} else if (strcmp(keyword, "offset") == 0) {
+			if (!parse_u64(value, &parsed) || parsed > 4096)
+				goto invalid;
+			offset = parsed;
+		} else if (strcmp(keyword, "limit") == 0) {
+			if (!parse_u64(value, &parsed) || parsed == 0 || parsed > 128)
+				goto invalid;
+			limit = parsed;
+		} else {
+			goto invalid;
+		}
+	}
+	if (iface == NULL)
+		goto invalid;
+	buffer = malloc(65536);
+	if (buffer == NULL) {
+		admin_write(ctx, "Status: failed\nReason: out-of-memory\n");
+		return;
+	}
+	length = nhrp_ha_hub_snapshot_render(iface, buffer, 65536, offset,
+					      limit, &total, digest);
+	admin_write(ctx,
+		    "Status: ok\nTotal: %zu\nOffset: %zu\nCount: %zu\n"
+		    "More: %s\nDigest: %s\n\n",
+		    total, offset, total > offset ? (total - offset > limit ? limit : total - offset) : 0,
+		    offset + limit < total ? "yes" : "no", digest);
+	admin_raw_write(ctx, buffer, length);
+	free(buffer);
+	return;
+
+invalid:
+	admin_write(ctx, "Status: failed\nReason: invalid-argument\n");
+}
+
+static void admin_ha_registration_sync_begin(void *ctx, const char *cmd)
+{
+	struct nhrp_interface *iface = NULL;
+	char keyword[64], value[64];
+	uint64_t term = 0, index = 0;
+
+	while (parse_word(&cmd, sizeof(keyword), keyword)) {
+		if (!parse_word(&cmd, sizeof(value), value))
+			goto invalid;
+		if (strcmp(keyword, "interface") == 0)
+			iface = nhrp_interface_get_by_name(value, FALSE);
+		else if (strcmp(keyword, "term") == 0) {
+			if (!parse_u64(value, &term))
+				goto invalid;
+		} else if (strcmp(keyword, "index") == 0) {
+			if (!parse_u64(value, &index))
+				goto invalid;
+		} else
+			goto invalid;
+	}
+	if (iface == NULL || !nhrp_ha_hub_sync_begin(iface, term, index))
+		goto invalid;
+	admin_write(ctx, "Status: ok\n");
+	return;
+
+invalid:
+	admin_write(ctx, "Status: failed\nReason: invalid-argument\n");
+}
+
+static void admin_ha_registration_sync_apply(void *ctx, const char *cmd)
+{
+	struct nhrp_interface *iface = NULL;
+	struct nhrp_address protocol, address;
+	struct nhrp_ha_hub_binding binding;
+	char keyword[64], value[64];
+	uint8_t prefix = 0;
+	uint64_t parsed;
+	int have_protocol = FALSE, have_nbma = FALSE;
+
+	memset(&binding, 0, sizeof(binding));
+	nhrp_address_set_type(&binding.nat_oa, PF_UNSPEC);
+	while (parse_word(&cmd, sizeof(keyword), keyword)) {
+		if (!parse_word(&cmd, sizeof(value), value))
+			goto invalid;
+		if (strcmp(keyword, "interface") == 0) {
+			iface = nhrp_interface_get_by_name(value, FALSE);
+		} else if (strcmp(keyword, "protocol") == 0) {
+			if (!nhrp_address_parse(value, &protocol, &prefix))
+				goto invalid;
+			have_protocol = TRUE;
+		} else if (strcmp(keyword, "nbma") == 0) {
+			if (!nhrp_address_parse(value, &binding.nbma, NULL))
+				goto invalid;
+			have_nbma = TRUE;
+		} else if (strcmp(keyword, "nat-oa") == 0) {
+			if (strcmp(value, "-") != 0) {
+				if (!nhrp_address_parse(value, &address, NULL))
+					goto invalid;
+				binding.nat_oa = address;
+			}
+		} else if (strcmp(keyword, "mtu") == 0) {
+			if (!parse_u64(value, &parsed) || parsed > UINT16_MAX)
+				goto invalid;
+			binding.mtu = parsed;
+		} else if (strcmp(keyword, "holding") == 0) {
+			if (!parse_u64(value, &parsed) || parsed == 0 ||
+			    parsed > UINT16_MAX)
+				goto invalid;
+			binding.holding_time = parsed;
+		} else if (strcmp(keyword, "flags") == 0) {
+			if (!parse_u64(value, &parsed) || parsed > UINT32_MAX)
+				goto invalid;
+			binding.flags = parsed;
+		} else if (strcmp(keyword, "term") == 0) {
+			if (!parse_u64(value, &binding.term))
+				goto invalid;
+		} else if (strcmp(keyword, "index") == 0) {
+			if (!parse_u64(value, &binding.index))
+				goto invalid;
+		} else {
+			goto invalid;
+		}
+	}
+	if (iface == NULL || !have_protocol || !have_nbma ||
+	    !nhrp_ha_hub_sync_apply(iface, &protocol, prefix, &binding))
+		goto invalid;
+	admin_write(ctx, "Status: ok\n");
+	return;
+
+invalid:
+	admin_write(ctx, "Status: failed\nReason: invalid-argument\n");
+}
+
+static void admin_ha_registration_sync_end(void *ctx, const char *cmd)
+{
+	struct nhrp_interface *iface = NULL;
+	char keyword[64], value[64];
+
+	while (parse_word(&cmd, sizeof(keyword), keyword)) {
+		if (!parse_word(&cmd, sizeof(value), value) ||
+		    strcmp(keyword, "interface") != 0)
+			goto invalid;
+		iface = nhrp_interface_get_by_name(value, FALSE);
+	}
+	if (iface == NULL || !nhrp_ha_hub_sync_end(iface))
+		goto invalid;
+	admin_write(ctx, "Status: ok\n");
+	return;
+
+invalid:
+	admin_write(ctx, "Status: failed\nReason: invalid-argument\n");
+}
+
 static struct {
 	const char *command;
 	void (*handler)(void *ctx, const char *cmd);
 } admin_handler[] = {
+	{ "ha registration sync apply", admin_ha_registration_sync_apply },
+	{ "ha registration sync begin", admin_ha_registration_sync_begin },
+	{ "ha registration sync end", admin_ha_registration_sync_end },
+	{ "ha registration snapshot", admin_ha_registration_snapshot },
+	{ "ha cluster set", admin_ha_cluster_set },
+	{ "ha hub role", admin_ha_hub_role },
+	{ "ha hub show", admin_ha_hub_show },
+	{ "ha activate", admin_ha_activate },
+	{ "ha monitor", admin_ha_monitor },
+	{ "ha show", admin_ha_show },
 	{ "route show",		admin_route_show },
 	{ "show",		admin_cache_show },
 	{ "cache show",		admin_cache_show },
@@ -660,6 +1119,7 @@ static struct {
 	{ "interface show",	admin_interface_show },
 	{ "redirect purge",	admin_redirect_purge },
 	{ "update nbma",	admin_update_nbma },
+	{ "ha managed reload", admin_managed_reload },
 	{ "reload",		admin_config_reload },
 	{ "config reload",	admin_config_reload },
 	{ "map add",		admin_map_add },
@@ -694,7 +1154,9 @@ static void admin_receive_cb(struct ev_io *w, int revents)
 		if (rm->num_read >= cmdlen &&
 		    strncasecmp(rm->cmd, admin_handler[i].command, cmdlen) == 0) {
 			nhrp_debug("Admin: %s", rm->cmd);
+			rm->in_handler = TRUE;
 			admin_handler[i].handler(rm, &rm->cmd[cmdlen]);
+			rm->in_handler = FALSE;
 			break;
 		}
 	}
@@ -703,6 +1165,8 @@ static void admin_receive_cb(struct ev_io *w, int revents)
 			    "Status: error\n"
 			    "Reason: unrecognized command\n");
 	}
+	if (rm->monitor || rm->deferred)
+		return;
 
 err:
 	admin_free_remote(rm);
@@ -724,8 +1188,10 @@ static void admin_accept_cb(ev_io *w, int revents)
 	if (cnx < 0)
 		return;
 	fcntl(cnx, F_SETFD, FD_CLOEXEC);
+	fcntl(cnx, F_SETFL, O_NONBLOCK);
 
 	rm = calloc(1, sizeof(struct admin_remote));
+	list_init(&rm->monitor_list_entry);
 
 	ev_io_init(&rm->io, admin_receive_cb, cnx, EV_READ);
 	ev_io_start(&rm->io);
@@ -740,7 +1206,13 @@ int admin_init(const char *opennhrp_socket)
 
 	memset(&sun, 0, sizeof(sun));
 	sun.sun_family = AF_UNIX;
-	strncpy(sun.sun_path, opennhrp_socket, sizeof(sun.sun_path));
+	if (strlen(opennhrp_socket) >= sizeof(sun.sun_path)) {
+		errno = ENAMETOOLONG;
+		nhrp_error("Failed initialize admin socket [%s]: %s",
+			   opennhrp_socket, strerror(errno));
+		return 0;
+	}
+	strcpy(sun.sun_path, opennhrp_socket);
 
 	fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (fd < 0)

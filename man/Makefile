@@ -1,5 +1,5 @@
 MAN5PAGES = opennhrp.conf.5
-MAN8PAGES = opennhrp.8 opennhrpctl.8 opennhrp-script.8
+MAN8PAGES = opennhrp.8 opennhrpctl.8 opennhrp-script.8 opennhrp-ha.8
 
 install:
 	$(INSTALLDIR) $(DESTDIR)$(MANDIR)/man5 $(DESTDIR)$(MANDIR)/man8

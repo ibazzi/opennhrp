@@ -30,6 +30,7 @@ struct nhrp_interface {
 	unsigned int holding_time;
 	struct nhrp_buffer *auth_token;
 	unsigned int route_table;
+	char ha_member_id[64];
 
 	/* Cached from kernel interface */
 	unsigned int index, link_index;
