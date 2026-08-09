@@ -64,6 +64,53 @@ static struct netlink_fd netlink_fds[ARRAY_SIZE(netlink_groups)];
 
 static struct ev_io packet_io;
 
+struct neighbor_transaction {
+	int active;
+	uint32_t sequence;
+	kernel_neighbor_callback callback;
+	void *ctx;
+	struct ev_timer timeout;
+};
+
+static struct neighbor_transaction neighbor_transaction;
+
+static void neighbor_transaction_complete(int status)
+{
+	kernel_neighbor_callback callback = neighbor_transaction.callback;
+	void *ctx = neighbor_transaction.ctx;
+
+	ev_timer_stop(&neighbor_transaction.timeout);
+	neighbor_transaction.active = FALSE;
+	neighbor_transaction.callback = NULL;
+	neighbor_transaction.ctx = NULL;
+	if (callback != NULL)
+		callback(ctx, status);
+}
+
+static void neighbor_transaction_timeout_cb(struct ev_timer *timer,
+					     int revents)
+{
+	neighbor_transaction_complete(-ETIMEDOUT);
+}
+
+static int netlink_process_ack(struct netlink_fd *fd, struct nlmsghdr *msg)
+{
+	struct nlmsgerr *error;
+
+	if (fd != &talk_fd || !neighbor_transaction.active ||
+	    msg->nlmsg_type != NLMSG_ERROR ||
+	    msg->nlmsg_seq != neighbor_transaction.sequence)
+		return FALSE;
+	if (msg->nlmsg_len < NLMSG_LENGTH(sizeof(struct nlmsgerr))) {
+		neighbor_transaction_complete(-EPROTO);
+		return TRUE;
+	}
+
+	error = NLMSG_DATA(msg);
+	neighbor_transaction_complete(error->error);
+	return TRUE;
+}
+
 static uint16_t translate_mtu(uint16_t mtu)
 {
 	/* if mtu is ethernet standard, do not advertise it
@@ -140,7 +187,9 @@ static int netlink_receive(struct netlink_fd *fd, struct nlmsghdr *reply)
 
 		h = (struct nlmsghdr *) buf;
 		while (NLMSG_OK(h, status)) {
-			if (reply != NULL &&
+			if (netlink_process_ack(fd, h)) {
+				/* handled by asynchronous transaction */
+			} else if (reply != NULL &&
 			    h->nlmsg_seq == reply->nlmsg_seq) {
 				len = h->nlmsg_len;
 				if (len > reply->nlmsg_len) {
@@ -946,6 +995,9 @@ int kernel_init(void)
 {
 	int fd, i;
 
+	ev_timer_init(&neighbor_transaction.timeout,
+		      neighbor_transaction_timeout_cb, 1.0, 0.0);
+
 	proc_icmp_redirect_off("all");
 
 	fd = socket(PF_PACKET, SOCK_DGRAM, ETHPROTO_NHRP);
@@ -998,6 +1050,9 @@ void kernel_stop_listening(void)
 void kernel_cleanup(void)
 {
 	int i;
+
+	if (neighbor_transaction.active)
+		neighbor_transaction_complete(-ECANCELED);
 
 	for (i = 0; i < ARRAY_SIZE(netlink_groups); i++)
 		netlink_close(&netlink_fds[i]);
@@ -1162,3 +1217,42 @@ int kernel_inject_neighbor(struct nhrp_address *neighbor,
 	return netlink_send(&talk_fd, &req.n);
 }
 
+int kernel_inject_neighbor_async(struct nhrp_address *neighbor,
+				 struct nhrp_address *hwaddr,
+				 struct nhrp_interface *dev,
+				 kernel_neighbor_callback callback, void *ctx)
+{
+	struct {
+		struct nlmsghdr n;
+		struct ndmsg ndm;
+		char buf[256];
+	} req;
+
+	if (neighbor_transaction.active || talk_fd.fd <= 0 || hwaddr == NULL ||
+	    hwaddr->type == PF_UNSPEC)
+		return FALSE;
+
+	memset(&req, 0, sizeof(req));
+	req.n.nlmsg_len = NLMSG_LENGTH(sizeof(struct ndmsg));
+	req.n.nlmsg_flags = NLM_F_REQUEST | NLM_F_REPLACE | NLM_F_CREATE |
+			      NLM_F_ACK;
+	req.n.nlmsg_type = RTM_NEWNEIGH;
+	req.ndm.ndm_family = neighbor->type;
+	req.ndm.ndm_ifindex = dev->index;
+	req.ndm.ndm_type = RTN_UNICAST;
+	req.ndm.ndm_state = NUD_REACHABLE;
+
+	if (!netlink_add_rtattr_l(&req.n, sizeof(req), NDA_DST,
+				  neighbor->addr, neighbor->addr_len) ||
+	    !netlink_add_rtattr_l(&req.n, sizeof(req), NDA_LLADDR,
+				  hwaddr->addr, hwaddr->addr_len) ||
+	    !netlink_send(&talk_fd, &req.n))
+		return FALSE;
+
+	neighbor_transaction.active = TRUE;
+	neighbor_transaction.sequence = req.n.nlmsg_seq;
+	neighbor_transaction.callback = callback;
+	neighbor_transaction.ctx = ctx;
+	ev_timer_start(&neighbor_transaction.timeout);
+	return TRUE;
+}

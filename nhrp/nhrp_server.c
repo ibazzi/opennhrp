@@ -10,6 +10,8 @@
 #include <netinet/in.h>
 
 #include "nhrp_common.h"
+#include "nhrp_ha_hub.h"
+#include "nhrp_ha.h"
 #include "nhrp_packet.h"
 #include "nhrp_interface.h"
 #include "nhrp_peer.h"
@@ -31,6 +33,15 @@ static struct list_head request_list = LIST_INITIALIZER(request_list);
 static int num_pending_requests = 0;
 
 static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr);
+
+static int nhrp_server_is_ha_registration(struct nhrp_packet *packet)
+{
+	return packet->src_iface != NULL &&
+	       packet->src_iface->ha_member_id[0] != 0 &&
+	       nhrp_packet_extension(
+		       packet, NHRP_EXTENSION_HA | NHRP_EXTENSION_FLAG_NOCREATE,
+		       NHRP_PAYLOAD_TYPE_RAW) != NULL;
+}
 
 static struct nhrp_pending_request *
 nhrp_server_record_request(struct nhrp_packet *packet)
@@ -92,6 +103,33 @@ static int nhrp_server_request_pending(struct nhrp_packet *packet)
 	return FALSE;
 }
 
+static struct nhrp_peer *ha_probe_reply_peer(struct nhrp_packet *packet)
+{
+	struct nhrp_peer *peer = nhrp_peer_alloc(packet->src_iface);
+
+	if (peer == NULL)
+		return NULL;
+	peer->type = NHRP_PEER_TYPE_DYNAMIC;
+	peer->flags = NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP |
+		      NHRP_PEER_FLAG_REPLACED;
+	peer->interface = packet->src_iface;
+	peer->afnum = packet->hdr.afnum;
+	peer->protocol_type = packet->hdr.protocol_type;
+	peer->protocol_address = packet->src_protocol_address;
+	peer->prefix_length = packet->src_protocol_address.addr_len * 8;
+	peer->next_hop_address = packet->src_linklayer_address;
+	if (packet->src_iface->nbma_address.type != PF_UNSPEC) {
+		peer->my_nbma_address = packet->src_iface->nbma_address;
+		peer->my_nbma_mtu = packet->src_iface->nbma_mtu;
+	} else if (!kernel_route(NULL, &peer->next_hop_address,
+				 &peer->my_nbma_address, NULL,
+				 &peer->my_nbma_mtu)) {
+		nhrp_peer_put(peer);
+		return NULL;
+	}
+	return peer;
+}
+
 static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 {
 	char tmp[64], tmp2[64];
@@ -99,12 +137,24 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	struct nhrp_peer *peer = packet->dst_peer;
 	struct nhrp_peer_selector sel;
 	struct nhrp_cie *cie;
+	int ha_probe;
 
-	nhrp_info("Received Resolution Request from proto src %s to %s",
-		  nhrp_address_format(&packet->src_protocol_address,
-				      sizeof(tmp), tmp),
-		  nhrp_address_format(&packet->dst_protocol_address,
-				      sizeof(tmp2), tmp2));
+	ha_probe = nhrp_ha_prepare_probe_reply(packet);
+	if (!ha_probe)
+		return TRUE;
+
+	if (ha_probe != 2)
+		nhrp_info("Received Resolution Request from proto src %s to %s",
+			  nhrp_address_format(&packet->src_protocol_address,
+					      sizeof(tmp), tmp),
+			  nhrp_address_format(&packet->dst_protocol_address,
+					      sizeof(tmp2), tmp2));
+	else
+		nhrp_debug("Received HA Resolution Probe from proto src %s to %s",
+			   nhrp_address_format(&packet->src_protocol_address,
+					       sizeof(tmp), tmp),
+			   nhrp_address_format(&packet->dst_protocol_address,
+					       sizeof(tmp2), tmp2));
 
 	/* As first thing, flush all negative entries for the
 	 * requestor */
@@ -145,21 +195,39 @@ static int nhrp_handle_resolution_request(struct nhrp_packet *packet)
 	nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	nhrp_payload_add_cie(payload, cie);
 
-	if (!nhrp_packet_reroute(packet, NULL))
+	if (ha_probe == 2) {
+		struct nhrp_peer *direct = ha_probe_reply_peer(packet);
+
+		if (direct == NULL || !nhrp_packet_reroute(packet, direct)) {
+			if (direct != NULL)
+				nhrp_peer_put(direct);
+			return FALSE;
+		}
+		nhrp_peer_put(direct);
+	} else if (!nhrp_packet_reroute(packet, NULL)) {
 		return FALSE;
+	}
 
 	peer = packet->dst_peer;
 	cie->hdr.mtu = htons(peer->my_nbma_mtu);
 	cie->nbma_address = peer->my_nbma_address;
 	cie->protocol_address = packet->dst_iface->protocol_address;
 
-	nhrp_info("Sending Resolution Reply %s/%d is-at %s (holdtime %d)",
-		  nhrp_address_format(&packet->dst_protocol_address,
-				      sizeof(tmp), tmp),
-		  cie->hdr.prefix_length,
-		  nhrp_address_format(&cie->nbma_address,
-				      sizeof(tmp2), tmp2),
-		  ntohs(cie->hdr.holding_time));
+	if (ha_probe != 2)
+		nhrp_info("Sending Resolution Reply %s/%d is-at %s (holdtime %d)",
+			  nhrp_address_format(&packet->dst_protocol_address,
+					      sizeof(tmp), tmp),
+			  cie->hdr.prefix_length,
+			  nhrp_address_format(&cie->nbma_address,
+					      sizeof(tmp2), tmp2),
+			  ntohs(cie->hdr.holding_time));
+	else
+		nhrp_debug("Sending HA Resolution Probe Reply %s/%d is-at %s",
+			   nhrp_address_format(&packet->dst_protocol_address,
+					       sizeof(tmp), tmp),
+			   cie->hdr.prefix_length,
+			   nhrp_address_format(&cie->nbma_address,
+					       sizeof(tmp2), tmp2));
 
 	/* Reset NAT header to regenerate it for reply */
 	payload = nhrp_packet_extension(packet,
@@ -201,15 +269,24 @@ static void nhrp_server_finish_reg(struct nhrp_pending_request *pr)
 {
 	char tmp[64], tmp2[64];
 	struct nhrp_packet *packet = pr->packet;
+	int ha_registration = nhrp_server_is_ha_registration(packet);
 
 	if (pr->rpeer != NULL &&
 	    nhrp_packet_reroute(packet, pr->rpeer)) {
-		nhrp_info("Sending Registration Reply from proto src %s to %s (%d bindings accepted, %d rejected)",
-			  nhrp_address_format(&packet->dst_protocol_address,
-					      sizeof(tmp), tmp),
-			  nhrp_address_format(&packet->src_protocol_address,
-					      sizeof(tmp2), tmp2),
-			  pr->num_ok, pr->num_error);
+		if (ha_registration && pr->num_error == 0)
+			nhrp_debug("Sending HA Registration Reply from proto src %s to %s (%d bindings accepted, 0 rejected)",
+				   nhrp_address_format(&packet->dst_protocol_address,
+						       sizeof(tmp), tmp),
+				   nhrp_address_format(&packet->src_protocol_address,
+						       sizeof(tmp2), tmp2),
+				   pr->num_ok);
+		else
+			nhrp_info("Sending Registration Reply from proto src %s to %s (%d bindings accepted, %d rejected)",
+				  nhrp_address_format(&packet->dst_protocol_address,
+						      sizeof(tmp), tmp),
+				  nhrp_address_format(&packet->src_protocol_address,
+						      sizeof(tmp2), tmp2),
+				  pr->num_ok, pr->num_error);
 
 		nhrp_packet_send(packet);
 	} else {
@@ -242,20 +319,32 @@ static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e, int revents)
 	peer->request = NULL;
 	nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp);
 	if (revents != 0 && nhrp_peer_event_ok(e, revents)) {
+		int project = nhrp_ha_hub_capture_direct(peer);
+
+		if (project < 0) {
+			pr->num_error++;
+			cie->hdr.code = NHRP_CODE_INSUFFICIENT_RESOURCES;
+			peer->flags |= NHRP_PEER_FLAG_REPLACED;
+			goto registration_complete;
+		}
 		nhrp_debug("[%s] Peer registration authorized", tmp);
 
-		/* Remove all old stuff and accept registration */
-		memset(&sel, 0, sizeof(sel));
-		sel.flags = NHRP_PEER_FIND_EXACT;
-		sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
-		sel.interface = packet->src_iface;
-		sel.protocol_address = peer->protocol_address;
-		sel.prefix_length = peer->prefix_length;
-		nhrp_peer_foreach(remove_old_registrations, peer, &sel);
+		if (project) {
+			/* Remove all old stuff and accept registration */
+			memset(&sel, 0, sizeof(sel));
+			sel.flags = NHRP_PEER_FIND_EXACT;
+			sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
+			sel.interface = packet->src_iface;
+			sel.protocol_address = peer->protocol_address;
+			sel.prefix_length = peer->prefix_length;
+			nhrp_peer_foreach(remove_old_registrations, peer, &sel);
+			nhrp_peer_insert(peer);
+		} else {
+			peer->flags |= NHRP_PEER_FLAG_REPLACED;
+		}
 
 		pr->num_ok++;
 		cie->hdr.code = NHRP_CODE_SUCCESS;
-		nhrp_peer_insert(peer);
 	} else {
 		if (revents == 0)
 			nhrp_error("[%s] Peer registration failed: "
@@ -270,6 +359,7 @@ static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e, int revents)
 		cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
 		peer->flags |= NHRP_PEER_FLAG_REPLACED;
 	}
+registration_complete:
 	if (pr->rpeer == NULL)
 		pr->rpeer = nhrp_peer_get(peer);
 
@@ -334,7 +424,9 @@ static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr)
 
 	memset(&sel, 0, sizeof(sel));
 	sel.flags = NHRP_PEER_FIND_EXACT;
-	sel.type_mask = ~NHRP_PEER_TYPEMASK_REMOVABLE;
+	sel.type_mask = NHRP_PEER_TYPEMASK_ALL &
+		~(NHRP_PEER_TYPEMASK_REMOVABLE |
+		  BIT(NHRP_PEER_TYPE_LOCAL_ROUTE));
 	sel.interface = packet->src_iface;
 	sel.protocol_address = peer->protocol_address;
 	sel.prefix_length = peer->prefix_length;
@@ -361,12 +453,25 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	struct nhrp_cie *cie;
 	struct nhrp_pending_request *pr;
 	int natted = 0;
+	int ha_registration = nhrp_server_is_ha_registration(packet);
 
-	nhrp_info("Received Registration Request from proto src %s to %s",
-		  nhrp_address_format(&packet->src_protocol_address,
-				      sizeof(tmp), tmp),
-		  nhrp_address_format(&packet->dst_protocol_address,
-				      sizeof(tmp2), tmp2));
+	if (ha_registration)
+		nhrp_debug("Received HA Registration Request from proto src %s to %s",
+			   nhrp_address_format(&packet->src_protocol_address,
+					       sizeof(tmp), tmp),
+			   nhrp_address_format(&packet->dst_protocol_address,
+					       sizeof(tmp2), tmp2));
+	else
+		nhrp_info("Received Registration Request from proto src %s to %s",
+			  nhrp_address_format(&packet->src_protocol_address,
+					      sizeof(tmp), tmp),
+			  nhrp_address_format(&packet->dst_protocol_address,
+					      sizeof(tmp2), tmp2));
+
+	if (!nhrp_ha_prepare_registration_reply(packet)) {
+		nhrp_debug("Registration request has invalid HA member data");
+		return TRUE;
+	}
 
 	if (nhrp_server_request_pending(packet)) {
 		nhrp_info("Already processing: resent packet ignored.");

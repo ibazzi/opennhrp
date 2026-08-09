@@ -89,11 +89,13 @@ struct nhrp_interface *nhrp_interface_get_by_name(const char *name, int create)
 
 	if (!create)
 		return NULL;
+	if (strlen(name) >= sizeof(iface->name))
+		return NULL;
 
 	iface = calloc(1, sizeof(struct nhrp_interface));
 	iface->holding_time = NHRP_DEFAULT_HOLDING_TIME;
 	iface->route_table = RT_TABLE_MAIN;
-	strncpy(iface->name, name, sizeof(iface->name));
+	strcpy(iface->name, name);
 
 	list_init(&iface->peer_list);
 	list_init(&iface->mcast_list);

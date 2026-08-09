@@ -1,4 +1,4 @@
-.TH OPENNHRP 8 "20 May 2009" "" "OpenNHRP Documentation"
+.TH OPENNHRPCTL 8 "18 Aug 2026" "" "OpenNHRP Documentation"
 
 .SH NAME
 opennhrpctl \- opennhrp administrative control tool
@@ -19,6 +19,150 @@ Administration priviledges for a non-root user can be granted by modifying
 the permissions and ownership of the socket.
 
 The following commands are available:
+
+.BI "ha cluster init --interface " interface-name " --member-id " member-id " --advertise-address " address " ..."
+.RS
+Initialize a managed cluster. The shared protocol address and prefix are
+derived from the interface's unique active IPv4 address. The command creates a
+cluster ID, keyring, identity, member manifest, and authenticated state without
+overwriting an existing managed cluster. The initial member has priority 100
+and becomes the term 1 leader.
+.RE
+
+.BI "ha invite create --member-id " member-id " [--priority " priority "] [--expires " duration "] [--format plain]"
+.br
+.B "ha invite list"
+.br
+.BI "ha invite revoke --id-prefix " prefix
+.br
+.BI "ha invite delete --id-prefix " prefix
+.RS
+Create, inspect, revoke, or permanently delete a signed one-time enrollment
+Invite. Delete accepts unused, expired, claimed, and revoked Invites, but only
+on the current Leader; deleting a claimed Invite does not remove its Hub
+member. Creation does not take an interface argument. Invite output contains a
+secret and must be handled as sensitive input; list output exposes only an ID
+prefix and metadata.
+.RE
+
+.BI "ha join --interface " interface-name " [--advertise-address " address "] ..."
+.RS
+Join a managed cluster using an Invite read from standard input. Interactive
+input is read without echo; non-interactive input consumes one line. The Invite
+cannot be passed in argv. The local interface address and prefix must exactly
+match the shared protocol address in the Invite.
+Up to four addresses may be supplied in preference order. The Leader merges
+them with the authenticated TCP source address observed during enrollment.
+.RE
+
+.B "ha members show"
+.br
+.BI "ha member set " member-id " --priority " priority
+.br
+.BI "ha member set " member-id " --advertise-address " address " ..."
+.br
+.BI "ha member enable " member-id
+.br
+.BI "ha member disable " member-id
+.br
+.BI "ha member remove " member-id
+.RS
+Inspect and modify the managed member manifest. A member must be disabled
+before removal. The current leader cannot be disabled, and the fixed Primary
+cannot be removed.
+Enabling a disabled member returns it as a learner; it becomes active only
+after catching up with the Leader.
+When one or more advertised addresses are supplied, they atomically replace
+the member's configured address list; an automatically observed address is
+retained when it remains distinct and the combined list has room.
+.RE
+
+.B "ha leave"
+.br
+.B "ha destroy --force"
+.RS
+A non-Primary member may ask the current Leader to remove it from the signed
+manifest. A Leader must transfer leadership before leaving. After the Leader
+acknowledges the removal, the member is fenced, its local managed state is
+deleted, and its coordinator is stopped.
+The fixed Primary cannot leave; it may destroy the cluster only while it is the
+current Leader and every remaining member is connected and authenticated.
+Destroy requires the explicit
+.B --force
+argument and sends an authenticated destroy command to every member before
+removing the Primary's local state. These two commands use the default Hub
+coordinator socket automatically; use
+.B -a
+for a non-default coordinator socket. Remove
+.B enable-ha
+from configuration before restarting
+.BR opennhrp ,
+otherwise the configuration requests creation of new managed HA state.
+.RE
+
+.BI "ha key export-spoke --output " absolute-file
+.br
+.B "ha key rotate prepare"
+.br
+.B "ha key rotate commit"
+.RS
+Export the cluster authentication keyring for a Spoke or perform a two-key
+rotation. Secret key material is never included in status JSON.
+Copy an exported keyring through a trusted channel to
+.IR /etc/opennhrp/ha/interface.keys
+on the Spoke and set owner-only mode 0600. The map configuration itself does
+not contain a keyring path.
+.RE
+
+.BI "ha show interface " interface-name " [format json]"
+.RS
+Show shared gateway services, activation and internal Hub List revisions, list
+source, active member, candidate origin, effective local NBMA and its source,
+per-candidate warm registration, and adaptive probe state.
+.RE
+
+.BI "ha monitor interface " interface-name
+.RS
+Keep the management connection open and stream one JSON object whenever HA
+state changes. This is the input used by
+.BR opennhrp-ha (8).
+.RE
+
+.B "ha cluster show --format json"
+.br
+.B "ha witness show --format json"
+.br
+.B "ha replication show --format json"
+.br
+.B "ha key status --format json"
+.br
+.B "ha failback request [force]"
+.br
+.B "ha failback show --format json"
+.RS
+When directed to the Hub coordinator control socket, show term/Leader,
+quorum, Witness, replication commit/match/digest, key, and failback state, or
+request a safe failback. Managed Backup Leaders automatically transfer
+leadership after the Primary is authenticated and healthy for 120 seconds and
+registration state is synchronized. The JSON view reports health,
+synchronization, pending transfer, probation, and backoff state. Force skips
+time gates only; authentication, health, replication synchronization, quorum,
+and the authenticated leadership transfer remain mandatory.
+.RE
+
+.BI "ha witness prepare epoch " 32-hex-epoch
+.br
+.BI "ha witness activate epoch " 32-hex-epoch
+.br
+.BI "ha witness lease epoch " 32-hex-epoch " term " term " holder " member-id " sequence " sequence " ttl-ms " milliseconds
+.RS
+Manager-facing commands for an exactly two-active-Hub cluster. Send each
+command to every Hub coordinator socket. Prepare installs a nonzero epoch and
+fences service during staging; activate enables Manager Witness quorum. Lease
+selects the unique holder and must use a nondecreasing term, strictly
+increasing sequence, and TTL from 1 through 3000 milliseconds. These commands
+are not needed when three or more active Hubs use Hub majority.
+.RE
 
 .BI "[cache] show [" selector "]..."
 .RS
@@ -146,6 +290,7 @@ Search entries only from local interface with name
 
 .SH "SEE ALSO"
 .BR opennhrp (8)
+.BR opennhrp-ha (8)
 
 .SH AUTHORS
 Timo Teras <timo.teras@iki.fi>

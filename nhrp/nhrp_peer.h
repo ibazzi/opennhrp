@@ -26,13 +26,15 @@
 #define NHRP_PEER_TYPE_STATIC_DNS	0x07	/* Static dns-map from config file */
 #define NHRP_PEER_TYPE_LOCAL_ROUTE	0x08	/* Non-local destination, with local route */
 #define NHRP_PEER_TYPE_LOCAL_ADDR	0x09	/* Local destination (IP or off-NBMA subnet) */
-#define NHRP_PEER_TYPE_MAX		(NHRP_PEER_TYPE_LOCAL_ADDR+1)
+#define NHRP_PEER_TYPE_HA_ACTIVE	0x0a	/* Active shared HA protocol mapping */
+#define NHRP_PEER_TYPE_MAX		(NHRP_PEER_TYPE_HA_ACTIVE+1)
 
 #define NHRP_PEER_TYPEMASK_ADJACENT \
 	(BIT(NHRP_PEER_TYPE_CACHED) | \
 	 BIT(NHRP_PEER_TYPE_DYNAMIC) | \
 	 BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) | \
 	 BIT(NHRP_PEER_TYPE_STATIC) | \
+	 BIT(NHRP_PEER_TYPE_HA_ACTIVE) | \
 	 BIT(NHRP_PEER_TYPE_LOCAL_ADDR))
 
 #define NHRP_PEER_TYPEMASK_REMOVABLE \
@@ -51,13 +53,15 @@
 #define NHRP_PEER_TYPEMASK_ALL \
 	(NHRP_PEER_TYPEMASK_PURGEABLE | \
 	 BIT(NHRP_PEER_TYPE_LOCAL_ROUTE) | \
-	 BIT(NHRP_PEER_TYPE_LOCAL_ADDR))
+	 BIT(NHRP_PEER_TYPE_LOCAL_ADDR) | \
+	 BIT(NHRP_PEER_TYPE_HA_ACTIVE))
 
 /* For routing via NHS */
 #define NHRP_PEER_TYPEMASK_ROUTE_VIA_NHS \
 	(BIT(NHRP_PEER_TYPE_DYNAMIC) | \
 	 BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) | \
 	 BIT(NHRP_PEER_TYPE_STATIC) | \
+	 BIT(NHRP_PEER_TYPE_HA_ACTIVE) | \
 	 BIT(NHRP_PEER_TYPE_LOCAL_ROUTE) | \
 	 BIT(NHRP_PEER_TYPE_LOCAL_ADDR))
 
@@ -72,6 +76,8 @@
 #define NHRP_PEER_FLAG_REMOVED		0x100	/* Deleted, but not removed from cache yet */
 #define NHRP_PEER_FLAG_MARK		0x200	/* Can be used to temporarily mark peers */
 #define NHRP_PEER_FLAG_CONFIGURED	0x400	/* Explicitly configured in config file */
+#define NHRP_PEER_FLAG_HA_PROJECTED	0x800	/* Managed Hub HA projection */
+#define NHRP_PEER_FLAG_HA_BOOTSTRAP 0x1000 /* Dormant automatic HA anchor */
 
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02
@@ -111,11 +117,13 @@ struct nhrp_peer {
 	uint16_t afnum;
 	uint16_t protocol_type;
 	uint16_t mtu, my_nbma_mtu;
+	uint8_t registration_failed;
 	ev_tstamp expire_time;
 	ev_tstamp last_used;
 	struct nhrp_address my_nbma_address;
 	struct nhrp_address protocol_address;
 	unsigned int holding_time;
+	uint32_t ha_discovery_generation;
 
 	char *nbma_hostname;
 	/* NHRP_PEER_TYPE_ROUTE: protocol addr., others: NBMA addr. */
@@ -207,6 +215,18 @@ struct nhrp_peer *nhrp_peer_add_static(struct nhrp_interface *iface,
 					unsigned int flags);
 int nhrp_peer_del_static(struct nhrp_interface *iface,
 			 struct nhrp_address *proto_addr);
+struct nhrp_peer *nhrp_peer_ha_commit(struct nhrp_interface *iface,
+                                      struct nhrp_address *proto_addr,
+                                      uint8_t prefix_length,
+                                      struct nhrp_address *nbma_addr,
+                                      struct nhrp_address *local_nbma_addr);
+void nhrp_peer_ha_suspend_static(struct nhrp_interface *iface,
+                                 struct nhrp_address *proto_addr);
+int nhrp_peer_ha_anchor_configured(struct nhrp_interface *iface,
+                                   struct nhrp_address *proto_addr);
+int nhrp_peer_ha_anchor_local_nbma(struct nhrp_interface *iface,
+                                   struct nhrp_address *proto_addr,
+                                   struct nhrp_address *local_nbma_addr);
 
 void nhrp_server_finish_request(struct nhrp_pending_request *pr);
 

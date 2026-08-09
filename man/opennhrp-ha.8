@@ -1,0 +1,129 @@
+.TH OPENNHRP-HA 8 "18 Aug 2026" "" "OpenNHRP Documentation"
+
+.SH NAME
+opennhrp-ha \- managed pure mGRE multi-Hub coordinator
+
+.SH SYNOPSIS
+.B opennhrp-ha
+.BI "[-a " admin-socket "] -i " interface
+.br
+.B opennhrp-ha hub
+.BI "[--state-dir " directory "] [-a " admin-socket "] [--control-socket " path "] [--listen-address " address "] [--health-target " address "]... [--debug]"
+
+.SH DESCRIPTION
+.B opennhrp-ha
+in Spoke mode consumes the OpenNHRP HA monitor stream and activates an
+authenticated, READY Hub candidate. Neighbor replacement uses an internal
+revision as a compare-and-swap guard; users do not configure a generation.
+.PP
+.B opennhrp-ha hub
+loads the local member identity, manifest, authentication keys, and durable
+cluster state from the managed directory. It accepts encrypted Invite joins
+and replicates registrations and membership to as many as 32 Hubs over TCP
+port 49002. New members are learners until their registration snapshot and
+digest are synchronized.
+.PP
+Quorum depends on the number of active Hubs. Three or more active Hubs require
+a majority whose reported term, Leader, and roles agree. A minority partition
+self-fences. One or two Hubs use legacy availability-first election unless a
+Manager Witness is activated for exactly two active Hubs.
+.PP
+In Manager Witness mode, a serviceable Leader needs its local vote plus either
+a healthy agreeing peer vote or a valid Manager lease. Leases use a shared
+epoch, nondecreasing term, strictly increasing sequence, and a maximum TTL of
+3000 milliseconds. If both Hubs lose the Manager but remain healthy and fully
+synchronized with each other, they can coordinate a fallback to legacy mode
+after 30 seconds. A Hub partition cannot use this fallback.
+.PP
+The local mGRE interface must have IFF_UP for the Hub to remain serviceable.
+When it goes down, the coordinator changes the local core to Standby, closes
+Hub control connections, and rejects new connections. After the interface
+returns or the coordinator restarts, the node remains isolated until it has
+reconciled current term and Leader state with active members and satisfies the
+current quorum policy.
+.PP
+When one or more
+.B ha-health-target
+directives are configured, each Hub sends ICMP Echo probes using system
+routing policy. Any reply makes a round successful. Healthy intervals back
+off through one, two, four, eight, and ten seconds. Three failed rounds isolate
+a Hub; ten successful recovery rounds allow re-entry. With no target,
+availability depends only on the mGRE interface.
+.PP
+Automatic failback targets the fixed Primary. After the Primary remains
+authenticated and healthy for 120 seconds, the Backup transfers leadership
+as soon as its registration match index and digest are synchronized. Transfer
+failures retain the 300/900/1800 second retry backoff and 120 second probation.
+.PP
+The coordinator manages only pure IPv4 mGRE and NHRP state. It does not
+configure IPsec, VICI, or XFRM. A Manager Witness is an external control-plane
+client and does not participate in NHRP data forwarding.
+.PP
+Normally users do not start this program directly. An
+.B opennhrp
+configuration containing
+.B enable-ha
+starts Hub mode after the core administrative socket is ready. A Spoke starts
+its per-interface coordinator after a traditional registering map receives a
+valid managed Hub List. The parent daemon reaps and restarts failed
+coordinators with bounded exponential backoff.
+.PP
+Membership updates are synchronized into the local core with a
+managed-state-only reload. This refreshes Hub List, authentication, term,
+commit index, and Leader state without reparsing the main configuration file.
+
+.SH OPTIONS
+.BI "-a " admin-socket
+.RS
+Use an alternate OpenNHRP administrative socket.
+.RE
+
+.BI "-i " interface
+.RS
+Run the Spoke coordinator for this mGRE interface.
+.RE
+
+.BI "--state-dir " directory
+.RS
+Override the default managed state directory
+.IR /etc/opennhrp/ha .
+This is intended for isolated tests and explicitly selected instances.
+.RE
+
+.BI "--control-socket " path
+.RS
+Override the Hub coordinator management socket. The default is
+.IR /var/run/opennhrp-ha.socket .
+.RE
+
+.BI "--listen-address " address
+.RS
+Override the default Hub listener address 0.0.0.0. The port remains 49002.
+This controls only the local bind address; the configured and authenticated
+observed endpoint list controls peer connection attempts.
+.RE
+
+.BI "--health-target " address
+.RS
+Configure an IPv4 ICMP Echo health target passed by the supervised parent.
+Users normally configure
+.B ha-health-target
+in
+.BR opennhrp.conf (5)
+instead of invoking this option directly.
+.RE
+
+.B --debug
+.RS
+Copy coordinator election, quorum, health, replication, transfer, and timeout
+events to the system log. The supervised parent enables this automatically
+when
+.B opennhrp
+runs with
+.BR -v .
+.RE
+
+.SH "SEE ALSO"
+.BR opennhrp (8),
+.BR opennhrpctl (8),
+.BR opennhrp.conf (5)

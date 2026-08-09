@@ -97,6 +97,9 @@ fast to do and can get you started with testing OpenNHRP.
 	DOCUMENTATION
 
 Most of the OpenNHRP documentation is in the manpages. Read them.
+Managed multi-Hub HA configuration and operation is documented in
+doc/opennhrp-hub-ha-design.md; current validation status is in
+doc/opennhrp-hub-ha-test-report.md.
 
 Also some general NHRP documents can be found from Cisco website
 (www.cisco.com).
