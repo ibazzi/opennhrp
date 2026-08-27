@@ -54,6 +54,7 @@ void forward_cleanup(void);
 int forward_local_addresses_changed(void);
 
 int kernel_init(void);
+void kernel_refresh_addresses(void);
 void kernel_stop_listening(void);
 void kernel_cleanup(void);
 int kernel_route(struct nhrp_interface *out_iface,

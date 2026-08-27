@@ -1104,6 +1104,18 @@ static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents)
 
 	if (peer->flags & NHRP_PEER_FLAG_HA_BOOTSTRAP)
 		return;
+	if (peer->interface->protocol_address.type == PF_UNSPEC) {
+		nhrp_info("Interface %s has no protocol address; refreshing addresses",
+			  peer->interface->name);
+		kernel_refresh_addresses();
+		if (peer->interface->protocol_address.type == PF_UNSPEC) {
+			nhrp_error("Cannot register to %s: interface %s has no protocol address",
+				nhrp_address_format(&peer->protocol_address,
+						    sizeof(dst), dst),
+				peer->interface->name);
+			goto error;
+		}
+	}
 
 	packet = nhrp_packet_alloc();
 	if (packet == NULL)

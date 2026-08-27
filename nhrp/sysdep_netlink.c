@@ -1038,6 +1038,14 @@ err_close_all:
 	return FALSE;
 }
 
+void kernel_refresh_addresses(void)
+{
+	if (talk_fd.fd == 0)
+		return;
+	netlink_enumerate(&talk_fd, PF_INET, RTM_GETADDR);
+	netlink_read_cb(&talk_fd.io, EV_READ);
+}
+
 void kernel_stop_listening(void)
 {
 	int i;
