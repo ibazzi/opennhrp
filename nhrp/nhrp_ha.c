@@ -1448,8 +1448,6 @@ static void probe_timer_cb(struct ev_timer *timer, int revents) {
     return;
   }
   if (candidate->probe_pending) {
-    candidate_probe_missed(candidate);
-    probe_schedule(candidate, 0.01);
     return;
   }
 
