@@ -136,7 +136,7 @@ static int ensure_directory(const char *path) {
   if (mkdir(path, 0700) != 0 && errno != EEXIST)
     return 0;
   return lstat(path, &status) == 0 && S_ISDIR(status.st_mode) &&
-         status.st_uid == geteuid() && (status.st_mode & 077) == 0;
+         status.st_uid == geteuid() && (status.st_mode & 022) == 0;
 }
 
 int nhrp_ha_managed_member_valid(const char *member) {

@@ -51,8 +51,15 @@ int main(void) {
     struct in_addr protocol;
     struct in_addr advertised;
     struct nhrp_ha_managed_state initialized;
+    int lock_fd;
 
     assert(mkdtemp(init_directory) != NULL);
+    assert(chmod(init_directory, 0755) == 0);
+    lock_fd = nhrp_ha_managed_state_lock(init_directory);
+    assert(lock_fd >= 0);
+    nhrp_ha_managed_state_unlock(lock_fd);
+    assert(chmod(init_directory, 0777) == 0);
+    assert(nhrp_ha_managed_state_lock(init_directory) < 0);
     assert(chmod(init_directory, 0700) == 0);
     assert(inet_pton(AF_INET, "10.20.0.1", &protocol) == 1);
     assert(inet_pton(AF_INET, "192.0.2.10", &advertised) == 1);
