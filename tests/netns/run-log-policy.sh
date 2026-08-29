@@ -207,6 +207,18 @@ elif [[ $mode == ha-default ]]; then
 	done
 	grep -q '"member":"hub-primary".*"ready":true' <<<"$state"
 	state_lines=$(count_log "$runtime_dir/spoke.log" "HA candidate hub-primary")
+	ip -n "$underlay_ns" link set onhrp-log-h down
+	sleep 0.45
+	ip -n "$underlay_ns" link set onhrp-log-h up
+	for _ in {1..200}; do
+		state=$("$bin_dir/opennhrpctl" -a "$runtime_dir/spoke.socket" \
+			ha show interface gre-ha format json 2>/dev/null || true)
+		grep -q '"member":"hub-primary".*"ready":true' <<<"$state" && break
+		sleep 0.05
+	done
+	grep -q '"member":"hub-primary".*"ready":true' <<<"$state"
+	[[ $(count_log "$runtime_dir/spoke.log" \
+		"HA candidate hub-primary") -eq $state_lines ]]
 	sleep 65
 	[[ $(count_log "$runtime_dir/hub.log" \
 		"Received HA Registration Request") -eq 0 ]]

@@ -374,6 +374,12 @@ for role in hub1 hub2; do
 		term "$witness_term" holder hub-primary sequence "$witness_sequence" \
 		ttl-ms 3000
 done
+lease_reject=$("$bin_dir/opennhrpctl" -a "$runtime_dir/hub1-ha.socket" \
+	ha witness lease epoch "$witness_epoch" term "$((witness_term - 1))" \
+	holder hub-primary sequence "$((witness_sequence + 1))" ttl-ms 3000)
+grep -q '^Reason: witness-lease-rejected$' <<<"$lease_reject"
+grep -q '^Current-Term: '"$witness_term"'$' <<<"$lease_reject"
+grep -q '^Current-Leader: hub-primary$' <<<"$lease_reject"
 wait_core_role hub1 leader
 wait_core_role hub2 standby
 assert_no_dual_serviceable_leader

@@ -653,11 +653,23 @@ static void candidate_set_state(struct nhrp_ha_candidate *candidate,
     return;
   previous = candidate->state;
   candidate->state = state;
-  nhrp_info("HA candidate %s for %s on %s state %s -> %s", candidate->member_id,
-            nhrp_address_format(&candidate->service->protocol, sizeof(protocol),
-                                protocol),
-            candidate->service->interface->name, candidate_state_name(previous),
-            candidate_state_name(state));
+  if ((previous == NHRP_HA_CANDIDATE_READY &&
+       state == NHRP_HA_CANDIDATE_SUSPECT) ||
+      (previous == NHRP_HA_CANDIDATE_SUSPECT &&
+       state == NHRP_HA_CANDIDATE_READY))
+    nhrp_debug("HA candidate %s for %s on %s state %s -> %s",
+               candidate->member_id,
+               nhrp_address_format(&candidate->service->protocol,
+                                   sizeof(protocol), protocol),
+               candidate->service->interface->name,
+               candidate_state_name(previous), candidate_state_name(state));
+  else
+    nhrp_info("HA candidate %s for %s on %s state %s -> %s",
+              candidate->member_id,
+              nhrp_address_format(&candidate->service->protocol,
+                                  sizeof(protocol), protocol),
+              candidate->service->interface->name,
+              candidate_state_name(previous), candidate_state_name(state));
   service_changed(candidate->service);
 }
 

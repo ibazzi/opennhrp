@@ -210,9 +210,9 @@ static void managed_log(const char *format, ...) {
 
   va_start(arguments, format);
   va_copy(syslog_arguments, arguments);
-  vfprintf(stderr, format, arguments);
-  if (managed_debug)
-    vsyslog(LOG_DEBUG, format, syslog_arguments);
+  if (getenv("JOURNAL_STREAM") == NULL)
+    vfprintf(stderr, format, arguments);
+  vsyslog(managed_debug ? LOG_DEBUG : LOG_INFO, format, syslog_arguments);
   va_end(syslog_arguments);
   va_end(arguments);
 }
@@ -2772,10 +2772,14 @@ static int control_handle(struct managed_runtime *runtime) {
                "ha witness lease epoch %32s term %llu holder %63s sequence "
                "%llu ttl-ms %llu %c",
                epoch_text, &term, holder, &sequence, &ttl_ms, &extra) != 5 ||
-        !witness_epoch_parse(epoch_text, epoch) ||
-        !witness_lease(runtime, epoch, term, holder, sequence, ttl_ms))
+        !witness_epoch_parse(epoch_text, epoch))
       snprintf(response, sizeof(response),
                "Status: error\nReason: witness-lease-rejected\n");
+    else if (!witness_lease(runtime, epoch, term, holder, sequence, ttl_ms))
+      snprintf(response, sizeof(response),
+               "Status: error\nReason: witness-lease-rejected\n"
+               "Current-Term: %llu\nCurrent-Leader: %s\n",
+               (unsigned long long)runtime->state.term, runtime->state.leader);
     else
       snprintf(response, sizeof(response), "Status: ok\n");
   } else if (strcmp(command, "ha witness show format json") == 0 ||
@@ -3389,8 +3393,7 @@ int opennhrp_ha_managed_hub_main(int argc, char **argv) {
     } else
       return usage(argv[0]);
   }
-  if (managed_debug)
-    openlog("opennhrp-ha", LOG_PID, LOG_DAEMON);
+  openlog("opennhrp-ha", LOG_PID, LOG_DAEMON);
   if (!runtime_init(&runtime, directory, admin_socket, control_socket,
                     listen_address, configured_addresses,
                     configured_address_count, health_targets,
@@ -3428,7 +3431,6 @@ int opennhrp_ha_managed_hub_main(int argc, char **argv) {
 
 done:
   runtime_cleanup(&runtime);
-  if (managed_debug)
-    closelog();
+  closelog();
   return result;
 }
