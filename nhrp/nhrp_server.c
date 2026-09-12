@@ -402,6 +402,9 @@ static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr)
 	peer->afnum = packet->hdr.afnum;
 	peer->protocol_type = packet->hdr.protocol_type;
 	peer->expire_time = pr->now + ntohs(cie->hdr.holding_time);
+	/* Registration validation has also normalized Vendor bootstrap to HA. */
+	if (nhrp_server_is_ha_registration(packet))
+		peer->flags |= NHRP_PEER_FLAG_HA_CAPABLE;
 	peer->mtu = ntohs(cie->hdr.mtu);
 	if (cie->nbma_address.addr_len != 0)
 		peer->next_hop_address = cie->nbma_address;

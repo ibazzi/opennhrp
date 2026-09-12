@@ -131,12 +131,35 @@ static void binding_from_peer(struct nhrp_ha_hub_binding *binding,
                                   NHRP_PEER_FLAG_LOWER_UP);
 }
 
+static int is_local_registration(void *ctx, struct nhrp_peer *peer) {
+  (void)ctx;
+  return !(peer->flags & (NHRP_PEER_FLAG_HA_CAPABLE |
+                         NHRP_PEER_FLAG_HA_PROJECTED |
+                         NHRP_PEER_FLAG_REMOVED | NHRP_PEER_FLAG_REPLACED)) &&
+         peer->expire_time > ev_now();
+}
+
+static int has_local_registration(struct nhrp_interface *iface,
+                                  const struct nhrp_address *protocol,
+                                  uint8_t prefix_length) {
+  struct nhrp_peer_selector selector = {
+      .flags = NHRP_PEER_FIND_EXACT,
+      .type_mask = BIT(NHRP_PEER_TYPE_DYNAMIC),
+      .interface = iface,
+      .protocol_address = *protocol,
+      .prefix_length = prefix_length,
+  };
+  return nhrp_peer_foreach(is_local_registration, NULL, &selector);
+}
+
 static int project_entry(struct nhrp_ha_hub_state *state,
                          struct nhrp_ha_hub_entry *entry) {
   const struct nhrp_ha_hub_value *value = hub_entry_value(entry);
   struct nhrp_peer *peer;
 
-  if (value == NULL)
+  if (value == NULL || has_local_registration(state->interface,
+                                              &entry->protocol,
+                                              entry->prefix_length))
     return TRUE;
   peer = nhrp_peer_alloc(state->interface);
   if (peer == NULL)
@@ -184,6 +207,12 @@ int nhrp_ha_hub_capture_direct(struct nhrp_peer *peer) {
 
   if (state == NULL || state->role == NHRP_HA_HUB_UNMANAGED)
     return 1;
+  if (!(peer->flags & NHRP_PEER_FLAG_HA_CAPABLE)) {
+    entry = hub_entry_find(state, &peer->protocol_address, peer->prefix_length);
+    if (entry != NULL)
+      hub_entry_remove(state, entry);
+    return 1;
+  }
   entry = hub_entry_get(state, &peer->protocol_address, peer->prefix_length);
   if (entry == NULL)
     return -1;
@@ -255,6 +284,9 @@ int nhrp_ha_hub_sync_apply(struct nhrp_interface *iface,
       binding->holding_time == 0 || binding->term != state->pending_term ||
       binding->index > state->pending_index)
     return FALSE;
+  /* A replicated HA binding must never take over a local legacy spoke. */
+  if (has_local_registration(iface, protocol, prefix_length))
+    return TRUE;
   entry = hub_entry_get(state, protocol, prefix_length);
   if (entry == NULL)
     return FALSE;

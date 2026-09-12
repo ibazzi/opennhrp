@@ -78,6 +78,7 @@
 #define NHRP_PEER_FLAG_CONFIGURED	0x400	/* Explicitly configured in config file */
 #define NHRP_PEER_FLAG_HA_PROJECTED	0x800	/* Managed Hub HA projection */
 #define NHRP_PEER_FLAG_HA_BOOTSTRAP 0x1000 /* Dormant automatic HA anchor */
+#define NHRP_PEER_FLAG_HA_CAPABLE 0x2000 /* Validated HA registration */
 
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02

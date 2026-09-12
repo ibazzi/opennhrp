@@ -238,6 +238,9 @@ opennhrpctl ha show interface gre-ha format json
 
 - 纯 IPv4 mGRE，最多 32 个 Hub、每成员四个 endpoint、每 Hub 四个健康目标；
 - 所有 Hub/Spoke 共享一个逻辑 Protocol Address/prefix；
+- 未携带 HA 注册扩展的普通 Spoke 留在原注册 Hub，该 Hub 降为 standby
+  后仍接受普通注册并转发；这些注册不参与 HA 复制。原 Hub 宕机时旧版 Spoke
+  不会自动迁移。HA 能力复用现有 HA/Vendor bootstrap 扩展识别；
 - `ha-local-nbma` 只覆盖某个 Hub 的本地 GRE/NBMA 目的地址，不启用 HA，也不
   改变注册身份；
 - 旧 `ha-hub`、`ha-member-id`、`ha-cluster-id`、`ha-auth`、`ha-auth-key`、
@@ -247,10 +250,16 @@ opennhrpctl ha show interface gre-ha format json
 ## 10. 验证入口
 
 ```sh
+make compile
 make -C tests test
+sudo python3 tests/netns/test-legacy-spoke.py
 sudo tests/netns/run-managed.sh
 ```
 
 前者覆盖 wire、认证、持久状态、Join、复制、failback 和仲裁单元测试；后者覆盖
 自动 Primary、两个 Backup Join、Spoke 自动升级、两 Hub Witness、Manager/Hub
 分区自隔离、安全回退、三 Hub 多数派、接口/健康故障、复制和 failback。
+
+`test-legacy-spoke.py` 使用真实报文模拟旧版 Spoke，覆盖注册能力分类、多个 CIE、
+standby 续注册、旧 HA 缓存替换及同步冲突，并检查内核邻居和 GRE ping；
+它不替代实际旧版二进制兼容性验证。
