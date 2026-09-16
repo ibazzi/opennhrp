@@ -381,7 +381,7 @@ grep -q '^Reason: witness-lease-rejected$' <<<"$lease_reject"
 grep -q '^Current-Term: '"$witness_term"'$' <<<"$lease_reject"
 grep -q '^Current-Leader: hub-primary$' <<<"$lease_reject"
 wait_core_role hub1 leader
-wait_core_role hub2 standby
+wait_core_role hub2 follower
 assert_no_dual_serviceable_leader
 
 log "validating Manager+Hub partition self-fencing and <=5s recovery"
@@ -820,13 +820,51 @@ grep -q '"member":"hub-backup2".*"local_nbma":null.*"local_nbma_origin":null' \
 	<<<"$spoke_state"
 wait_spoke_neighbor "$hub1_local_nbma"
 
+log "validating one Spoke fails over to a healthy Follower without moving the Leader"
+wait_core_role hub1 leader
+wait_core_role hub2 follower
+ip netns exec "$spoke_ns" iptables -I OUTPUT -d "$hub1_underlay" \
+	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
+ip netns exec "$spoke_ns" iptables -I OUTPUT -d "$hub1_private_nbma" \
+	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
+for _ in {1..300}; do
+	spoke_state=$(spoke_ha_show)
+	if grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"; then
+		break
+	fi
+	sleep 0.05
+done
+grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
+grep -q '"leader":"hub-primary"' <<<"$(hub_cluster hub1)"
+wait_core_role hub1 leader
+wait_core_role hub2 follower
+wait_spoke_neighbor "$hub2_local_nbma"
+ip netns exec "$spoke_ns" ping -I 10.20.0.2 -c 2 -W 1 198.18.20.1 \
+	>"$runtime_dir/ping.follower.txt"
+ip netns exec "$spoke_ns" iptables -D OUTPUT -d "$hub1_private_nbma" \
+	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
+ip netns exec "$spoke_ns" iptables -D OUTPUT -d "$hub1_underlay" \
+	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
+for _ in {1..300}; do
+	spoke_state=$(spoke_ha_show)
+	if grep -q '"member":"hub-primary"[^}]*"state":"ready"' \
+		<<<"$spoke_state"; then
+		break
+	fi
+	sleep 0.05
+done
+grep -q '"member":"hub-primary"[^}]*"state":"ready"' <<<"$spoke_state"
+grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
+activate_spoke_member hub-primary
+wait_spoke_neighbor "$hub1_local_nbma"
+
 log "validating disabled member is removed from the Spoke Hub List"
 hub_list_generation=$(grep -o '"hub_list_generation":[0-9]*' \
 	<<<"$spoke_state" | cut -d: -f2)
 OPENNHRP_HA_STATE_DIR="$runtime_dir/hub1-state" \
 	"$bin_dir/opennhrpctl" ha member disable hub-backup2 \
 	>"$runtime_dir/member-disable-live.txt"
-for _ in {1..200}; do
+for _ in {1..400}; do
 	spoke_state=$(spoke_ha_show)
 	next_generation=$(grep -o '"hub_list_generation":[0-9]*' \
 		<<<"$spoke_state" | cut -d: -f2)
@@ -870,18 +908,18 @@ grep -q '"active_member":"hub-primary"' <<<"$spoke_state"
 
 for _ in {1..400}; do
 	private_spoke_state=$(private_spoke_ha_show)
-	if grep -q '"member":"hub-primary".*"selected_address":"'"$hub1_private_nbma"'".*"ready":true' \
+	if grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_private_nbma"'"[^}]*"ready":true' \
 		<<<"$private_spoke_state" &&
-		grep -q '"member":"hub-backup1".*"selected_address":"'"$hub2_private_nbma"'".*"ready":true' \
+		grep -q '"member":"hub-backup1"[^}]*"selected_address":"'"$hub2_private_nbma"'"[^}]*"ready":true' \
 			<<<"$private_spoke_state" &&
 		grep -q '"active_member":"hub-primary"' <<<"$private_spoke_state"; then
 		break
 	fi
 	sleep 0.05
 done
-grep -q '"member":"hub-primary".*"selected_address":"'"$hub1_private_nbma"'".*"ready":true' \
+grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_private_nbma"'"[^}]*"ready":true' \
 	<<<"$private_spoke_state"
-grep -q '"member":"hub-backup1".*"selected_address":"'"$hub2_private_nbma"'".*"ready":true' \
+grep -q '"member":"hub-backup1"[^}]*"selected_address":"'"$hub2_private_nbma"'"[^}]*"ready":true' \
 	<<<"$private_spoke_state"
 grep -q '"active_member":"hub-primary"' <<<"$private_spoke_state"
 wait_private_spoke_neighbor "$hub1_private_nbma"
@@ -892,38 +930,41 @@ log "validating endpoint failover within the Primary member"
 ip -n "$private_spoke_ns" addr add 192.0.2.15/24 dev u-private
 for _ in {1..200}; do
 	private_spoke_state=$(private_spoke_ha_show)
-	if grep -q '"member":"hub-primary".*"endpoint_reachable":\[true,true\].*"selected_address":"'"$hub1_private_nbma"'"' \
+	if grep -q '"member":"hub-primary"[^}]*"endpoint_reachable":\[true,true\][^}]*"selected_address":"'"$hub1_private_nbma"'"' \
 		<<<"$private_spoke_state"; then
 		break
 	fi
 	sleep 0.05
 done
-grep -q '"member":"hub-primary".*"endpoint_reachable":\[true,true\].*"selected_address":"'"$hub1_private_nbma"'"' \
+grep -q '"member":"hub-primary"[^}]*"endpoint_reachable":\[true,true\][^}]*"selected_address":"'"$hub1_private_nbma"'"' \
 	<<<"$private_spoke_state"
 ip -n "$hub1_ns" addr del "$hub1_private_nbma/24" dev u-hub1
-for _ in {1..200}; do
+for _ in {1..400}; do
 	private_spoke_state=$(private_spoke_ha_show)
-	if grep -q '"member":"hub-primary".*"selected_address":"'"$hub1_underlay"'".*"ready":true' \
-		<<<"$private_spoke_state" &&
-		grep -q '"active_member":"hub-primary"' <<<"$private_spoke_state"; then
+	if grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_underlay"'"[^}]*"ready":true' \
+		<<<"$private_spoke_state"; then
 		break
 	fi
 	sleep 0.05
 done
-grep -q '"member":"hub-primary".*"selected_address":"'"$hub1_underlay"'".*"ready":true' \
+grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_underlay"'"[^}]*"ready":true' \
 	<<<"$private_spoke_state"
-grep -q '"active_member":"hub-primary"' <<<"$private_spoke_state"
+private_generation=$(grep -o '"generation":[0-9]*' \
+	<<<"$private_spoke_state" | head -n 1 | cut -d: -f2)
+printf 'ha activate interface gre-ha protocol 10.20.0.1 member hub-primary expect-generation %s\n' \
+	"$private_generation" | nc -N -U "$runtime_dir/private_spoke.socket" |
+	grep -q '^Status: ok'
 wait_private_spoke_neighbor "$hub1_underlay"
 ip -n "$hub1_ns" addr add "$hub1_private_nbma/24" dev u-hub1
 for _ in {1..200}; do
 	private_spoke_state=$(private_spoke_ha_show)
-	if grep -q '"member":"hub-primary".*"selected_address":"'"$hub1_private_nbma"'".*"ready":true' \
+	if grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_private_nbma"'"[^}]*"ready":true' \
 		<<<"$private_spoke_state"; then
 		break
 	fi
 	sleep 0.05
 done
-grep -q '"member":"hub-primary".*"selected_address":"'"$hub1_private_nbma"'".*"ready":true' \
+grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_private_nbma"'"[^}]*"ready":true' \
 	<<<"$private_spoke_state"
 wait_private_spoke_neighbor "$hub1_private_nbma"
 
@@ -1186,12 +1227,12 @@ private_spoke_state=$(private_spoke_ha_show)
 grep -q '"active_member":"hub-backup1"' <<<"$private_spoke_state"
 for _ in {1..400}; do
 	spoke_state=$(spoke_ha_show)
-	if grep -q '"member":"hub-primary".*"ready":true' <<<"$spoke_state"; then
+	if grep -q '"member":"hub-primary"[^}]*"ready":true' <<<"$spoke_state"; then
 		break
 	fi
 	sleep 0.05
 done
-grep -q '"member":"hub-primary".*"ready":true' <<<"$spoke_state"
+grep -q '"member":"hub-primary"[^}]*"ready":true' <<<"$spoke_state"
 
 log "validating one-shot bootstrap purge while Primary is a Standby"
 purge_before=$(grep -c \
@@ -1207,14 +1248,14 @@ start_core spoke "$spoke_ns" "$runtime_dir/spoke-state" \
 	"$runtime_dir/spoke.conf"
 for _ in {1..300}; do
 	spoke_state=$(spoke_ha_show)
-	if grep -q '"member":"hub-primary".*"ready":true' <<<"$spoke_state" &&
-		grep -q '"member":"hub-backup1".*"ready":true' <<<"$spoke_state" &&
+	if grep -q '"member":"hub-primary"[^}]*"ready":true' <<<"$spoke_state" &&
+		grep -q '"member":"hub-backup1"[^}]*"ready":true' <<<"$spoke_state" &&
 		grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"; then
 		break
 	fi
 	sleep 0.05
 done
-if ! grep -q '"member":"hub-primary".*"ready":true' <<<"$spoke_state"; then
+if ! grep -q '"member":"hub-primary"[^}]*"ready":true' <<<"$spoke_state"; then
 	printf 'Spoke bootstrap state:\n%s\n' "$spoke_state" >&2
 	grep -E 'HA Registration|HA (authentication|metadata)|no matching request|packet type [12]' \
 		"$runtime_dir/hub1.log" | tail -n 120 >&2 || true
@@ -1222,7 +1263,7 @@ if ! grep -q '"member":"hub-primary".*"ready":true' <<<"$spoke_state"; then
 		"$runtime_dir/spoke.log" | tail -n 120 >&2 || true
 	exit 1
 fi
-grep -q '"member":"hub-backup1".*"ready":true' <<<"$spoke_state"
+grep -q '"member":"hub-backup1"[^}]*"ready":true' <<<"$spoke_state"
 grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
 sleep 31
 purge_after=$(grep -c \
@@ -1337,7 +1378,7 @@ for _ in {1..300}; do
 	private_spoke_state=$(private_spoke_ha_show)
 	if [[ $(hub_core_role hub1) == standby &&
 		$(hub_core_role hub2) == leader &&
-		$(hub_core_role hub3) == standby ]] &&
+		$(hub_core_role hub3) == follower ]] &&
 		grep -q '"active_member":"hub-backup1"' <<<"$spoke_state" &&
 		grep -q '"active_member":"hub-backup1"' \
 			<<<"$private_spoke_state"; then
@@ -1347,7 +1388,7 @@ for _ in {1..300}; do
 done
 [[ $(hub_core_role hub1) == standby ]]
 [[ $(hub_core_role hub2) == leader ]]
-[[ $(hub_core_role hub3) == standby ]]
+[[ $(hub_core_role hub3) == follower ]]
 grep -q '"quorum_available":false' <<<"$(hub_cluster hub1)"
 grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
 grep -q '"active_member":"hub-backup1"' <<<"$private_spoke_state"

@@ -183,9 +183,6 @@ static struct candidate_view *best_ready_candidate(struct service_view *view) {
       continue;
     if (view->auth_required && !view->candidates[i].authenticated)
       continue;
-    if (view->candidates[i].leader[0] != 0 &&
-        strcmp(view->candidates[i].member, view->candidates[i].leader) != 0)
-      continue;
     if (best == NULL || view->candidates[i].term > best->term ||
         (view->candidates[i].term == best->term &&
          view->candidates[i].priority > best->priority))
@@ -246,6 +243,7 @@ static void process_event(const char *socket_path, const char *interface_name,
   struct candidate_view *active;
   struct candidate_view *best;
   static int degraded;
+  static char selected_leader[64];
 
   if (!parse_service(line, &view)) {
     fprintf(stderr, "opennhrp-ha: ignored malformed HA monitor event\n");
@@ -257,13 +255,29 @@ static void process_event(const char *socket_path, const char *interface_name,
                ? find_candidate(&view, view.active_member)
                : NULL;
   best = best_ready_candidate(&view);
-  if (candidate_usable(&view, active) && active == best) {
-    if (activate(socket_path, interface_name, &view, active) != 0)
-      return;
+  if (best != NULL && best->leader[0] != 0) {
+    if (selected_leader[0] == 0 ||
+        strcmp(selected_leader, best->leader) != 0) {
+      struct candidate_view *leader = find_candidate(&view, best->leader);
+
+      if (candidate_usable(&view, leader)) {
+        if (activate(socket_path, interface_name, &view, leader) != 0)
+          return;
+        snprintf(selected_leader, sizeof(selected_leader), "%s",
+                 best->leader);
+        degraded = 0;
+        return;
+      }
+    }
+  }
+  if (active != NULL && strcmp(active->state, "suspect") == 0 &&
+      (!view.auth_required || active->authenticated)) {
     degraded = 0;
     return;
   }
-  if (candidate_usable(&view, active) && best == NULL) {
+  if (candidate_usable(&view, active)) {
+    if (activate(socket_path, interface_name, &view, active) != 0)
+      return;
     degraded = 0;
     return;
   }

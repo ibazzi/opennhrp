@@ -673,15 +673,17 @@ static int set_core_state(struct managed_runtime *runtime) {
   int attempt;
 
   for (attempt = 0; attempt < 2; attempt++) {
-    int leader =
-        strcmp(runtime->state.local_member, runtime->state.leader) == 0 &&
-        runtime->service_available && !runtime->isolated &&
-        service_quorum(runtime, monotonic_ms());
+    int local_leader =
+        strcmp(runtime->state.local_member, runtime->state.leader) == 0;
+    int serviceable = runtime->service_available && !runtime->isolated &&
+                      service_quorum(runtime, monotonic_ms());
+    const char *role = serviceable ? (local_leader ? "leader" : "follower")
+                                   : "standby";
     int status;
 
     snprintf(command, sizeof(command),
              "ha hub role interface %s role %s term %llu index %llu\n",
-             runtime->state.interface, leader ? "leader" : "standby",
+             runtime->state.interface, role,
              (unsigned long long)runtime->state.term,
              (unsigned long long)runtime->local_index);
     status = admin_status(runtime, command);

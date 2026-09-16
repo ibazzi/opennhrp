@@ -13,6 +13,7 @@
 enum nhrp_ha_hub_role {
   NHRP_HA_HUB_UNMANAGED = 0,
   NHRP_HA_HUB_LEADER,
+  NHRP_HA_HUB_FOLLOWER,
   NHRP_HA_HUB_STANDBY,
 };
 
@@ -31,6 +32,7 @@ struct nhrp_ha_hub_binding {
 
 void nhrp_ha_hub_cleanup(void);
 int nhrp_ha_hub_capture_direct(struct nhrp_peer *peer);
+int nhrp_ha_hub_serviceable(struct nhrp_interface *iface);
 int nhrp_ha_hub_set_role(struct nhrp_interface *iface,
                          enum nhrp_ha_hub_role role, uint64_t term,
                          uint64_t index);

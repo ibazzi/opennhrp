@@ -221,11 +221,17 @@ int nhrp_ha_hub_capture_direct(struct nhrp_peer *peer) {
   entry->direct.binding.index = state->index;
   entry->direct.expires = ev_now() + entry->direct.binding.holding_time;
   entry->direct.present = TRUE;
-  if (state->role == NHRP_HA_HUB_LEADER) {
+  if (state->role != NHRP_HA_HUB_STANDBY) {
     peer->flags |= NHRP_PEER_FLAG_HA_PROJECTED;
     return 1;
   }
   return 0;
+}
+
+int nhrp_ha_hub_serviceable(struct nhrp_interface *iface) {
+  struct nhrp_ha_hub_state *state = hub_state_find(iface, FALSE);
+
+  return state == NULL || state->role != NHRP_HA_HUB_STANDBY;
 }
 
 int nhrp_ha_hub_set_role(struct nhrp_interface *iface,
@@ -294,7 +300,7 @@ int nhrp_ha_hub_sync_apply(struct nhrp_interface *iface,
   entry->replica.expires = ev_now() + binding->holding_time;
   entry->replica.present = TRUE;
   entry->replica_seen = TRUE;
-  if (state->role == NHRP_HA_HUB_LEADER && !entry->direct.present)
+  if (state->role != NHRP_HA_HUB_STANDBY && !entry->direct.present)
     return project_entry(state, entry);
   return TRUE;
 }
@@ -432,9 +438,10 @@ size_t nhrp_ha_hub_status_render(struct nhrp_interface *iface, char *buffer,
   if (state == NULL)
     return append(buffer, size, 0,
                   json ? "{\"role\":\"unmanaged\"}\n" : "Role: unmanaged\n");
-  role = state->role == NHRP_HA_HUB_LEADER    ? "leader"
-         : state->role == NHRP_HA_HUB_STANDBY ? "standby"
-                                              : "unmanaged";
+  role = state->role == NHRP_HA_HUB_LEADER     ? "leader"
+         : state->role == NHRP_HA_HUB_FOLLOWER ? "follower"
+         : state->role == NHRP_HA_HUB_STANDBY  ? "standby"
+                                               : "unmanaged";
   if (json)
     offset = append(buffer, size, offset,
                     "{\"interface\":\"%s\",\"role\":\"%s\","

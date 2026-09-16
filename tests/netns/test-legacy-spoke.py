@@ -24,7 +24,7 @@ def run(*args):
 
 def send_registration(hub, mode, addresses):
     member = b"bootstrap"
-    ha = struct.pack("!BBHI", 1, 1, len(member), 1) + member
+    ha = struct.pack("!BBHI", 2, 1, len(member), 1) + member
     invalid = mode.startswith("invalid")
     if invalid:
         ha = ha[:5]
@@ -177,6 +177,10 @@ def main():
             register("h1", "legacy", "10.20.0.203")
             assert "entry 10.20.0.203 " not in snapshot("h1")
             sync("h2", "10.20.0.202/32", 1000)
+            assert not present("h2", "10.20.0.202")
+            role("h2", "follower", 1000)
+            ping("h2", "10.20.0.202")
+            role("h2", "standby", 1001)
             assert not present("h2", "10.20.0.202")
             role("h1", "standby", 1001)
             role("h2", "leader", 1001)

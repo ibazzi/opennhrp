@@ -482,7 +482,8 @@ static struct nhrp_buffer *ha_probe_payload(uint8_t message_type,
                                             const char *member_id,
                                             uint32_t sequence,
                                             uint32_t generation, uint64_t nonce,
-                                            uint64_t sent_nanoseconds) {
+                                            uint64_t sent_nanoseconds,
+                                            int serviceable) {
   struct nhrp_buffer *buffer;
   uint16_t member_length = strlen(member_id);
   uint16_t wire_member_length = htons(member_length);
@@ -491,7 +492,7 @@ static struct nhrp_buffer *ha_probe_payload(uint8_t message_type,
   uint64_t wire_nonce = htobe64(nonce);
   uint64_t wire_sent = htobe64(sent_nanoseconds);
 
-  buffer = nhrp_buffer_alloc(28 + member_length);
+  buffer = nhrp_buffer_alloc(29 + member_length);
   if (buffer == NULL)
     return NULL;
   buffer->data[0] = NHRP_HA_WIRE_VERSION;
@@ -501,7 +502,8 @@ static struct nhrp_buffer *ha_probe_payload(uint8_t message_type,
   memcpy(&buffer->data[8], &wire_generation, sizeof(wire_generation));
   memcpy(&buffer->data[12], &wire_nonce, sizeof(wire_nonce));
   memcpy(&buffer->data[20], &wire_sent, sizeof(wire_sent));
-  memcpy(&buffer->data[28], member_id, member_length);
+  buffer->data[28] = serviceable ? 1 : 0;
+  memcpy(&buffer->data[29], member_id, member_length);
   return buffer;
 }
 
@@ -509,19 +511,19 @@ static int ha_probe_parse(const struct nhrp_buffer *buffer,
                           uint8_t expected_type, char *member_id,
                           size_t member_id_size, uint32_t *sequence,
                           uint32_t *generation, uint64_t *nonce,
-                          uint64_t *sent_nanoseconds) {
+                          uint64_t *sent_nanoseconds, int *serviceable) {
   uint16_t member_length;
   uint32_t wire32;
   uint64_t wire64;
 
-  if (buffer == NULL || buffer->length < 28 ||
+  if (buffer == NULL || buffer->length < 29 ||
       buffer->data[0] != NHRP_HA_WIRE_VERSION ||
-      buffer->data[1] != expected_type)
+      buffer->data[1] != expected_type || buffer->data[28] > 1)
     return FALSE;
   memcpy(&member_length, &buffer->data[2], sizeof(member_length));
   member_length = ntohs(member_length);
   if (member_length == 0 || member_length >= member_id_size ||
-      buffer->length != 28 + member_length)
+      buffer->length != 29 + member_length)
     return FALSE;
   memcpy(&wire32, &buffer->data[4], sizeof(wire32));
   *sequence = ntohl(wire32);
@@ -531,7 +533,8 @@ static int ha_probe_parse(const struct nhrp_buffer *buffer,
   *nonce = be64toh(wire64);
   memcpy(&wire64, &buffer->data[20], sizeof(wire64));
   *sent_nanoseconds = be64toh(wire64);
-  memcpy(member_id, &buffer->data[28], member_length);
+  *serviceable = buffer->data[28] != 0;
+  memcpy(member_id, &buffer->data[29], member_length);
   member_id[member_length] = 0;
   return member_id_valid(member_id);
 }
@@ -1343,6 +1346,7 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   uint32_t generation;
   uint64_t nonce;
   uint64_t sent_nanoseconds;
+  int serviceable;
   uint64_t previous_commit;
 
   if (request->endpoint_generation != candidate->endpoint_generation ||
@@ -1364,7 +1368,7 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   if (payload == NULL ||
       !ha_probe_parse(payload->u.raw, NHRP_HA_PROBE_REPLY, member_id,
                       sizeof(member_id), &sequence, &generation, &nonce,
-                      &sent_nanoseconds) ||
+                      &sent_nanoseconds, &serviceable) ||
       strcmp(member_id, candidate->member_id) != 0 ||
       sequence != request->sequence || generation != request->generation ||
       nonce != request->nonce)
@@ -1402,8 +1406,10 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   }
   candidate->consecutive_misses = 0;
   free(request);
-  if (candidate->registered)
+  if (candidate->registered && serviceable)
     candidate_set_state(candidate, NHRP_HA_CANDIDATE_READY);
+  else if (candidate->registered)
+    candidate_set_state(candidate, NHRP_HA_CANDIDATE_REGISTERED);
   probe_schedule(candidate, candidate->service->active == candidate
                                 ? HA_ACTIVE_PROBE_INTERVAL
                                 : HA_STANDBY_PROBE_INTERVAL);
@@ -1500,7 +1506,7 @@ static void probe_timer_cb(struct ev_timer *timer, int revents) {
   probe =
       ha_probe_payload(NHRP_HA_PROBE, candidate->member_id,
                        candidate->probe_sequence, candidate->probe_generation,
-                       candidate->probe_nonce, monotonic_nanoseconds());
+                       candidate->probe_nonce, monotonic_nanoseconds(), FALSE);
   payload =
       nhrp_packet_extension(packet, NHRP_EXTENSION_HA, NHRP_PAYLOAD_TYPE_RAW);
   if (probe == NULL || payload == NULL) {
@@ -2539,7 +2545,6 @@ int nhrp_ha_prepare_registration_reply(struct nhrp_packet *packet) {
   if ((strcmp(requested_member, packet->src_iface->ha_member_id) != 0 &&
        strcmp(requested_member, "bootstrap") != 0))
     goto failed;
-
   advertisement =
       advertisement_find(packet->src_iface, &packet->dst_protocol_address);
   if (advertisement != NULL && advertisement->configured)
@@ -2571,6 +2576,7 @@ int nhrp_ha_prepare_probe_reply(struct nhrp_packet *packet) {
   uint32_t generation;
   uint64_t nonce;
   uint64_t sent_nanoseconds;
+  int serviceable;
 
   payload = nhrp_packet_extension(
       packet, NHRP_EXTENSION_HA | NHRP_EXTENSION_FLAG_NOCREATE,
@@ -2581,12 +2587,13 @@ int nhrp_ha_prepare_probe_reply(struct nhrp_packet *packet) {
   if (packet->src_iface->ha_member_id[0] == 0 ||
       !ha_probe_parse(payload->u.raw, NHRP_HA_PROBE, requested_member,
                       sizeof(requested_member), &sequence, &generation, &nonce,
-                      &sent_nanoseconds) ||
+                      &sent_nanoseconds, &serviceable) ||
       strcmp(requested_member, packet->src_iface->ha_member_id) != 0)
     return FALSE;
 
   probe = ha_probe_payload(NHRP_HA_PROBE_REPLY, packet->src_iface->ha_member_id,
-                           sequence, generation, nonce, sent_nanoseconds);
+                           sequence, generation, nonce, sent_nanoseconds,
+                           nhrp_ha_hub_serviceable(packet->src_iface));
   if (probe == NULL)
     return FALSE;
   nhrp_payload_set_raw(payload, probe);

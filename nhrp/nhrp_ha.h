@@ -10,7 +10,7 @@
 #include "nhrp_address.h"
 
 #define NHRP_EXTENSION_HA 0x3801
-#define NHRP_HA_WIRE_VERSION 1
+#define NHRP_HA_WIRE_VERSION 2
 #define NHRP_HA_MEMBER_ID_MAX 63
 
 enum nhrp_ha_message_type {

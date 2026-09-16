@@ -849,6 +849,8 @@ static void admin_ha_hub_role(void *ctx, const char *cmd)
 		} else if (strcmp(keyword, "role") == 0) {
 			if (strcmp(value, "leader") == 0)
 				role = NHRP_HA_HUB_LEADER;
+			else if (strcmp(value, "follower") == 0)
+				role = NHRP_HA_HUB_FOLLOWER;
 			else if (strcmp(value, "standby") == 0)
 				role = NHRP_HA_HUB_STANDBY;
 			else

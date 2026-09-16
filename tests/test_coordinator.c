@@ -31,12 +31,12 @@ int main(void) {
       "\"active_member\":\"hub-primary\",\"candidates\":["
       "{\"member\":\"hub-primary\",\"priority\":100,"
       "\"state\":\"offline\",\"ready\":false,"
-      "\"authenticated\":true,\"term\":1,"
+      "\"authenticated\":true,\"term\":2,"
       "\"leader\":\"hub-primary\"},"
       "{\"member\":\"hub-backup1\",\"priority\":90,"
       "\"state\":\"ready\",\"ready\":true,"
       "\"authenticated\":true,\"term\":2,"
-      "\"leader\":\"hub-backup1\"}]}";
+      "\"leader\":\"hub-primary\"}]}";
   static const char disabled_event[] =
       "{\"protocol\":\"10.20.0.1\",\"generation\":1,"
       "\"switching\":false,\"auth_mode\":\"disabled\","
@@ -95,13 +95,13 @@ int main(void) {
   assert(candidate != NULL);
   assert(strcmp(candidate->member, "hub-backup1") == 0);
   assert(candidate->term == 2);
-  assert(strcmp(candidate->leader, "hub-backup1") == 0);
+  assert(strcmp(candidate->leader, "hub-primary") == 0);
 
   assert(parse_service(disabled_event, &view));
   assert(!view.auth_required);
   candidate = best_ready_candidate(&view);
   assert(candidate != NULL);
-  assert(strcmp(candidate->member, "hub-backup1") == 0);
+  assert(strcmp(candidate->member, "hub-primary") == 0);
 
   assert(parse_service(legacy_disabled_event, &view));
   assert(!view.auth_required);
@@ -111,7 +111,8 @@ int main(void) {
 
   assert(parse_service(transfer_transition_event, &view));
   candidate = best_ready_candidate(&view);
-  assert(candidate == NULL);
+  assert(candidate != NULL);
+  assert(strcmp(candidate->member, "hub-backup1") == 0);
   candidate = find_candidate(&view, view.active_member);
   assert(candidate_usable(&view, candidate));
 
