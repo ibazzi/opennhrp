@@ -13,6 +13,35 @@
 #define NHRP_HA_WIRE_VERSION 2
 #define NHRP_HA_MEMBER_ID_MAX 63
 
+static inline double nhrp_ha_loss_ewma(double current, int initialized,
+                                       int missed) {
+  if (!initialized)
+    return missed ? 1.0 : 0.0;
+  return current * 0.875 + (missed ? 0.125 : 0.0);
+}
+
+static inline unsigned int nhrp_ha_quality_score(double loss_ratio,
+                                                 double rtt_ms, int priority) {
+  double loss_score;
+  double latency_score;
+  double priority_score;
+  double total;
+
+  if (loss_ratio < 0.0)
+    loss_ratio = 0.0;
+  if (rtt_ms < 0.0)
+    rtt_ms = 0.0;
+  if (priority < 0)
+    priority = 0;
+  if (priority > 100)
+    priority = 100;
+  loss_score = loss_ratio >= 0.30 ? 0.0 : 60.0 * (1.0 - loss_ratio / 0.30);
+  latency_score = rtt_ms >= 300.0 ? 0.0 : 30.0 * (1.0 - rtt_ms / 300.0);
+  priority_score = priority / 10.0;
+  total = loss_score + latency_score + priority_score;
+  return total >= 100.0 ? 100U : (unsigned int)(total + 0.5);
+}
+
 enum nhrp_ha_message_type {
   NHRP_HA_MEMBER = 1,
   NHRP_HA_PROBE = 2,

@@ -131,6 +131,19 @@ Leader 会在认证成功后把 Hub TCP 实际源地址作为 observed endpoint�
 配置 reload 会原地替换 endpoint 和健康目标，不需要重启 `opennhrp`。恢复节点
 先保持隔离，连接 active 成员并学习当前 term/Leader 后才重新投影注册。
 
+每个 Spoke 独立探测 Hub List 中的所有 Hub，并按当前选中 endpoint 的链路质量
+评分。丢包使用 `α=1/8` 的 EWMA，分数固定为：
+
+```text
+60 * max(0, 1 - loss_pct / 30)
++ 30 * max(0, 1 - srtt_ms / 300)
++ 10 * min(priority, 100) / 100
+```
+
+不可服务、离线、未注册或认证失败的候选得 0 分。相同最高 term 内，目标高出
+当前 Hub 至少 10 分并持续 15 秒后迁移；迁移后冷却 30 秒。当前 Hub 不可用或
+term 陈旧时立即迁移。单次探测失败进入 `suspect` 只降低评分，不立即切换。
+
 ## 5. 两 Hub Witness
 
 仅当恰好两个 active Hub、两端连接已认证且同步时才应启用。以下命令面向 Manager
@@ -230,7 +243,8 @@ Spoke 状态：
 opennhrpctl ha show interface gre-ha format json
 ```
 
-重点字段包括 `active_member`、候选 `ready`、`selected_address`、
+重点字段包括 `active_member`、候选 `ready`、`selected_address`、`srtt_ms`、
+`loss_pct`、`score`、
 `service_available`、`isolated`、`term`、`commit_index`、`digest`、
 `policy`、`votes/required` 和 `quorum_available`。
 

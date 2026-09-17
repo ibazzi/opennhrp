@@ -2,17 +2,23 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
+#include "nhrp_ha.h"
 #include "opennhrp-ha-managed-hub.h"
 
 #define BUFFER_SIZE 32768
+#define SCORE_SWITCH_MARGIN 10
+#define SCORE_SWITCH_HOLD 15.0
+#define SCORE_SWITCH_COOLDOWN 30.0
 
 struct candidate_view {
   char member[64];
@@ -21,7 +27,8 @@ struct candidate_view {
   int priority;
   int ready;
   int authenticated;
-  unsigned int term;
+  unsigned int score;
+  uint64_t term;
 };
 
 struct service_view {
@@ -33,6 +40,26 @@ struct service_view {
   struct candidate_view candidates[32];
   size_t candidate_count;
 };
+
+struct decision_state {
+  char protocol[64];
+  char active_member[64];
+  char superior_member[64];
+  double superior_since;
+  double cooldown_until;
+  int degraded;
+  struct decision_state *next;
+};
+
+static struct decision_state *decision_states;
+
+static double monotonic_seconds(void) {
+  struct timespec now;
+
+  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+    return 0.0;
+  return now.tv_sec + now.tv_nsec / 1000000000.0;
+}
 
 static int connect_admin(const char *path) {
   struct sockaddr_un address;
@@ -111,6 +138,24 @@ static int json_unsigned(const char *start, const char *key,
   return 1;
 }
 
+static int json_u64(const char *start, const char *key, uint64_t *value) {
+  char pattern[96];
+  char *end;
+  const char *position;
+  unsigned long long parsed;
+
+  snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+  position = strstr(start, pattern);
+  if (position == NULL)
+    return 0;
+  position += strlen(pattern);
+  parsed = strtoull(position, &end, 10);
+  if (end == position)
+    return 0;
+  *value = parsed;
+  return 1;
+}
+
 static int parse_service(const char *line, struct service_view *view) {
   const char *active;
   const char *position;
@@ -153,7 +198,9 @@ static int parse_service(const char *line, struct service_view *view) {
     candidate->authenticated =
         strstr(position, "\"authenticated\":true") != NULL &&
         strstr(position, "\"authenticated\":true") < end;
-    if (!json_unsigned(position, "term", &candidate->term))
+    if (!json_unsigned(position, "score", &candidate->score))
+      return 0;
+    if (!json_u64(position, "term", &candidate->term))
       candidate->term = 0;
     json_string(position, "leader", candidate->leader,
                 sizeof(candidate->leader));
@@ -185,7 +232,11 @@ static struct candidate_view *best_ready_candidate(struct service_view *view) {
       continue;
     if (best == NULL || view->candidates[i].term > best->term ||
         (view->candidates[i].term == best->term &&
-         view->candidates[i].priority > best->priority))
+         (view->candidates[i].score > best->score ||
+          (view->candidates[i].score == best->score &&
+           (view->candidates[i].priority > best->priority ||
+            (view->candidates[i].priority == best->priority &&
+             strcmp(view->candidates[i].member, best->member) < 0))))))
       best = &view->candidates[i];
   }
   return best;
@@ -193,13 +244,89 @@ static struct candidate_view *best_ready_candidate(struct service_view *view) {
 
 static int candidate_usable(const struct service_view *view,
                             const struct candidate_view *candidate) {
-  return candidate != NULL && candidate->ready &&
+  return candidate != NULL &&
+         (candidate->ready || strcmp(candidate->state, "suspect") == 0) &&
          (!view->auth_required || candidate->authenticated);
+}
+
+static struct decision_state *decision_state_find(const char *protocol) {
+  struct decision_state *state;
+
+  for (state = decision_states; state != NULL; state = state->next)
+    if (strcmp(state->protocol, protocol) == 0)
+      return state;
+  state = calloc(1, sizeof(*state));
+  if (state == NULL)
+    return NULL;
+  snprintf(state->protocol, sizeof(state->protocol), "%s", protocol);
+  state->next = decision_states;
+  decision_states = state;
+  return state;
+}
+
+static void decision_reset_superior(struct decision_state *state) {
+  state->superior_member[0] = 0;
+  state->superior_since = 0.0;
+}
+
+static struct candidate_view *select_migration(struct service_view *view,
+                                               struct decision_state *state,
+                                               double now,
+                                               const char **reason) {
+  struct candidate_view *active =
+      view->active_member[0] != 0 ? find_candidate(view, view->active_member)
+                                  : NULL;
+  struct candidate_view *best = best_ready_candidate(view);
+
+  *reason = NULL;
+  if (strcmp(state->active_member, view->active_member) != 0) {
+    snprintf(state->active_member, sizeof(state->active_member), "%s",
+             view->active_member);
+    decision_reset_superior(state);
+  }
+  if (active == NULL) {
+    decision_reset_superior(state);
+    if (best != NULL)
+      *reason = "initial";
+    return best;
+  }
+  if (!candidate_usable(view, active)) {
+    decision_reset_superior(state);
+    if (best != NULL)
+      *reason = "unavailable";
+    return best;
+  }
+  if (best == NULL || active->term > best->term) {
+    decision_reset_superior(state);
+    return NULL;
+  }
+  if (best->term > active->term) {
+    decision_reset_superior(state);
+    *reason = "stale-term";
+    return best;
+  }
+  if (best == active || now < state->cooldown_until ||
+      best->score < active->score + SCORE_SWITCH_MARGIN) {
+    decision_reset_superior(state);
+    return NULL;
+  }
+  if (strcmp(state->superior_member, best->member) != 0) {
+    snprintf(state->superior_member, sizeof(state->superior_member), "%s",
+             best->member);
+    state->superior_since = now;
+    return NULL;
+  }
+  if (now - state->superior_since < SCORE_SWITCH_HOLD)
+    return NULL;
+  *reason = "quality";
+  return best;
 }
 
 static int activate(const char *socket_path, const char *interface_name,
                     const struct service_view *view,
-                    const struct candidate_view *candidate) {
+                    const struct candidate_view *active,
+                    const struct candidate_view *candidate,
+                    const char *reason) {
   char command[512];
   char response[2048];
   size_t used = 0;
@@ -232,8 +359,14 @@ static int activate(const char *socket_path, const char *interface_name,
             candidate->member, response);
     return -1;
   }
-  fprintf(stderr, "opennhrp-ha: activated %s at generation %u\n",
-          candidate->member, view->generation + 1);
+  fprintf(stderr,
+          "opennhrp-ha: %s %s -> %s reason=%s score=%u/%u term=%" PRIu64
+          "/%" PRIu64 " generation=%u\n",
+          active == NULL ? "activated" : "migrated",
+          active != NULL ? active->member : "none", candidate->member, reason,
+          active != NULL ? active->score : 0, candidate->score,
+          active != NULL ? active->term : 0, candidate->term,
+          view->generation + 1);
   return 0;
 }
 
@@ -241,9 +374,10 @@ static void process_event(const char *socket_path, const char *interface_name,
                           const char *line) {
   struct service_view view;
   struct candidate_view *active;
-  struct candidate_view *best;
-  static int degraded;
-  static char selected_leader[64];
+  struct candidate_view *target;
+  struct decision_state *state;
+  const char *reason;
+  double now;
 
   if (!parse_service(line, &view)) {
     fprintf(stderr, "opennhrp-ha: ignored malformed HA monitor event\n");
@@ -251,59 +385,47 @@ static void process_event(const char *socket_path, const char *interface_name,
   }
   if (view.switching)
     return;
+  state = decision_state_find(view.protocol);
+  if (state == NULL) {
+    fprintf(stderr, "opennhrp-ha: failed to allocate HA decision state\n");
+    return;
+  }
+  now = monotonic_seconds();
   active = view.active_member[0] != 0
                ? find_candidate(&view, view.active_member)
                : NULL;
-  best = best_ready_candidate(&view);
-  if (best != NULL && best->leader[0] != 0) {
-    if (selected_leader[0] == 0 ||
-        strcmp(selected_leader, best->leader) != 0) {
-      struct candidate_view *leader = find_candidate(&view, best->leader);
-
-      if (candidate_usable(&view, leader)) {
-        if (activate(socket_path, interface_name, &view, leader) != 0)
-          return;
-        snprintf(selected_leader, sizeof(selected_leader), "%s",
-                 best->leader);
-        degraded = 0;
-        return;
-      }
-    }
-  }
-  if (active != NULL && strcmp(active->state, "suspect") == 0 &&
-      (!view.auth_required || active->authenticated)) {
-    degraded = 0;
-    return;
-  }
-  if (candidate_usable(&view, active)) {
-    if (activate(socket_path, interface_name, &view, active) != 0)
+  target = select_migration(&view, state, now, &reason);
+  if (target != NULL) {
+    if (activate(socket_path, interface_name, &view, active, target, reason) !=
+        0)
       return;
-    degraded = 0;
+    if (active != NULL && active != target)
+      state->cooldown_until = now + SCORE_SWITCH_COOLDOWN;
+    decision_reset_superior(state);
+    state->degraded = 0;
     return;
   }
-
-  if (best == NULL) {
+  if (!candidate_usable(&view, active)) {
     size_t i;
 
     if (view.auth_required) {
       for (i = 0; i < view.candidate_count; i++)
         fprintf(stderr,
                 "opennhrp-ha: candidate %s ready=%d authenticated=%d "
-                "term=%u leader=%s\n",
+                "term=%" PRIu64 " leader=%s\n",
                 view.candidates[i].member, view.candidates[i].ready,
                 view.candidates[i].authenticated, view.candidates[i].term,
                 view.candidates[i].leader[0] != 0 ? view.candidates[i].leader
                                                   : "none");
     }
-    if (!degraded)
+    if (!state->degraded)
       fprintf(
           stderr,
           "opennhrp-ha: degraded; no READY candidate, neighbor unchanged\n");
-    degraded = 1;
+    state->degraded = 1;
     return;
   }
-  degraded = 0;
-  activate(socket_path, interface_name, &view, best);
+  state->degraded = 0;
 }
 
 static int monitor_once(const char *socket_path, const char *interface_name) {

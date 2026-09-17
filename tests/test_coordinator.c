@@ -19,23 +19,27 @@ int main(void) {
       "\"active_member\":\"hub-primary\",\"candidates\":["
       "{\"member\":\"hub-primary\",\"nbma\":\"150.158.214.148\","
       "\"priority\":100,\"state\":\"offline\",\"registered\":true,"
-      "\"ready\":false,\"active\":true},"
+      "\"ready\":false,\"active\":true,\"score\":0},"
       "{\"member\":\"hub-backup1\",\"nbma\":\"49.234.145.47\","
       "\"priority\":90,\"state\":\"ready\",\"registered\":true,"
-      "\"ready\":true,\"active\":false}]}";
+      "\"ready\":true,\"active\":false,\"score\":85}]}";
   struct service_view view;
   struct candidate_view *candidate;
+  struct decision_state decision = {0};
+  struct decision_state *first_service;
+  struct decision_state *second_service;
+  const char *reason;
   static const char authenticated_event[] =
       "{\"protocol\":\"10.20.0.1\",\"generation\":1,"
       "\"switching\":false,\"auth_mode\":\"required\","
       "\"active_member\":\"hub-primary\",\"candidates\":["
       "{\"member\":\"hub-primary\",\"priority\":100,"
       "\"state\":\"offline\",\"ready\":false,"
-      "\"authenticated\":true,\"term\":2,"
+      "\"authenticated\":true,\"score\":0,\"term\":2,"
       "\"leader\":\"hub-primary\"},"
       "{\"member\":\"hub-backup1\",\"priority\":90,"
       "\"state\":\"ready\",\"ready\":true,"
-      "\"authenticated\":true,\"term\":2,"
+      "\"authenticated\":true,\"score\":80,\"term\":2,"
       "\"leader\":\"hub-primary\"}]}";
   static const char disabled_event[] =
       "{\"protocol\":\"10.20.0.1\",\"generation\":1,"
@@ -43,11 +47,11 @@ int main(void) {
       "\"active_member\":\"hub-primary\",\"candidates\":["
       "{\"member\":\"hub-primary\",\"priority\":100,"
       "\"state\":\"ready\",\"ready\":true,"
-      "\"authenticated\":true,\"term\":2,"
+      "\"authenticated\":true,\"score\":70,\"term\":2,"
       "\"leader\":\"hub-backup1\"},"
       "{\"member\":\"hub-backup1\",\"priority\":90,"
       "\"state\":\"ready\",\"ready\":true,"
-      "\"authenticated\":true,\"term\":2,"
+      "\"authenticated\":true,\"score\":90,\"term\":2,"
       "\"leader\":\"hub-backup1\"}]}";
   static const char legacy_disabled_event[] =
       "{\"protocol\":\"10.20.0.1\",\"generation\":1,"
@@ -55,22 +59,32 @@ int main(void) {
       "\"active_member\":\"hub-backup1\",\"candidates\":["
       "{\"member\":\"hub-primary\",\"priority\":100,"
       "\"state\":\"ready\",\"ready\":true,"
-      "\"authenticated\":false,\"term\":0,\"leader\":\"\"},"
+      "\"authenticated\":false,\"score\":80,\"term\":0,\"leader\":\"\"},"
       "{\"member\":\"hub-backup1\",\"priority\":90,"
       "\"state\":\"ready\",\"ready\":true,"
-      "\"authenticated\":false,\"term\":0,\"leader\":\"\"}]}";
+      "\"authenticated\":false,\"score\":90,\"term\":0,\"leader\":\"\"}]}";
   static const char transfer_transition_event[] =
       "{\"protocol\":\"10.20.0.1\",\"generation\":3,"
       "\"switching\":false,\"auth_mode\":\"disabled\","
-      "\"active_member\":\"hub-backup1\",\"candidates\":["
+      "\"active_member\":\"hub-primary\",\"candidates\":["
       "{\"member\":\"hub-primary\",\"priority\":100,"
       "\"state\":\"ready\",\"ready\":true,"
-      "\"authenticated\":true,\"term\":12,"
+      "\"authenticated\":true,\"score\":95,\"term\":12,"
       "\"leader\":\"hub-backup1\"},"
       "{\"member\":\"hub-backup1\",\"priority\":90,"
       "\"state\":\"ready\",\"ready\":true,"
-      "\"authenticated\":true,\"term\":13,"
+      "\"authenticated\":true,\"score\":60,\"term\":13,"
       "\"leader\":\"hub-primary\"}]}";
+  static const char quality_event[] =
+      "{\"protocol\":\"10.20.0.1\",\"generation\":5,"
+      "\"switching\":false,\"auth_mode\":\"required\","
+      "\"active_member\":\"hub-primary\",\"candidates\":["
+      "{\"member\":\"hub-primary\",\"priority\":100,"
+      "\"state\":\"suspect\",\"ready\":false,"
+      "\"authenticated\":true,\"score\":50,\"term\":5000000000},"
+      "{\"member\":\"hub-backup1\",\"priority\":90,"
+      "\"state\":\"ready\",\"ready\":true,"
+      "\"authenticated\":true,\"score\":60,\"term\":5000000000}]}";
   static const uint8_t snapshot[] = "entry 10.20.0.1 32 192.0.2.1 -\n";
   static const uint8_t stale_snapshot[] = "entry 10.20.0.2 32 192.0.2.2 -\n";
   struct nhrp_ha_managed_state current_manifest;
@@ -85,6 +99,7 @@ int main(void) {
   candidate = find_candidate(&view, "hub-primary");
   assert(candidate != NULL);
   assert(strcmp(candidate->state, "offline") == 0);
+  assert(candidate->score == 0);
   candidate = best_ready_candidate(&view);
   assert(candidate != NULL);
   assert(strcmp(candidate->member, "hub-backup1") == 0);
@@ -101,13 +116,13 @@ int main(void) {
   assert(!view.auth_required);
   candidate = best_ready_candidate(&view);
   assert(candidate != NULL);
-  assert(strcmp(candidate->member, "hub-primary") == 0);
+  assert(strcmp(candidate->member, "hub-backup1") == 0);
 
   assert(parse_service(legacy_disabled_event, &view));
   assert(!view.auth_required);
   candidate = best_ready_candidate(&view);
   assert(candidate != NULL);
-  assert(strcmp(candidate->member, "hub-primary") == 0);
+  assert(strcmp(candidate->member, "hub-backup1") == 0);
 
   assert(parse_service(transfer_transition_event, &view));
   candidate = best_ready_candidate(&view);
@@ -115,6 +130,69 @@ int main(void) {
   assert(strcmp(candidate->member, "hub-backup1") == 0);
   candidate = find_candidate(&view, view.active_member);
   assert(candidate_usable(&view, candidate));
+
+  assert(nhrp_ha_quality_score(0.0, 0.0, 100) == 100);
+  assert(nhrp_ha_quality_score(0.30, 300.0, 100) == 10);
+  assert(nhrp_ha_quality_score(0.15, 150.0, 50) == 50);
+  assert(nhrp_ha_quality_score(0.0, 0.0, 200) == 100);
+  assert(nhrp_ha_loss_ewma(0.0, 0, 0) == 0.0);
+  assert(nhrp_ha_loss_ewma(0.0, 0, 1) == 1.0);
+  assert(nhrp_ha_loss_ewma(1.0, 1, 0) == 0.875);
+  assert(nhrp_ha_loss_ewma(0.0, 1, 1) == 0.125);
+
+  assert(parse_service(quality_event, &view));
+  candidate = find_candidate(&view, "hub-primary");
+  assert(candidate != NULL && candidate->term == UINT64_C(5000000000));
+  assert(candidate_usable(&view, candidate));
+  view.candidates[1].authenticated = 0;
+  assert(best_ready_candidate(&view) == NULL);
+  view.candidates[1].authenticated = 1;
+  view.candidates[0].ready = 1;
+  view.candidates[0].score = 60;
+  view.candidates[0].priority = 90;
+  assert(strcmp(best_ready_candidate(&view)->member, "hub-backup1") == 0);
+  view.candidates[0].ready = 0;
+  view.candidates[0].score = 50;
+  view.candidates[0].priority = 100;
+  assert(select_migration(&view, &decision, 100.0, &reason) == NULL);
+  assert(strcmp(decision.superior_member, "hub-backup1") == 0);
+  assert(select_migration(&view, &decision, 114.9, &reason) == NULL);
+  candidate = select_migration(&view, &decision, 115.0, &reason);
+  assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
+  assert(strcmp(reason, "quality") == 0);
+  view.candidates[1].score = 59;
+  assert(select_migration(&view, &decision, 116.0, &reason) == NULL);
+  assert(decision.superior_member[0] == 0);
+  view.candidates[1].score = 60;
+  assert(select_migration(&view, &decision, 117.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 131.9, &reason) == NULL);
+  candidate = select_migration(&view, &decision, 132.0, &reason);
+  assert(candidate != NULL && strcmp(reason, "quality") == 0);
+  decision.cooldown_until = 145.0;
+  decision_reset_superior(&decision);
+  assert(select_migration(&view, &decision, 144.9, &reason) == NULL);
+  assert(decision.superior_member[0] == 0);
+  assert(select_migration(&view, &decision, 145.0, &reason) == NULL);
+  candidate = select_migration(&view, &decision, 160.0, &reason);
+  assert(candidate != NULL && strcmp(reason, "quality") == 0);
+
+  memset(&decision, 0, sizeof(decision));
+  assert(parse_service(authenticated_event, &view));
+  candidate = select_migration(&view, &decision, 1.0, &reason);
+  assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
+  assert(strcmp(reason, "unavailable") == 0);
+
+  memset(&decision, 0, sizeof(decision));
+  assert(parse_service(transfer_transition_event, &view));
+  candidate = select_migration(&view, &decision, 1.0, &reason);
+  assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
+  assert(strcmp(reason, "stale-term") == 0);
+
+  first_service = decision_state_find("10.20.0.1");
+  second_service = decision_state_find("10.30.0.1");
+  assert(first_service != NULL && second_service != NULL);
+  assert(first_service != second_service);
+  assert(decision_state_find("10.20.0.1") == first_service);
 
   assert(!opennhrp_ha_snapshot_resync_needed(10, "leader", 9, "peer"));
   assert(!opennhrp_ha_snapshot_resync_needed(10, "leader", 10, "leader"));

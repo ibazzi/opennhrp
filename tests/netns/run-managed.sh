@@ -796,6 +796,30 @@ activate_spoke_member() {
 	grep -q '^Status: ok' <<<"$response"
 }
 
+active_candidate_ready() {
+	local state=$1 member
+
+	member=$(grep -o '"active_member":"[^"]*' <<<"$state" |
+		head -n 1 | cut -d'"' -f4)
+	[[ -n $member ]] &&
+		grep -q '"member":"'"$member"'"[^}]*"ready":true' <<<"$state"
+}
+
+degrade_spoke_primary() {
+	ip netns exec "$spoke_ns" tc qdisc replace dev u-spoke root \
+		handle 1: prio bands 3
+	ip netns exec "$spoke_ns" tc qdisc replace dev u-spoke parent 1:3 \
+		handle 30: netem delay 180ms loss 1%
+	ip netns exec "$spoke_ns" tc filter replace dev u-spoke protocol ip \
+		parent 1: prio 1 u32 match ip dst "$hub1_underlay/32" flowid 1:3
+	ip netns exec "$spoke_ns" tc filter replace dev u-spoke protocol ip \
+		parent 1: prio 2 u32 match ip dst "$hub1_private_nbma/32" flowid 1:3
+}
+
+restore_spoke_primary() {
+	ip netns exec "$spoke_ns" tc qdisc del dev u-spoke root 2>/dev/null || true
+}
+
 for _ in {1..300}; do
 	spoke_state=$(spoke_ha_show)
 	if grep -q '"member":"hub-primary".*"ready":true' <<<"$spoke_state" &&
@@ -818,6 +842,34 @@ grep -q '"member":"hub-backup1".*"local_nbma":"'"$hub2_local_nbma"'".*"local_nbm
 	<<<"$spoke_state"
 grep -q '"member":"hub-backup2".*"local_nbma":null.*"local_nbma_origin":null' \
 	<<<"$spoke_state"
+wait_spoke_neighbor "$hub1_local_nbma"
+
+log "validating per-Spoke latency/loss scoring and migration hysteresis"
+degrade_spoke_primary
+sleep 3
+spoke_state=$(spoke_ha_show)
+grep -q '"member":"hub-primary"[^}]*"loss_pct":[0-9.]*[^}]*"score":[0-9]*' \
+	<<<"$spoke_state"
+grep -q '"active_member":"hub-primary"' <<<"$spoke_state"
+grep -q '"active_member":"hub-primary"' <<<"$(private_spoke_ha_show)"
+restore_spoke_primary
+sleep 5
+
+degrade_spoke_primary
+for _ in {1..500}; do
+	spoke_state=$(spoke_ha_show)
+	if grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"; then
+		break
+	fi
+	sleep 0.05
+done
+grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
+grep -q '"active_member":"hub-primary"' <<<"$(private_spoke_ha_show)"
+grep -q '"leader":"hub-primary"' <<<"$(hub_cluster hub1)"
+restore_spoke_primary
+sleep 2
+grep -q '"active_member":"hub-backup1"' <<<"$(spoke_ha_show)"
+activate_spoke_member hub-primary
 wait_spoke_neighbor "$hub1_local_nbma"
 
 log "validating one Spoke fails over to a healthy Follower without moving the Leader"
@@ -1109,10 +1161,17 @@ for _ in {1..400}; do
 	hub1_cluster=$(cluster_json_for hub1)
 	hub2_cluster=$(cluster_json_for hub2)
 	spoke_state=$(spoke_ha_show)
+	private_spoke_state=$(private_spoke_ha_show)
 	if grep -q '"network_health":"unhealthy"' <<<"$hub1_cluster" &&
 		grep -q '"service_available":false' <<<"$hub1_cluster" &&
 		grep -q '"leader":"hub-backup1"' <<<"$hub2_cluster" &&
-		grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"; then
+		grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state" &&
+		grep -Eq '"active_member":"hub-backup[12]"' \
+			<<<"$private_spoke_state" &&
+		grep -q '"member":"hub-backup1"[^}]*"ready":true' \
+			<<<"$spoke_state" &&
+		grep -q '"member":"hub-backup1"[^}]*"ready":true' \
+			<<<"$private_spoke_state"; then
 		break
 	fi
 	sleep 0.1
@@ -1120,7 +1179,8 @@ done
 grep -q '"network_health":"unhealthy"' <<<"$hub1_cluster"
 grep -q '"health_interval_seconds":1' <<<"$hub1_cluster"
 grep -q '"leader":"hub-backup1"' <<<"$hub2_cluster"
-grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
+grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state"
+grep -Eq '"active_member":"hub-backup[12]"' <<<"$private_spoke_state"
 ip netns exec "$hub1_ns" iptables -D OUTPUT -p icmp --icmp-type echo-request \
 	-d 198.51.100.251 -m comment --comment opennhrp-ha-health-test -j DROP
 ip netns exec "$hub1_ns" iptables -D OUTPUT -p icmp --icmp-type echo-request \
@@ -1138,28 +1198,20 @@ grep -q '"network_health":"healthy"' <<<"$hub1_cluster"
 grep -q '"leader":"hub-backup1"' <<<"$hub1_cluster"
 "$bin_dir/opennhrpctl" -a "$runtime_dir/hub2-ha.socket" \
 	ha failback request force >"$runtime_dir/health-failback.request.txt"
-for _ in {1..200}; do
+for _ in {1..400}; do
 	hub1_cluster=$(cluster_json_for hub1)
 	spoke_state=$(spoke_ha_show)
+	private_spoke_state=$(private_spoke_ha_show)
 	if grep -q '"leader":"hub-primary"' <<<"$hub1_cluster" &&
-		grep -q '"active_member":"hub-primary"' <<<"$spoke_state"; then
+		active_candidate_ready "$spoke_state" &&
+		active_candidate_ready "$private_spoke_state"; then
 		break
 	fi
 	sleep 0.1
 done
 grep -q '"leader":"hub-primary"' <<<"$hub1_cluster"
-if ! grep -q '"active_member":"hub-primary"' <<<"$spoke_state"; then
-	printf 'Primary cluster after failback:\n%s\n' "$hub1_cluster" >&2
-	printf 'Spoke HA after failback:\n%s\n' "$spoke_state" >&2
-	ip -n "$spoke_ns" route get "$hub1_underlay" >&2 || true
-	ip -n "$spoke_ns" route get "$hub1_private_nbma" >&2 || true
-	ip -n "$spoke_ns" neigh show >&2 || true
-	grep -E 'HA [Rr]egistration|no matching request|packet type [12]|candidate hub-primary' \
-		"$runtime_dir/hub1.log" | tail -n 120 >&2 || true
-	grep -E 'HA [Rr]egistration|no matching request|packet type [12]|candidate hub-primary' \
-		"$runtime_dir/spoke.log" | tail -n 120 >&2 || true
-	exit 1
-fi
+active_candidate_ready "$spoke_state"
+active_candidate_ready "$private_spoke_state"
 
 log "validating gre-ha down isolation, takeover, and recovered-node rejoin"
 ip netns exec "$spoke_ns" ping -I 10.20.0.2 -c 5 -W 1 198.18.20.1 \
@@ -1177,9 +1229,11 @@ for _ in {1..200}; do
 		grep -q '"leader":"hub-backup1"' <<<"$hub3_cluster" &&
 		grep -q '"member":"hub-backup1".*"connected":true' \
 			<<<"$hub3_cluster" &&
-		grep -q '"active_member":"hub-backup1"' <<<"$spoke_state" &&
-		grep -q '"active_member":"hub-backup1"' \
-			<<<"$private_spoke_state"; then
+		grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state" &&
+		grep -Eq '"active_member":"hub-backup[12]"' \
+			<<<"$private_spoke_state" &&
+		active_candidate_ready "$spoke_state" &&
+		active_candidate_ready "$private_spoke_state"; then
 		break
 	fi
 	sleep 0.05
@@ -1194,11 +1248,10 @@ grep -q '"isolated":true' <<<"$hub1_cluster"
 grep -q '"leader":"hub-backup1"' <<<"$hub2_cluster"
 grep -q '"leader":"hub-backup1"' <<<"$hub3_cluster"
 grep -q '"member":"hub-backup1".*"connected":true' <<<"$hub3_cluster"
-grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
-grep -q '"member":"hub-backup1".*"selected_address":"'"$hub2_private_nbma"'".*"ready":true' \
-	<<<"$private_spoke_state"
-grep -q '"active_member":"hub-backup1"' <<<"$private_spoke_state"
-wait_private_spoke_neighbor "$hub2_private_nbma"
+grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state"
+active_candidate_ready "$spoke_state"
+grep -Eq '"active_member":"hub-backup[12]"' <<<"$private_spoke_state"
+active_candidate_ready "$private_spoke_state"
 ip netns exec "$spoke_ns" ping -I 10.20.0.2 -c 5 -W 1 198.18.20.1 \
 	>"$runtime_dir/ping.backup.txt"
 ip netns exec "$private_spoke_ns" ping -I 10.20.0.3 -c 5 -W 1 \
@@ -1222,9 +1275,9 @@ grep -q '"service_available":true' <<<"$hub1_cluster"
 grep -q '"isolated":false' <<<"$hub1_cluster"
 grep -q '"member":"hub-backup1".*"connected":true' <<<"$hub1_cluster"
 spoke_state=$(spoke_ha_show)
-grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
+active_candidate_ready "$spoke_state"
 private_spoke_state=$(private_spoke_ha_show)
-grep -q '"active_member":"hub-backup1"' <<<"$private_spoke_state"
+active_candidate_ready "$private_spoke_state"
 for _ in {1..400}; do
 	spoke_state=$(spoke_ha_show)
 	if grep -q '"member":"hub-primary"[^}]*"ready":true' <<<"$spoke_state"; then
@@ -1250,7 +1303,7 @@ for _ in {1..300}; do
 	spoke_state=$(spoke_ha_show)
 	if grep -q '"member":"hub-primary"[^}]*"ready":true' <<<"$spoke_state" &&
 		grep -q '"member":"hub-backup1"[^}]*"ready":true' <<<"$spoke_state" &&
-		grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"; then
+		active_candidate_ready "$spoke_state"; then
 		break
 	fi
 	sleep 0.05
@@ -1264,7 +1317,7 @@ if ! grep -q '"member":"hub-primary"[^}]*"ready":true' <<<"$spoke_state"; then
 	exit 1
 fi
 grep -q '"member":"hub-backup1"[^}]*"ready":true' <<<"$spoke_state"
-grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
+active_candidate_ready "$spoke_state"
 sleep 31
 purge_after=$(grep -c \
 	'Received Purge Request from proto src 10.20.0.2 to 10.20.0.1' \
@@ -1313,17 +1366,16 @@ for _ in {1..400}; do
 	private_spoke_state=$(private_spoke_ha_show)
 	if grep -q '"leader":"hub-primary"' <<<"$hub1_cluster" &&
 		grep -q '"leader":"hub-primary"' <<<"$hub2_cluster" &&
-		grep -q '"active_member":"hub-primary"' <<<"$spoke_state" &&
-		grep -q '"active_member":"hub-primary"' \
-			<<<"$private_spoke_state"; then
+		active_candidate_ready "$spoke_state" &&
+		active_candidate_ready "$private_spoke_state"; then
 		break
 	fi
 	sleep 0.05
 done
 if ! grep -q '"leader":"hub-primary"' <<<"$hub1_cluster" ||
 	! grep -q '"leader":"hub-primary"' <<<"$hub2_cluster" ||
-	! grep -q '"active_member":"hub-primary"' <<<"$spoke_state" ||
-	! grep -q '"active_member":"hub-primary"' <<<"$private_spoke_state"; then
+	! active_candidate_ready "$spoke_state" ||
+	! active_candidate_ready "$private_spoke_state"; then
 	printf 'Primary cluster:\n%s\nBackup cluster:\n%s\n' \
 		"$hub1_cluster" "$hub2_cluster" >&2
 	printf 'Spoke:\n%s\nPrivate Spoke:\n%s\n' \
@@ -1332,14 +1384,9 @@ if ! grep -q '"leader":"hub-primary"' <<<"$hub1_cluster" ||
 fi
 grep -q '"leader":"hub-primary"' <<<"$hub1_cluster"
 grep -q '"leader":"hub-primary"' <<<"$hub2_cluster"
-grep -q '"active_member":"hub-primary"' <<<"$spoke_state"
-grep -q '"active_member":"hub-primary"' <<<"$private_spoke_state"
 hub1_failback_delete_after=$(grep -c 'Delete link from' \
 	"$runtime_dir/hub1.log" || true)
 [[ $hub1_failback_delete_after == "$hub1_failback_delete_before" ]]
-grep -q '"member":"hub-primary".*"selected_address":"'"$hub1_private_nbma"'".*"ready":true' \
-	<<<"$private_spoke_state"
-wait_private_spoke_neighbor "$hub1_private_nbma"
 ip netns exec "$spoke_ns" ping -I 10.20.0.2 -c 5 -W 1 198.18.20.1 \
 	>"$runtime_dir/ping.failback.txt"
 ip netns exec "$private_spoke_ns" ping -I 10.20.0.3 -c 5 -W 1 \
@@ -1379,9 +1426,11 @@ for _ in {1..300}; do
 	if [[ $(hub_core_role hub1) == standby &&
 		$(hub_core_role hub2) == leader &&
 		$(hub_core_role hub3) == follower ]] &&
-		grep -q '"active_member":"hub-backup1"' <<<"$spoke_state" &&
-		grep -q '"active_member":"hub-backup1"' \
-			<<<"$private_spoke_state"; then
+		grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state" &&
+		grep -Eq '"active_member":"hub-backup[12]"' \
+			<<<"$private_spoke_state" &&
+		active_candidate_ready "$spoke_state" &&
+		active_candidate_ready "$private_spoke_state"; then
 		break
 	fi
 	sleep 0.05
@@ -1390,8 +1439,10 @@ done
 [[ $(hub_core_role hub2) == leader ]]
 [[ $(hub_core_role hub3) == follower ]]
 grep -q '"quorum_available":false' <<<"$(hub_cluster hub1)"
-grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
-grep -q '"active_member":"hub-backup1"' <<<"$private_spoke_state"
+grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state"
+grep -Eq '"active_member":"hub-backup[12]"' <<<"$private_spoke_state"
+active_candidate_ready "$spoke_state"
+active_candidate_ready "$private_spoke_state"
 ip netns exec "$spoke_ns" ping -I 10.20.0.2 -c 2 -W 1 198.18.20.1 \
 	>"$runtime_dir/ping.majority.txt"
 ip netns exec "$hub1_ns" iptables -D INPUT -p tcp --dport 49002 \
