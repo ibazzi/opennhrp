@@ -36,6 +36,7 @@ struct nhrp_ha_hub_binding {
 void nhrp_ha_hub_cleanup(void);
 void nhrp_ha_hub_fence(struct nhrp_interface *iface);
 int nhrp_ha_hub_capture_direct(struct nhrp_peer *peer);
+int nhrp_ha_hub_unique_conflict(struct nhrp_peer *peer);
 int nhrp_ha_hub_retire_direct(struct nhrp_interface *iface,
                               const struct nhrp_address *protocol,
                               uint8_t prefix_length,

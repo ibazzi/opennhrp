@@ -27,10 +27,26 @@
 
 static struct ev_io accept_io;
 
+#define ADMIN_OUTPUT_LIMIT (256 * 1024)
+#define ADMIN_OUTPUT_HIGH (128 * 1024)
+#define ADMIN_WRITE_BUDGET (64 * 1024)
+#define ADMIN_ENUM_BUDGET 128
+
+static void admin_send_cb(struct ev_io *w, int revents);
+static void admin_enumerate_cb(struct ev_idle *w, int revents);
+
 struct admin_remote {
   struct list_head monitor_list_entry;
   struct ev_timer timeout;
   struct ev_io io;
+  struct ev_io output_io;
+  struct ev_idle enumeration;
+  struct nhrp_peer_cursor cursor;
+  struct nhrp_peer_selector selector;
+  char *output;
+  size_t output_start, output_end, output_capacity;
+  int failed;
+  int complete;
   int num_read;
   int monitor;
   int deferred;
@@ -51,7 +67,7 @@ static int parse_word(const char **bufptr, size_t len, char *word) {
   if (buf[pos] == '\n' || buf[pos] == 0)
     return FALSE;
 
-  for (i = 0; i < len - 1 && !isspace(buf[pos + i]); i++)
+  for (i = 0; i < len - 1 && buf[pos + i] != 0 && !isspace(buf[pos + i]); i++)
     word[i] = buf[pos + i];
   word[i] = 0;
 
@@ -59,22 +75,62 @@ static int parse_word(const char **bufptr, size_t len, char *word) {
   return TRUE;
 }
 
-static void admin_raw_write(void *ctx, const void *buf, size_t len) {
-  struct admin_remote *rmt = (struct admin_remote *)ctx;
+static void admin_progress(struct admin_remote *remote) {
+  ev_timer_stop(&remote->timeout);
+  ev_timer_set(&remote->timeout, 10., 0.);
+  ev_timer_start(&remote->timeout);
+}
 
-  if (write(rmt->io.fd, buf, len) != len) {
+static void admin_raw_write(void *ctx, const void *buf, size_t len) {
+  struct admin_remote *remote = ctx;
+  size_t pending = remote->output_end - remote->output_start;
+  size_t capacity;
+  char *output;
+
+  if (remote->failed || len == 0)
+    return;
+  if (len > ADMIN_OUTPUT_LIMIT - pending)
+    goto failed;
+  if (remote->output_start != 0) {
+    memmove(remote->output, remote->output + remote->output_start, pending);
+    remote->output_start = 0;
+    remote->output_end = pending;
   }
+  if (pending + len > remote->output_capacity) {
+    capacity = remote->output_capacity ? remote->output_capacity : 4096;
+    while (capacity < pending + len)
+      capacity *= 2;
+    output = realloc(remote->output, capacity);
+    if (output == NULL)
+      goto failed;
+    remote->output = output;
+    remote->output_capacity = capacity;
+  }
+  memcpy(remote->output + remote->output_end, buf, len);
+  remote->output_end += len;
+  ev_io_start(&remote->output_io);
+  return;
+
+failed:
+  nhrp_error(
+      "Admin output allocation or buffer limit exceeded; closing client");
+  remote->failed = TRUE;
+  ev_io_start(&remote->output_io);
 }
 
 static void admin_write(void *ctx, const char *format, ...) {
   char msg[1024];
   va_list ap;
-  size_t len;
+  int len;
 
   va_start(ap, format);
   len = vsnprintf(msg, sizeof(msg), format, ap);
   va_end(ap);
-  if (len >= sizeof(msg))
+  if (len < 0) {
+    ((struct admin_remote *)ctx)->failed = TRUE;
+    return;
+  }
+  if ((size_t)len >= sizeof(msg))
     len = sizeof(msg) - 1;
 
   admin_raw_write(ctx, msg, len);
@@ -86,10 +142,62 @@ static void admin_free_remote(struct admin_remote *rm) {
   if (list_hashed(&rm->monitor_list_entry))
     list_del(&rm->monitor_list_entry);
   ev_io_stop(&rm->io);
+  ev_io_stop(&rm->output_io);
+  ev_idle_stop(&rm->enumeration);
+  nhrp_peer_cursor_close(&rm->cursor);
+  free((void *)rm->selector.hostname);
   ev_timer_stop(&rm->timeout);
   shutdown(fd, SHUT_RDWR);
   close(fd);
+  free(rm->output);
   free(rm);
+}
+
+static void admin_finish(struct admin_remote *remote) {
+  remote->complete = TRUE;
+  if (remote->failed || remote->output_start == remote->output_end)
+    admin_free_remote(remote);
+  else
+    ev_io_start(&remote->output_io);
+}
+
+static void admin_send_cb(struct ev_io *w, int revents) {
+  struct admin_remote *remote = container_of(w, struct admin_remote, output_io);
+  size_t budget = ADMIN_WRITE_BUDGET;
+
+  if (remote->failed)
+    goto failed;
+  while (remote->output_start < remote->output_end && budget != 0) {
+    size_t len = remote->output_end - remote->output_start;
+    ssize_t sent;
+    if (len > budget)
+      len = budget;
+    sent =
+        send(w->fd, remote->output + remote->output_start, len, MSG_NOSIGNAL);
+    if (sent < 0 && errno == EINTR)
+      continue;
+    if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+      break;
+    if (sent <= 0)
+      goto failed;
+    remote->output_start += sent;
+    budget -= sent;
+    admin_progress(remote);
+  }
+  if (remote->output_start == remote->output_end) {
+    remote->output_start = remote->output_end = 0;
+    ev_io_stop(w);
+    if (remote->complete) {
+      admin_free_remote(remote);
+      return;
+    }
+  }
+  if (remote->cursor.next != NULL &&
+      remote->output_end - remote->output_start < ADMIN_OUTPUT_HIGH)
+    ev_idle_start(&remote->enumeration);
+  return;
+failed:
+  admin_free_remote(remote);
 }
 
 void admin_ha_notify(struct nhrp_interface *iface) {
@@ -103,26 +211,39 @@ void admin_ha_notify(struct nhrp_interface *iface) {
       continue;
     length =
         nhrp_ha_render(buffer, sizeof(buffer), remote->monitor_interface, TRUE);
-    if (write(remote->io.fd, buffer, length) != length)
+    admin_raw_write(remote, buffer, length);
+    if (remote->failed)
       admin_free_remote(remote);
   }
 }
 
+static int admin_append(char *buf, size_t size, const char *format, ...) {
+  va_list ap;
+  int len;
+
+  va_start(ap, format);
+  len = vsnprintf(buf, size, format, ap);
+  va_end(ap);
+  return len < 0 ? 0 : ((size_t)len >= size ? (int)size - 1 : len);
+}
+
 static int admin_show_peer(void *ctx, struct nhrp_peer *peer) {
-  char buf[512], tmp[32];
+  char buf[2048], tmp[64];
   char *str;
   size_t len = sizeof(buf);
   int i = 0, rel;
 
   if (peer->interface != NULL)
-    i += snprintf(&buf[i], len - i, "Interface: %s\n", peer->interface->name);
+    i += admin_append(&buf[i], len - i, "Interface: %s\n",
+                      peer->interface->name);
 
-  i += snprintf(&buf[i], len - i,
-                "Type: %s\n"
-                "Protocol-Address: %s/%d\n",
-                nhrp_peer_type[peer->type],
-                nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp),
-                peer->prefix_length);
+  i += admin_append(
+      &buf[i], len - i,
+      "Type: %s\n"
+      "Protocol-Address: %s/%d\n",
+      nhrp_peer_type[peer->type],
+      nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp),
+      peer->prefix_length);
 
   if (peer->next_hop_address.type != PF_UNSPEC) {
     switch (peer->type) {
@@ -137,45 +258,45 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer) {
       str = "NBMA-Address";
       break;
     }
-    i += snprintf(
+    i += admin_append(
         &buf[i], len - i, "%s: %s\n", str,
         nhrp_address_format(&peer->next_hop_address, sizeof(tmp), tmp));
   }
   if (peer->nbma_hostname) {
-    i += snprintf(&buf[i], len - i, "Hostname: %s\n", peer->nbma_hostname);
+    i += admin_append(&buf[i], len - i, "Hostname: %s\n", peer->nbma_hostname);
   }
   if (peer->local_connect_address.type != PF_UNSPEC) {
-    i += snprintf(
+    i += admin_append(
         &buf[i], len - i, "Local-NBMA-Address: %s\n",
         nhrp_address_format(&peer->local_connect_address, sizeof(tmp), tmp));
   }
   if (peer->next_hop_nat_oa.type != PF_UNSPEC) {
-    i +=
-        snprintf(&buf[i], len - i, "NBMA-NAT-OA-Address: %s\n",
-                 nhrp_address_format(&peer->next_hop_nat_oa, sizeof(tmp), tmp));
+    i += admin_append(
+        &buf[i], len - i, "NBMA-NAT-OA-Address: %s\n",
+        nhrp_address_format(&peer->next_hop_nat_oa, sizeof(tmp), tmp));
   }
   if (peer->flags & (NHRP_PEER_FLAG_USED | NHRP_PEER_FLAG_UNIQUE |
                      NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP)) {
-    i += snprintf(&buf[i], len - i, "Flags:");
+    i += admin_append(&buf[i], len - i, "Flags:");
     if (peer->flags & NHRP_PEER_FLAG_UNIQUE)
-      i += snprintf(&buf[i], len - i, " unique");
+      i += admin_append(&buf[i], len - i, " unique");
 
     if (peer->flags & NHRP_PEER_FLAG_USED)
-      i += snprintf(&buf[i], len - i, " used");
+      i += admin_append(&buf[i], len - i, " used");
     if (peer->flags & NHRP_PEER_FLAG_UP)
-      i += snprintf(&buf[i], len - i, " up");
+      i += admin_append(&buf[i], len - i, " up");
     else if (peer->flags & NHRP_PEER_FLAG_LOWER_UP)
-      i += snprintf(&buf[i], len - i, " lower-up");
-    i += snprintf(&buf[i], len - i, "\n");
+      i += admin_append(&buf[i], len - i, " lower-up");
+    i += admin_append(&buf[i], len - i, "\n");
   }
   if (peer->expire_time) {
     rel = (int)(peer->expire_time - ev_now());
     if (rel >= 0) {
-      i += snprintf(&buf[i], len - i, "Expires-In: %d:%02d\n", rel / 60,
-                    rel % 60);
+      i += admin_append(&buf[i], len - i, "Expires-In: %d:%02d\n", rel / 60,
+                        rel % 60);
     }
   }
-  i += snprintf(&buf[i], len - i, "\n");
+  i += admin_append(&buf[i], len - i, "\n");
   admin_raw_write(ctx, buf, i);
   return 0;
 }
@@ -280,30 +401,52 @@ err:
   return FALSE;
 }
 
-static void admin_route_show(void *ctx, const char *cmd) {
-  struct nhrp_peer_selector sel;
+static void admin_enumerate_cb(struct ev_idle *w, int revents) {
+  struct admin_remote *remote =
+      container_of(w, struct admin_remote, enumeration);
+  unsigned int checked;
 
-  memset(&sel, 0, sizeof(sel));
-  sel.type_mask = BIT(NHRP_PEER_TYPE_LOCAL_ROUTE);
-  if (!admin_parse_selector(ctx, cmd, &sel))
+  for (checked = 0; checked < ADMIN_ENUM_BUDGET; checked++) {
+    struct nhrp_peer *peer;
+    if (remote->failed) {
+      admin_free_remote(remote);
+      return;
+    }
+    if (remote->output_end - remote->output_start >= ADMIN_OUTPUT_HIGH) {
+      ev_idle_stop(w);
+      return;
+    }
+    peer = nhrp_peer_cursor_next(&remote->cursor);
+    if (peer == NULL) {
+      ev_idle_stop(w);
+      nhrp_peer_cursor_close(&remote->cursor);
+      admin_finish(remote);
+      return;
+    }
+    if (!(peer->flags & NHRP_PEER_FLAG_REMOVED) &&
+        nhrp_peer_match(peer, &remote->selector))
+      admin_show_peer(remote, peer);
+  }
+}
+
+static void admin_start_show(void *ctx, const char *cmd, int type_mask) {
+  struct admin_remote *remote = ctx;
+
+  remote->selector.type_mask = type_mask;
+  if (!admin_parse_selector(ctx, cmd, &remote->selector))
     return;
-
   admin_write(ctx, "Status: ok\n\n");
-  nhrp_peer_foreach(admin_show_peer, ctx, &sel);
-  admin_free_selector(&sel);
+  nhrp_peer_cursor_open(&remote->cursor);
+  ev_idle_start(&remote->enumeration);
+}
+
+static void admin_route_show(void *ctx, const char *cmd) {
+  admin_start_show(ctx, cmd, BIT(NHRP_PEER_TYPE_LOCAL_ROUTE));
 }
 
 static void admin_cache_show(void *ctx, const char *cmd) {
-  struct nhrp_peer_selector sel;
-
-  memset(&sel, 0, sizeof(sel));
-  sel.type_mask = NHRP_PEER_TYPEMASK_ALL & ~BIT(NHRP_PEER_TYPE_LOCAL_ROUTE);
-  if (!admin_parse_selector(ctx, cmd, &sel))
-    return;
-
-  admin_write(ctx, "Status: ok\n\n");
-  nhrp_peer_foreach(admin_show_peer, ctx, &sel);
-  admin_free_selector(&sel);
+  admin_start_show(ctx, cmd,
+                   NHRP_PEER_TYPEMASK_ALL & ~BIT(NHRP_PEER_TYPE_LOCAL_ROUTE));
 }
 
 static void admin_cache_purge(void *ctx, const char *cmd) {
@@ -379,24 +522,24 @@ static void admin_cache_flush(void *ctx, const char *cmd) {
 }
 
 static int admin_show_interface(void *ctx, struct nhrp_interface *iface) {
-  char buf[512], tmp[32];
+  char buf[2048], tmp[64];
   size_t len = sizeof(buf);
   int i = 0;
 
-  i += snprintf(&buf[i], len - i,
-                "Interface: %s\n"
-                "Index: %d\n",
-                iface->name, iface->index);
+  i += admin_append(&buf[i], len - i,
+                    "Interface: %s\n"
+                    "Index: %d\n",
+                    iface->name, iface->index);
 
   if (iface->protocol_address.addr_len != 0) {
-    i += snprintf(
+    i += admin_append(
         &buf[i], len - i, "Protocol-Address: %s/%d\n",
         nhrp_address_format(&iface->protocol_address, sizeof(tmp), tmp),
         iface->protocol_address_prefix);
   }
 
   if (iface->flags) {
-    i += snprintf(
+    i += admin_append(
         &buf[i], len - i, "Flags:%s%s%s%s%s\n",
         (iface->flags & NHRP_INTERFACE_FLAG_NON_CACHING) ? " non-caching" : "",
         (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT) ? " shortcut" : "",
@@ -409,37 +552,38 @@ static int admin_show_interface(void *ctx, struct nhrp_interface *iface) {
   if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
     goto done;
 
-  i += snprintf(&buf[i], len - i,
-                "Holding-Time: %u\n"
-                "Route-Table: %u\n"
-                "GRE-Key: %u\n"
-                "MTU: %u\n",
-                iface->holding_time, iface->route_table, iface->gre_key,
-                iface->mtu);
+  i += admin_append(&buf[i], len - i,
+                    "Holding-Time: %u\n"
+                    "Route-Table: %u\n"
+                    "GRE-Key: %u\n"
+                    "MTU: %u\n",
+                    iface->holding_time, iface->route_table, iface->gre_key,
+                    iface->mtu);
 
   if (iface->link_index) {
     struct nhrp_interface *link;
 
-    i += snprintf(&buf[i], len - i, "Link-Index: %d\n", iface->link_index);
+    i += admin_append(&buf[i], len - i, "Link-Index: %d\n", iface->link_index);
     link = nhrp_interface_get_by_index(iface->link_index, FALSE);
     if (link != NULL)
-      i += snprintf(&buf[i], len - i, "Link-Name: %s\n", link->name);
+      i += admin_append(&buf[i], len - i, "Link-Name: %s\n", link->name);
   }
 
   if (iface->nbma_address.addr_len != 0) {
-    i += snprintf(&buf[i], len - i,
-                  "NBMA-MTU: %u\n"
-                  "NBMA-Address: %s\n",
-                  iface->nbma_mtu,
-                  nhrp_address_format(&iface->nbma_address, sizeof(tmp), tmp));
+    i += admin_append(
+        &buf[i], len - i,
+        "NBMA-MTU: %u\n"
+        "NBMA-Address: %s\n",
+        iface->nbma_mtu,
+        nhrp_address_format(&iface->nbma_address, sizeof(tmp), tmp));
   }
   if (iface->nat_cie.nbma_address.addr_len != 0) {
-    i += snprintf(
+    i += admin_append(
         &buf[i], len - i, "NBMA-NAT-OA: %s\n",
         nhrp_address_format(&iface->nat_cie.nbma_address, sizeof(tmp), tmp));
   }
 done:
-  i += snprintf(&buf[i], len - i, "\n");
+  i += admin_append(&buf[i], len - i, "\n");
   admin_raw_write(ctx, buf, i);
   return 0;
 }
@@ -730,8 +874,10 @@ static void admin_ha_activate_done(void *ctx, int status, const char *reason,
                 "Status: failed\nReason: %s\nError: %d\nGeneration: %u\n",
                 reason, -status, generation);
   remote->deferred = FALSE;
-  if (!remote->in_handler)
-    admin_free_remote(remote);
+  if (!remote->in_handler) {
+    admin_progress(remote);
+    admin_finish(remote);
+  }
 }
 
 static void admin_ha_mode(void *ctx, const char *cmd) {
@@ -1142,18 +1288,25 @@ static void admin_receive_cb(struct ev_io *w, int revents) {
   ssize_t len;
   int i, cmdlen;
 
-  len = recv(fd, rm->cmd, sizeof(rm->cmd) - rm->num_read, MSG_DONTWAIT);
-  if (len < 0 && errno == EAGAIN)
+  len = recv(fd, rm->cmd + rm->num_read, sizeof(rm->cmd) - 1 - rm->num_read,
+             MSG_DONTWAIT);
+  if (len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
     return;
   if (len <= 0)
     goto err;
 
+  admin_progress(rm);
   rm->num_read += len;
+  rm->cmd[rm->num_read] = 0;
   if (rm->num_read >= sizeof(rm->cmd))
     goto err;
 
-  if (rm->cmd[rm->num_read - 1] != '\n')
+  if (rm->cmd[rm->num_read - 1] != '\n') {
+    if (rm->num_read == sizeof(rm->cmd) - 1)
+      goto err;
     return;
+  }
+  ev_io_stop(&rm->io);
   rm->cmd[--rm->num_read] = 0;
 
   for (i = 0; i < ARRAY_SIZE(admin_handler); i++) {
@@ -1176,8 +1329,10 @@ static void admin_receive_cb(struct ev_io *w, int revents) {
     ev_timer_stop(&rm->timeout);
     return;
   }
-  if (rm->monitor)
+  if (rm->monitor || rm->cursor.next != NULL)
     return;
+  admin_finish(rm);
+  return;
 
 err:
   admin_free_remote(rm);
@@ -1196,12 +1351,21 @@ static void admin_accept_cb(ev_io *w, int revents) {
   cnx = accept(w->fd, (struct sockaddr *)&from, &fromlen);
   if (cnx < 0)
     return;
-  fcntl(cnx, F_SETFD, FD_CLOEXEC);
-  fcntl(cnx, F_SETFL, O_NONBLOCK);
+  if (fcntl(cnx, F_SETFD, FD_CLOEXEC) < 0 ||
+      fcntl(cnx, F_SETFL, O_NONBLOCK) < 0) {
+    close(cnx);
+    return;
+  }
 
   rm = calloc(1, sizeof(struct admin_remote));
+  if (rm == NULL) {
+    close(cnx);
+    return;
+  }
   list_init(&rm->monitor_list_entry);
 
+  ev_io_init(&rm->output_io, admin_send_cb, cnx, EV_WRITE);
+  ev_idle_init(&rm->enumeration, admin_enumerate_cb);
   ev_io_init(&rm->io, admin_receive_cb, cnx, EV_READ);
   ev_io_start(&rm->io);
   ev_timer_init(&rm->timeout, admin_timeout_cb, 10.0, 0.);

@@ -1,96 +1,85 @@
-# OpenNHRP TODO 梳理、优先度及可行性评估报告
-## 一、 背景与分析概述
+# OpenNHRP TODO 与当前代码对齐评估
 
-本文档对 OpenNHRP 源码仓库根目录下的 [TODO](../TODO) 文件进行了全面审计，并结合当前代码库实现（包括网络协议栈、内核接口交互、事件循环及近期新增的 HA 模块）进行了逐项评估。
+核对日期：2026-09-18。源码基线：`9c8933e`，包含本次第 1、9 项实现的工作区修改。
 
-### 1. 梳理统计概况
-原始 `TODO` 文件共记录 26 行事项，经代码交叉比对后归纳如下：
-- **有效独立事项**：25 项。
-- **完全重复项**：原第 6 行与第 60 行内容完全一致（*检测 map 指令中 NBMA 与公网 IP 颠倒*）。
-- **已实现/部分实现项**：原第 63 行的 `支持配置重载 (SIGHUP 或 opennhrpctl reload)` 已在 `opennhrp.c` 及 `admin.c` 中实现。
-- **架构局限项**：IPv6 支持受限于全局协议地址结构硬编码为 6 字节（`NHRP_MAX_ADDRESS_LEN 6`），涉及底层重构成本极高。
+本文逐项核对根目录 [TODO](../TODO)，以当前源码为依据。第 1、9 项已实现，验证记录见文末；其他事项仍为源码评估。第 2 项停机 Purge 和原始 TODO 未修改。
 
----
+## 统计与代码布局
 
-## 二、 分类评估与技术分析矩阵
+TODO 共 **26 个条目**（按 `- ` 开头计数，不是 26 行），其中 map 地址倒置检测重复一次，因此有 **25 个独立事项**。下表保留 IPv6-over-IPv4 与 IPv[46]-over-IPv6 两项，分别对应协议地址与 NBMA 地址族支持。
 
-### 1. 协议规范与核心逻辑 (Protocol Compliance & Core RFC Logic)
+当前代码分布：
 
-| 事项说明 | 代码现状与技术分析 | 优先度 | 可行性 / 复杂度 | 建议实施路径 |
-| :--- | :--- | :---: | :---: | :--- |
-| **正确处理 Unique Bit**<br>`Proper handling of unique bit` | RFC 2332 规定：当客户端携带 Unique 标志注册时，若 NHS 本地已存在该 IP 但 NBMA 地址不同，必须拒绝并报错。当前代码在 `nhrp_server.c` 中直接覆盖已有动态表项，存在 IP 冲突与仿冒安全隐患。 | **高** | **高**<br>(低难度) | 在 `nhrp_server_start_cie_reg` 中补充对比已有表项的 NBMA 地址，若设置 Unique 且 NBMA 不符，返回 `ADMINISTRATIVELY_PROHIBITED`。 |
-| **优雅停机发送 Purge Request**<br>`Clean shutdown: send purge request` | 当前在 `opennhrp.c` 捕获到 `SIGINT`/`SIGTERM` 时直接退出事件循环并释放资源，不通知远端。NHS 和对端客户端必须等待 Holding Time 超时（数十分钟至数小时）才感知下线。 | **高** | **高**<br>(中难度) | 在进程退出清理前，遍历 peer 表向所有注册的 NHS 及活跃对端发送 Purge Request，设置短暂的等待/flush 超时后安全退出。 |
-| **NHS 本地直答解析请求**<br>`NHS reply itself based on registered leases` | 当 NHS 收到针对其已注册 NHC 的解析请求时，目前仍倾向于将请求下发给下游 NHC。由 NHS 作为权威服务器直接根据本地注册的 Lease 回复，能显著缩短 Spoke-to-Spoke 协商时延。 | **高** | **高**<br>(中难度) | 优化 `nhrp_server.c` 中 `nhrp_handle_resolution_request` 分支，当目标属于本地有效动态注册表项时直接构建并返回 Resolution Reply。 |
-| **消除 REPLACED 标志，重构状态机为 Renew 模型**<br>`get rid of replaced flag; convert state machine to renew` | 当前更新 peer 时通过创建新 entry 并将老 entry 打上 `NHRP_PEER_FLAG_REPLACED` 屏蔽脚本回调，导致生命周期混乱、容易在 IP/NBMA 频繁变更时引入竞态。 | **中** | **中**<br>(中难度) | 梳理状态机模型，改为原结构体原地 Refresh/Renew，清晰规范 route-up/down 脚本的触发条件。 |
-| **直连不可达时回退到 Forward NHS 中继**<br>`closest known NHS from ResolutionReply Forward NHS list` | Spoke 间若存在对称 NAT 或防火墙阻断导致直连失败时，从 Forward Transit NHS 列表中选取最近的已知中继节点维持数据转发。 | **中** | **中**<br>(中偏高难度) | 结合现有 `NHRP_EXTENSION_FORWARD_TRANSIT_NHS` 扩展数据，在连接探测失败或超时时回退下一跳。 |
-| **Core 节点链路未建全时避免 Negative 缓存**<br>`core links not up, avoid negative cache` | 多 Hub/Core 互联场景下，启动初期其他 Core 链路尚未就绪，过早生成的 Negative 缓存会导致后续恢复延迟。 | **中** | **高**<br>(低难度) | 判定当前 active core links 数量，为 0 时缩短或跳过 negative 缓存。 |
-| **主网段 (/16) 与细分子网 (/24) 捷径冲突**<br>`shortcut-target /16 with subnet /24 delegation` | 已经存在主捷径网段时，细分子网委托的 Traffic Indication 会因大网段匹配而被忽略，无法建立更优的细分子网捷径。 | **中** | **中**<br>(中难度) | 引入最长前缀匹配（LPM）优先机制，允许细分前缀覆盖宽泛的前缀路由捷径。 |
-| **BGP NextHop 变更时主动 Purge 捷径**<br>`send purge on bgp nexthop change` | 承载网络 BGP 下一跳发生变化时，旧的 NHRP 捷径已经失效，需主动清理并通知对端。 | **中** | **中**<br>(中难度) | 监听 Netlink 路由事件或 Quagga/Zebra 事件，捕获到下一跳变更时注销对应 NHRP 缓存。 |
+- [nhrp/core](../nhrp/core)：地址、接口、peer、报文、服务端协议，以及重启用的 peer 快照。
+- [nhrp/ha](../nhrp/ha)：Spoke 候选探测与选择、Hub owner/副本管理、managed HA 等。
+- [nhrp/platform](../nhrp/platform)：Netlink、PF_PACKET、事件循环与日志。
+- [nhrp/opennhrp.c](../nhrp/opennhrp.c)、[nhrp/admin.c](../nhrp/admin.c)：启动、配置及管理接口。
 
----
+优先级含义：**高**为明确的协议正确性或管理响应完整性问题；**中**为需要场景复现或行为设计的改进；**低/按需**为缺少实际需求或性能证据的扩展。复杂度为源码评估，不是工期承诺。
 
-### 2. 配置、运维与管理面 (Configuration & Administration)
+## 逐项评估
 
-| 事项说明 | 代码现状与技术分析 | 优先度 | 可行性 / 复杂度 | 建议实施路径 |
-| :--- | :--- | :---: | :---: | :--- |
-| **检测 map 指令中 NBMA 与协议 IP 颠倒**<br>*(原第 6、60 行重复)* | 用户配置 `map <proto-ip> <nbma-ip>` 时常将内网隧道 IP 与公网 IP 颠倒，目前解析逻辑无任何告警，排查排错难度高。 | **高** | **极高**<br>(极低难度) | 在 `opennhrp.c` 的 `map` 解析处增加校验：结合接口已配置的子网掩码或公私网段启发式规则，发现倒置时输出显著 Warning。 |
-| **配置重载支持 (SIGHUP / opennhrpctl reload)**<br>*(原第 63 行)* | **代码已实现**：`opennhrp.c` 中已绑定 `SIGHUP -> nhrp_reload_config()`，`admin.c` 亦注册了 `reload` 与 `config reload`。 | **已完成** | - | 从 TODO 中移除，并补充相应回归测试脚本。 |
-| **Admin 端口非阻塞写入与可断点枚举**<br>`non-blocking admin port writes` | 当前 `admin_raw_write` 采用阻塞同步写，失败直接忽略。在面对海量 peer 导出（dump）时极易阻塞主事件循环或因缓冲区满导致丢字。 | **中** | **中**<br>(中难度) | 将管理 socket 设置为非阻塞模式，建立环形/链表发送队列，peer 导出改为基于游标（cursor）的迭代分批发送。 |
-| **非 root 降权运行 (libcap-ng)**<br>`opennhrp to drop capabilities, libcap-ng` | 安全合规加固需求。OpenNHRP 启动建立完 Raw/Netlink Socket 后，可丢弃除 `CAP_NET_ADMIN` 和 `CAP_NET_RAW` 以外的特权并切换非 root 运行。 | **低** | **高**<br>(低难度) | 引入 `libcap-ng` 依赖，在网络与接口初始化完成后调用降权接口。 |
+各分类内部按 **高 → 中 → 维护项 → 低 → 按需** 排序；按规模、按流量归入按需事项，同级保持原有顺序。
 
----
+### 协议与 peer 生命周期
 
-### 3. 性能优化与数据面扩展 (Performance & Datapath)
+| # | TODO 事项 | 当前代码证据与结论 | 优先级 / 后续路径 |
+| --- | --- | --- | --- |
+| 1 | 正确处理唯一性标志位（Unique Bit） | **已实现。** [nhrp_server.c](../nhrp/core/nhrp_server.c) 在入口校验 U=1 的单 CIE/0xff 约束，注册前及异步授权完成后检查唯一绑定冲突，返回 Code 14 并保留原绑定。同绑定续租允许，过期绑定不阻止注册；比较有效 NBMA 和 NAT 原始地址，HA 查询覆盖有效副本。解析结果及 v2 重启快照保存唯一性标志；客户端收到冲突后重试，不发送 Purge 抢占旧绑定；HA 端点回切等待该端点注册成功，Code 14 不沿用旧注册成功状态。 | **高 / 已实现。** NBMA 变化需等待旧唯一租约过期或清除；不合规 Unique 报文被拒绝。v1 快照丢弃并重新学习。非唯一注册保持单绑定替换行为，不提供多绑定或身份认证。 |
+| 2 | 优雅停机时发送清除请求（Purge Request） | **通用停机 Purge 未实现；已有重启恢复路径。** [opennhrp.c](../nhrp/opennhrp.c) 退出事件循环后停止 HA 子进程、保存 peer 快照并清理资源；[nhrp_peer_cache.c](../nhrp/core/nhrp_peer_cache.c) 保存可恢复的普通 dynamic/cached/shortcut-route，排除 HA dynamic 状态。已有注册相关 Purge 不等于停机遍历通知。 | **中 / 中复杂度。** 先确定永久退出与平滑重启的通知语义，避免无条件 Purge 抵消快照恢复。远端失效时间依赖 holding time、探测及 HA 状态，不能统一断言需要等待数十分钟至数小时。 |
+| 3 | NHS 根据已注册租约直接回复解析请求 | **未实现通用动态 lease 直答。** [nhrp_packet.c](../nhrp/core/nhrp_packet.c) 接收分发仅在目标匹配 `LOCAL_ADDR` 时进入本地处理，其他 Resolution Request 走转发；[nhrp_server.c](../nhrp/core/nhrp_server.c) 的本地回复使用本机 NBMA，并非直接返回目标动态 lease。 | **中 / 中复杂度。** 需要同时调整接收分发与回复构造，检查 lease 有效性、NAT、HA 有效 owner 和协议允许的应答条件，不能只改 handler。 |
+| 4 | 移除 REPLACED 标志，改用续租状态机并完善 MTU 回调 | **仍未完成。** [nhrp_peer.h](../nhrp/core/nhrp_peer.h) 保留 `NHRP_PEER_FLAG_REPLACED`，server 替换注册及 peer 释放仍依赖它抑制下线脚本。已有部分原地更新不能代表整个生命周期改为 renew。 | **中 / 高复杂度。** 先覆盖 NBMA/MTU 更新、脚本次数、内核邻居及 HA 投影生命周期，再决定局部简化范围。 |
+| 5 | 核心节点链路未就绪时避免生成负缓存 | **未见通用 Core 就绪判断。** [nhrp_peer.c](../nhrp/core/nhrp_peer.c) 的解析失败路径区分错误回复和超时：前者可能转 negative，后者删除 incomplete；连接失败也有 negative 路径。 | **中 / 中复杂度。** 先确定实际产生 negative 的路径与 Core 拓扑定义，不能直接把“active core 数为零”作为已有可用条件。 |
+| 6 | 处理 /16 捷径目标与 /24 子网委托的冲突 | **需要场景复现。** [nhrp_peer.c](../nhrp/core/nhrp_peer.c) 的 `decide_route()` 已在同等 exact/up 条件下选择更长前缀，因此不能归因为“缺少 LPM”。TODO 描述的是细分捷径被发现或创建前就被已有大网段遮蔽。 | **中 / 待复现。** 检查 Traffic Indication、已有路由命中及 Resolution Reply 前缀安装链，添加 /16→/24 的最小拓扑验证后再定位。 |
+| 7 | BGP 下一跳变化时发送清除请求 | **已有路由事件监听，缺少明确的远端通知闭环。** [sysdep_netlink.c](../nhrp/platform/sysdep_netlink.c) 已处理 `RTM_NEWROUTE/RTM_DELROUTE` 并更新本地 peer；不能把“开始监听 Netlink”当作新增实现。尚未见下一跳变化与曾解析客户端的定向 Purge 关联。 | **中 / 中高复杂度。** 复用现有事件，核对本地失效和远端持有捷径分别如何收敛，再决定是否追踪请求者。 |
+| 8 | 直连失败时通过前向 NHS 列表选择中继 | **未见按该列表选择中继的完整路径。** [nhrp_peer.c](../nhrp/core/nhrp_peer.c) 创建 Forward Transit NHS 扩展，但 `nhrp_peer_handle_resolution_reply()` 主要消费首个 CIE 与 NAT 扩展，没有建立列表驱动的直连失败回退。 | **按需 / 中高复杂度。** 先复现直连失败并确认中继的数据面可达性、循环防护和恢复条件；Spoke 的 HA Hub 选择不能替代这一功能。 |
 
-| 事项说明 | 代码现状与技术分析 | 优先度 | 可行性 / 复杂度 | 建议实施路径 |
-| :--- | :--- | :---: | :---: | :--- |
-| **基于协议地址的 Hash 查找与路由缓存**<br>`hash lookup for peers based on protocol address` | 当前 NBMA 已使用 Hash 表，但协议地址查找依赖 `peer_list` 线性单链表扫描（$O(N)$）。在千级 Spoke 的大型 Hub 场景下 CPU 消耗巨大。 | **高** | **高**<br>(中难度) | 为协议地址引入 `proto_hash_entry`（哈希桶），使精确匹配降为 $O(1)$，对未决路由建立专用查找缓存。 |
-| **组播转发卸载至内核**<br>`offload multicast packet forwarding to kernel` | 目前在用户态通过 `sysdep_pfpacket.c` 截获并逐个复制组播包，转发延迟高、性能瓶颈明显，且易发生丢包。 | **中** | **低**<br>(高难度) | 严重依赖 Linux 内核 GRE 实现；目前原生内核支持有限，通常需要修改内核 ip_gre 模块或借助 eBPF/XDP。 |
-| **PF_PACKET 使用 PACKET_MMAP**<br>`use mmapped pf_packet interface` | 目前使用常规 `recvmsg`/`sendmsg`。使用 PACKET_RX_RING/TX_RING 环形共享内存可规避系统调用与用户-内核拷贝开销。 | **低** | **中**<br>(中难度) | 仅在流量重定向/组播包量非常大时有收益，控制面为主的场景收益有限。 |
-| **IGMP Snooping 与组播中继优化**<br>`IGMP snooping and multicast relaying` | 在 Hub 端避免将组播流向未加入组播组的 Spoke 泛洪，节省 WAN 宽带。 | **低** | **中**<br>(偏高难度) | 维护 IGMP 加入/离开状态机，仅向加入特定组的 Spoke 复制多播报文。 |
+### 配置与管理接口
 
----
+| # | TODO 事项 | 当前代码证据与结论 | 优先级 / 后续路径 |
+| --- | --- | --- | --- |
+| 9 | 管理接口非阻塞写入与可恢复枚举 | **已实现。** [admin.c](../nhrp/admin.c) 统一缓冲普通回复、HA monitor 和异步回复，使用 EV_WRITE 处理短写/EAGAIN；普通回复排空后关闭。每连接最多缓冲 256 KiB，枚举在 128 KiB 高水位暂停，每轮检查至多 128 个 peer，单轮发送预算 64 KiB。游标在 peer 删除前推进，分段命令按偏移追加。 | **高 / 已实现。** 实时枚举不保证事务快照或输出顺序，新插入项留给下次查询。无 I/O 进展 10 秒断开，异步业务等待保留业务超时；monitor 超限断开。固定格式化缓冲限制写入长度。 |
+| 10 | 支持配置重载（SIGHUP / opennhrpctl reload） | **已实现。** [opennhrp.c](../nhrp/opennhrp.c) 的信号处理调用 `nhrp_reload_config()`；[admin.c](../nhrp/admin.c) 提供 `reload`、`config reload`。重载包含静态 peer 标记清扫及 HA 配置处理。 | **维护项。** [run-managed.sh](../tests/netns/run-managed.sh) 已有 reload、配置保存和地址协调场景。仍需区分普通 reload 与 `ha managed reload`；代码存在不代表所有配置变更均具备事务回滚保证。 |
+| 11 | 检测 map 配置中 NBMA 地址与协议地址颠倒 | **未实现语义倒置检测。** [opennhrp.c](../nhrp/opennhrp.c) 的 `map` 分支进行地址解析，NBMA 可为主机名；[admin.c](../nhrp/admin.c) 也有 `map add` 入口。非本机目标 Registration 的日志提示不是配置倒置检测。 | **低 / 中复杂度。** 仅在接口和路由证据明确时告警；公网/私网属性不能可靠推断配置正误，NBMA 也可合法使用私网。若实现，应覆盖配置加载、reload 与管理入口。 |
+| 12 | 降低进程权限并以非 root 用户运行 | **未实现完整降权。** 启动、Raw/Netlink socket、外部脚本及 HA 子进程均涉及权限；[opennhrp-script](../etc/opennhrp-script) 执行路由/邻居变更。 | **按需 / 中高复杂度。** 先列出初始化后持续需要的操作与子进程权限，不能只在启动后调用一次降权函数。是否使用 libcap-ng 取决于最终部署方案。 |
 
-### 4. 架构重构与代码清理 (Architecture & Refactoring)
+### 查找与数据面
 
-| 事项说明 | 代码现状与技术分析 | 优先度 | 可行性 / 复杂度 | 建议实施路径 |
-| :--- | :--- | :---: | :---: | :--- |
-| **拆分臃肿的 `nhrp_peer.c`**<br>`nhrp_peer should be split to more files` | `nhrp_peer.c` 超过 2500 行，耦合了内存分配、哈希索引、定时器、状态机、路由查找及外部脚本执行。 | **中** | **高**<br>(低风险) | 拆分为子模块：`nhrp_peer_cache.c`（查找与哈希）、`nhrp_peer_fsm.c`（状态机与定时器）、`nhrp_peer_script.c`（外部调用）。 |
-| **清理内部 `nhrp_packet_send_*` API**<br>`clean up internal nhrp_packet_send_* API` | 发送相关函数（`nhrp_packet_send`, `nhrp_packet_send_request`, `nhrp_packet_send_request_timed` 等）参数冗余，边界模糊。 | **低** | **高**<br>(低难度) | 统一报文路由判定与发送流水线，精简重叠接口。 |
+| # | TODO 事项 | 当前代码证据与结论 | 优先级 / 后续路径 |
+| --- | --- | --- | --- |
+| 13 | 为 PF_PACKET 接口使用内存映射 | **未实现。** [sysdep_pfpacket.c](../nhrp/platform/sysdep_pfpacket.c) 使用 `recvmsg()/sendmsg()`，没有 PACKET_RX_RING/TX_RING 配置。 | **低 / 中复杂度。** 只有采样证实系统调用或拷贝占主要成本时再做 PACKET_MMAP，并验证延迟、队列与错误处理。 |
+| 14 | 按协议地址进行哈希查找，并缓存未完成条目的路由查询 | **未实现通用协议地址 hash。** [nhrp_peer.c](../nhrp/core/nhrp_peer.c) 维护 NBMA hash，协议地址选择通过接口 peer 链表枚举；链表是带前后链接的 `list_head`，不是单链表。新 peer-cache 文件用于磁盘快照，不是查找缓存。 | **按规模 / 中复杂度。** 先测查询量和枚举耗时；需要优化时优先为精确查找建索引，保留前缀、类型、接口及 HA 可用性筛选。没有测量依据不能断言千级 Spoke 已有严重 CPU 瓶颈。 |
+| 15 | 将组播转发卸载到内核 | **未实现。** [sysdep_pfpacket.c](../nhrp/platform/sysdep_pfpacket.c) 的 `send_multicast()` 在用户态遍历接口 multicast peer 并逐个 `sendmsg()`，接收队列固定 16 项，满时丢弃最旧项。 | **按流量 / 高复杂度。** 先测复制成本和丢包，再评估部署内核支持；不预设必须修改 ip_gre 或引入 eBPF。 |
+| 16 | IGMP 侦听与组播中继优化 | **未实现按组成员维护的转发。** [sysdep_pfpacket.c](../nhrp/platform/sysdep_pfpacket.c) 按接口 multicast peer 列表复制，没有 IGMP 加入/离开成员表。 | **按需 / 高复杂度。** 先明确业务组播需求及成员老化、查询器和 WAN 中继行为。 |
 
----
+### 结构与外部集成
 
-### 5. 外部集成与高级网络特性 (External Ecosystem)
+| # | TODO 事项 | 当前代码证据与结论 | 优先级 / 后续路径 |
+| --- | --- | --- | --- |
+| 17 | 将 nhrp_peer 拆分为多个源文件 | **源码目录已分层，peer 核心仍集中。** [nhrp_peer.c](../nhrp/core/nhrp_peer.c) 当前约 2300 行；独立的 [nhrp_peer_cache.c](../nhrp/core/nhrp_peer_cache.c) 负责重启快照，查找、状态机与脚本执行仍在 peer 文件中。 | **低 / 中复杂度。** 文件行数本身不是拆分理由；随实际修改按清晰边界提取，避免预建 cache/fsm/script 三层。 |
+| 18 | 清理内部 nhrp_packet_send_* 接口 | **保留多个有不同职责的入口。** [nhrp_packet.c](../nhrp/core/nhrp_packet.c) 包含普通发送、请求回调及定时重传等路径；存在多个函数不能证明冗余。 | **低 / 待具体问题。** 先核对调用者、packet 引用生命周期和重试语义，只合并明确重复部分。 |
+| 19 | 根据往返时延（RTT）设置 BGP 权重 | **脚本功能未实现；已有 HA 质量选择。** [opennhrp-script](../etc/opennhrp-script) 没有 RTT→BGP 配置逻辑；[nhrp_ha.c](../nhrp/ha/nhrp_ha.c) 已按候选质量进行 Spoke Hub 选择，并支持持久化手动选择。这与 BGP 权重不是同一机制。 | **低 / 按集成评估。** 仅要求 Spoke 选 Hub 时复用 HA；明确需要 BGP 策略联动时再约定指标、迟滞和更新方式，不能认定只是极低难度脚本。 |
+| 20 | 以逐包内核路由查询替代本地路由跟踪 | **已有内核查询接口，尚未替代本地路由跟踪。** [sysdep_netlink.c](../nhrp/platform/sysdep_netlink.c) 的 `kernel_route()` 使用 `RTM_GETROUTE`，同时仍通过路由事件维护 local peer。 | **低 / 中复杂度。** 先明确 off-NBMA 查询点和同步查询成本，再评估是否替换；无需新建一套 Netlink 查询基础设施。 |
+| 21 | 串行执行 interface-up、nhs-up 和 nhs-down 脚本 | **未实现跨 peer 全局串行化。** [nhrp_peer.c](../nhrp/core/nhrp_peer.c) 的 `nhrp_peer_run_script()` 使用 fork/exec 与每 peer 异步事件；没有覆盖所有相关事件的全局 FIFO。 | **按需 / 中复杂度。** 若冲突仅发生于外部 vtysh，可先在用户脚本层锁定对应操作；只有要求 daemon 内部事件顺序时再增加队列，并评估慢脚本阻塞后续事件。 |
+| 22 | 支持多 CIE、负载均衡与等价多路径（ECMP） | **编解码支持 CIE 列表，解析后的多路径行为未实现。** [nhrp_peer.c](../nhrp/core/nhrp_peer.c) 处理 Resolution Reply 时选择首个 CIE；默认 route-up 脚本安装单下一跳。 | **按需 / 高复杂度。** 需要多路径状态、失效处理及路由安装配套；不能只改 CIE 编解码，也不能把 HA 候选列表当作 ECMP。 |
+| 23 | 通过 Zserv 协议与 Quagga 通信 | **未实现。** 当前路由安装通过 [opennhrp-script](../etc/opennhrp-script) 和用户脚本，没有内置 Zserv 客户端。 | **按需 / 高复杂度。** 仅在确定目标路由守护进程及协议版本后评估，避免无需求维护第二套控制接口。 |
+| 24 | 支持在 IPv4 承载网络上传输 IPv6 | **未支持完整 IPv6 协议地址路径。** [nhrp_address.h](../nhrp/core/nhrp_address.h) 的 `NHRP_MAX_ADDRESS_LEN` 为 6；[sysdep_netlink.c](../nhrp/platform/sysdep_netlink.c) 的路由处理限制 `PF_INET`，快照协议前缀解析限制为 32。 | **按需 / 高复杂度。** 单独规划 IPv6 overlay：地址长度、编码、前缀、Netlink、HA、快照及脚本测试。并非只改一个常量，也没有证据表明必须几乎重写整个工程。 |
+| 25 | 支持在 IPv6 承载网络上传输 IPv4 和 IPv6 | **未支持完整 IPv6 NBMA 路径。** 同样受最大地址长度约束，另需检查 [nhrp_address.c](../nhrp/core/nhrp_address.c)、[sysdep_pfpacket.c](../nhrp/platform/sysdep_pfpacket.c)、隧道发现和 HA 端点处理的地址族假设。 | **按需 / 高复杂度。** 与上一项分阶段评估；当前代码评估不构成任何外部产品支持 IPv6 DMVPN 的选型保证。 |
 
-| 事项说明 | 代码现状与技术分析 | 优先度 | 可行性 / 复杂度 | 建议实施路径 |
-| :--- | :--- | :---: | :---: | :--- |
-| **脚本执行序列化 (面向 Quagga/FRR)**<br>`interface-up, nhs-up, nhs-down serialized` | 接口和邻居上下线脚本并发执行时，可能引起 Quagga vtysh 命令锁冲突或状态错乱。 | **中** | **高**<br>(中难度) | 在 OpenNHRP 内部维护 FIFO 脚本执行队列，保证事件按发生顺序串行执行。 |
-| **脚本根据 RTT 设置 BGP 权重**<br>`opennhrp-script: setup bgp weight based on RTT` | 多 Hub 冗余场景下，Spoke 动态测量与各 Hub 的往返时延并调整 BGP 选路权重。 | **低** | **高**<br>(极低难度) | 纯外部脚本逻辑（`etc/opennhrp-script`），测量 RTT 并调用 `vtysh` 修改 route-map/local-pref，无需修改守护进程。 |
-| **多 CIE 负载均衡与 ECMP 支持**<br>`Load balancing: return multiple CIE entries` | 解析应答携带多个下一跳 CIE，并在内核中创建多路径（Multipath/ECMP）路由。 | **低** | **中**<br>(较高难度) | 需调整 CIE 编解码解析、Netlink 路由多路径注入机制。 |
-| **用内核路由查找替代本地路由表追踪**<br>`per-packet kernel lookup for off-nbma destinations` | 尝试简化对捷径路由的状态追踪。 | **低** | **中**<br>(中难度) | 收益不明显，且容易引入非预期的路由黑洞。 |
-| **通过 Zserv 协议直连 Quagga**<br>`talk zserv to quagga for shortcut routes` | 绕过 shell 脚本，直接通过 Unix 域套接字与 Zebra 守护进程通信注入捷径路由。 | **低** | **低**<br>(高难度) | 现代方案普遍采用 FRR 内置的 `nhrpd`，在 OpenNHRP 中单独引入一套 Zebra 协议栈性价比过低。 |
-| **IPv6 全面支持**<br>`IPv6-over-IPv4, IPv[46]-over-IPv6` | 当前 `nhrp_address.h` 中硬编码最大地址长度为 6 字节（仅适配 IPv4 4 字节及 MAC 6 字节）。支持 16 字节 IPv6 意味着全工程涉及数据结构、编解码、Netlink、PF_PACKET 几乎全部重写。 | **极低** | **极低**<br>(极高难度) | 历史包袱过重。若生产环境需要 IPv6 DMVPN，推荐直接选型 FRRouting (FRR) 原生 nhrpd。 |
+## 建议执行顺序与验证边界
 
----
+1. **维护已实现项**：保留 Unique、HA 副本及重启快照回归，以及 admin 短写、慢读、可恢复枚举与生命周期检查。
+2. **先复现再调整行为**：/16 与 /24 委托、Core 启动 negative cache、BGP 下一跳变更、NHS lease 直答各自需要最小拓扑；停机 Purge 先与重启快照语义对齐。不要把这些事项直接视为低风险快速修复。
+3. **按证据决定扩展**：协议地址索引、PACKET_MMAP、组播卸载以规模测试为依据；ECMP、IPv6、Zserv 和降权依据实际部署需求单独规划。目录重组不要求继续拆文件。
 
-## 三、 实施路线图建议 (Roadmap)
+本次验证：
 
-建议分三个阶段稳步推进改造：
+- `make -j4 test`：构建及单元测试通过，包含新增 [test_admin.c](../tests/test_admin.c) 的短写、EINTR/EAGAIN、游标删除/插入、枚举预算、异步回复、monitor 超限立即断开和断连检查；该测试的 ASan/UBSan 检查通过。
+- [test-legacy-spoke.py](../tests/netns/test-legacy-spoke.py)：隔离网络中验证 Unique 冲突、合法续租、非法前缀/多 CIE、NAT、租约到期、并发授权及未投影 HA 副本；核对保留的内核邻居并执行 GRE ping，同时确认真实客户端被拒绝后不会 Purge 旧绑定。
+- [test-peer-cache.py](../tests/netns/test-peer-cache.py)：v2 快照及唯一性标志恢复、失效/非法/v1 快照处理和恢复后的 GRE 转发通过。
+- [test-admin.py](../tests/netns/test-admin.py)：4000 条路由的慢读输出完整性、其他控制请求响应、枚举期间删除/插入、分段命令、写半关闭、monitor、断连及超时通过。路由注入按批次等待处理，避免将 Netlink 队列容量混入管理接口测试。
+- [run-managed.sh](../tests/netns/run-managed.sh)：完整回归通过，包括质量迁移、Follower 接管、端点切换、健康降级、GRE 接口下线与恢复、认证回切、多数派隔离、成员退出和集群销毁。核对 Hub/Spoke 内核邻居、唯一有效 owner 与 GRE 转发。端点切换会同时改变私网 Spoke 的 NBMA；同成员端点用例隔离备选 Hub，使用 60 秒租约，等待实际注册及远端绑定生效，用例结束后清理临时公网地址。若另一个 Hub 持续续租旧 NBMA，不同 NBMA 的回切会继续被唯一性约束阻止。
 
-### 阶段一：Quick Wins（高性价比、协议修复与安全稳定，1~2 周）
-1. **规范 Unique Bit 校验**：杜绝动态注册中的非授权覆写与 IP 抢占漏洞。
-2. **map 指令 IP 倒置检测**：启动与重载时对私网/公网 IP 倒置进行启发式 Warning 告警。
-3. **优雅停机（Clean Shutdown）**：在接收到退出信号时向注册服务器与客户端广播 Purge Request，加速网络收敛。
-4. **清理 TODO 与补充测试**：删除已实现的 SIGHUP/reload 描述与重复条目，补充相关配置重载的回归测试。
+`make check-format`、`git diff --check` 及文档编号/链接检查通过。最终完整 HA 回归日志为 `/tmp/opennhrp-todo-managed-final6.log`，隔离测试产物保留在 `/tmp/opennhrp-ha-managed-netns.VeKZEH`。
 
-### 阶段二：Core Scaling & Architecture（核心扩展与架构治理，2~4 周）
-1. **协议地址 Hash 查找**：解决单链表遍历在大规模 Spoke 拓扑下的 CPU 性能瓶颈。
-2. **NHS 本地直接应答**：跳过下游 NHC 转发环节，降低 Spoke-to-Spoke 协商延迟。
-3. **消除 REPLACED 标志**：重构 peer 状态机生命周期为 Renew 机制。
-4. **Admin 端口非阻塞写入与游标遍历**：防止大规模 peer 查询导致守护进程挂起或丢字。
-5. **脚本执行队列化**：消除与 Quagga/FRR vtysh 并发调用的时序冲突。
-
-### 阶段三：Backlog / 评估搁置（高成本/低收益/已有成熟替代）
-- **IPv6 全面重构**：建议引导用户使用 FRR nhrpd，不再建议在 opennhrp 代码中大修。
-- **内核组播转发卸载 / 内置 Zserv 客户端**：技术耦合度过高且外部依赖复杂，暂不建议列入近期排期。
-- **IGMP Snooping**：视后续是否有纯组播业务专网需求再行排期。
+未提交、部署或重启现有服务，未验证真实设备和外部厂商客户端。

@@ -194,6 +194,16 @@ were configured with the \fBregister\fR option. Static maps without that
 option are not affected.
 .RE
 
+.PP
+Cache and route dumps are enumerated in batches as the client reads them.
+They are live views, not atomic snapshots; entries removed during a dump may
+be omitted, and newly inserted entries are left for the next query. Output
+order is not guaranteed. Each connection buffers at most 256 KiB. Pending
+output or an incomplete command with no I/O progress for 10 seconds causes
+the connection to close. A slow HA monitor is disconnected when its output
+exceeds that limit; an idle monitor also times out after 10 seconds without
+I/O progress. Asynchronous HA commands retain their operation timeout.
+
 .BI "route show [" selector "]..."
 .RS
 Show the contents of locally cached kernel routing information

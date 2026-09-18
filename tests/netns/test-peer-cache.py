@@ -139,14 +139,16 @@ def main():
             stop("h")
             state = work / "h-state/peer-cache.state"
             snapshot = state.read_text()
-            assert snapshot.startswith("OPENNHRP-PEER-CACHE 1\n")
+            assert snapshot.startswith("OPENNHRP-PEER-CACHE 2\n")
             assert "dynamic gre-cache 10.20.0.2/32 192.0.2.13" in snapshot
             assert "10.20.0.99" not in snapshot
+            assert snapshot.splitlines()[1].endswith(" 1")
             assert stat.S_IMODE(state.stat().st_mode) == 0o600
 
             start("h")
             eventually(lambda: has_peer("h", "dynamic", "10.20.0.2"))
             assert not has_peer("h", "dynamic", "10.20.0.99")
+            assert "unique" in ctl("h")
             assert not state.exists(), "loaded Hub snapshot was not consumed"
             ns("s1", "ip", "neigh", "replace", "10.20.0.1", "lladdr", "192.0.2.1",
                "nud", "permanent", "dev", "gre-cache")
@@ -162,9 +164,9 @@ def main():
             state = work / "s1-state/peer-cache.state"
             expires = int(time.time()) + 60
             state.write_text(
-                "OPENNHRP-PEER-CACHE 1\n"
-                f"cached gre-cache 10.20.0.3/32 192.0.2.14 - 1400 {expires}\n"
-                f"shortcut-route gre-cache 172.16.2.0/24 10.20.0.3 - 0 {expires}\n")
+                "OPENNHRP-PEER-CACHE 2\n"
+                f"cached gre-cache 10.20.0.3/32 192.0.2.14 - 1400 {expires} 1\n"
+                f"shortcut-route gre-cache 172.16.2.0/24 10.20.0.3 - 0 {expires} 1\n")
             state.chmod(0o600)
             before = events.read_text().count("route-up shortcut-route 172.16.2.0/24")
             start("s1")
@@ -193,10 +195,10 @@ def main():
             # Expired and malformed snapshots are consumed without restoring peers.
             stop("s1")
             state.write_text(
-                "OPENNHRP-PEER-CACHE 1\n"
-                "dynamic gre-cache 10.20.0.76/32 192.0.2.76 - 1400 1\n"
-                "cached gre-cache 10.20.0.77/32 192.0.2.77 - 1400 1\n"
-                "shortcut-route gre-cache 172.16.77.0/24 10.20.0.77 - 0 1\n")
+                "OPENNHRP-PEER-CACHE 2\n"
+                "dynamic gre-cache 10.20.0.76/32 192.0.2.76 - 1400 1 0\n"
+                "cached gre-cache 10.20.0.77/32 192.0.2.77 - 1400 1 0\n"
+                "shortcut-route gre-cache 172.16.77.0/24 10.20.0.77 - 0 1 0\n")
             state.chmod(0o600)
             start("s1")
             assert not has_peer("s1", "dynamic", "10.20.0.76")
@@ -204,7 +206,7 @@ def main():
             assert not has_peer("s1", "shortcut-route", "172.16.77.0")
             assert not state.exists()
             stop("s1")
-            state.write_text("OPENNHRP-PEER-CACHE 1\ncached truncated\n")
+            state.write_text("OPENNHRP-PEER-CACHE 2\ncached truncated\n")
             state.chmod(0o600)
             start("s1")
             assert not state.exists()
@@ -212,11 +214,11 @@ def main():
 
             expires = int(time.time()) + 60
             state.write_text(
-                "OPENNHRP-PEER-CACHE 1\n"
-                f"cached missing0 10.20.0.78/32 192.0.2.78 - 1400 {expires}\n"
-                f"cached uplink 10.20.0.79/32 192.0.2.79 - 1400 {expires}\n"
-                f"dynamic gre-cache 10.20.0.1/24 192.0.2.80 - 1400 {expires}\n"
-                f"cached gre-cache 10.20.0.2/32 192.0.2.81 - 1400 {expires}\n")
+                "OPENNHRP-PEER-CACHE 2\n"
+                f"cached missing0 10.20.0.78/32 192.0.2.78 - 1400 {expires} 1\n"
+                f"cached uplink 10.20.0.79/32 192.0.2.79 - 1400 {expires} 1\n"
+                f"dynamic gre-cache 10.20.0.1/24 192.0.2.80 - 1400 {expires} 1\n"
+                f"cached gre-cache 10.20.0.2/32 192.0.2.81 - 1400 {expires} 1\n")
             state.chmod(0o600)
             start("s1")
             for address in ("10.20.0.78", "10.20.0.79", "10.20.0.1", "10.20.0.2"):
@@ -225,6 +227,13 @@ def main():
             assert not state.exists()
             stop("s1")
 
+            state.write_text("OPENNHRP-PEER-CACHE 1\n"
+                             f"cached gre-cache 10.20.0.88/32 192.0.2.88 - 1400 {expires}\n")
+            state.chmod(0o600)
+            start("s1")
+            assert not has_peer("s1", "cached", "10.20.0.88")
+            assert not state.exists()
+            stop("s1")
             state.write_text("OPENNHRP-PEER-CACHE 9\n")
             state.chmod(0o600)
             start("s1")

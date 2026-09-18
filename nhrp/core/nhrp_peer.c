@@ -49,6 +49,44 @@ const char *const nhrp_peer_type[] = {
 };
 
 static int nhrp_peer_num_total = 0;
+static struct list_head enumeration_peers = LIST_INITIALIZER(enumeration_peers);
+static struct list_head enumeration_cursors =
+    LIST_INITIALIZER(enumeration_cursors);
+
+void nhrp_peer_cursor_open(struct nhrp_peer_cursor *cursor) {
+  cursor->next = enumeration_peers.next;
+  list_add(&cursor->entry, &enumeration_cursors);
+}
+
+struct nhrp_peer *nhrp_peer_cursor_next(struct nhrp_peer_cursor *cursor) {
+  struct nhrp_peer *peer;
+
+  if (cursor->next == &enumeration_peers)
+    return NULL;
+  peer = container_of(cursor->next, struct nhrp_peer, enumeration_entry);
+  cursor->next = cursor->next->next;
+  return peer;
+}
+
+void nhrp_peer_cursor_close(struct nhrp_peer_cursor *cursor) {
+  if (cursor->next != NULL) {
+    list_del(&cursor->entry);
+    cursor->next = NULL;
+  }
+}
+
+static void enumeration_remove(struct nhrp_peer *peer) {
+  struct nhrp_peer_cursor *cursor;
+
+  if (!list_hashed(&peer->enumeration_entry))
+    return;
+  list_for_each_entry(cursor, &enumeration_cursors, entry) {
+    if (cursor->next == &peer->enumeration_entry)
+      cursor->next = peer->enumeration_entry.next;
+  }
+  list_del(&peer->enumeration_entry);
+}
+
 static struct list_head local_peer_list = LIST_INITIALIZER(local_peer_list);
 
 static inline int holding_time_to_reregister_time(int holding_time) {
@@ -753,65 +791,6 @@ static void nhrp_peer_restart_cb(struct ev_timer *w, int revents) {
   }
 }
 
-static void nhrp_peer_send_protocol_purge(struct nhrp_peer *peer) {
-  char tmp[64];
-  struct nhrp_packet *packet;
-  struct nhrp_cie *cie;
-  struct nhrp_payload *payload;
-  int sent = FALSE;
-
-  packet = nhrp_packet_alloc();
-  if (packet == NULL)
-    goto error;
-
-  packet->hdr = (struct nhrp_packet_header){
-      .afnum = peer->afnum,
-      .protocol_type = peer->protocol_type,
-      .version = NHRP_VERSION_RFC2332,
-      .type = NHRP_PACKET_PURGE_REQUEST,
-      .hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT,
-      .flags = NHRP_FLAG_PURGE_NO_REPLY,
-  };
-  if (peer->flags & NHRP_PEER_FLAG_CISCO) {
-    /* Cisco IOS seems to require reqistration and purge
-     * request id to match, so we need to used a fixed
-     * value. This is in violation of RFC, though. */
-    packet->hdr.u.request_id =
-        nhrp_address_hash(&peer->interface->protocol_address);
-  }
-  packet->dst_protocol_address = peer->protocol_address;
-
-  /* Payload CIE */
-  cie = nhrp_cie_alloc();
-  if (cie == NULL)
-    goto error_free_packet;
-
-  *cie = (struct nhrp_cie){
-      .hdr.code = NHRP_CODE_SUCCESS,
-      .hdr.mtu = 0,
-      .hdr.preference = 0,
-      .hdr.prefix_length = 0xff,
-  };
-  cie->protocol_address = peer->interface->protocol_address;
-
-  payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
-  nhrp_payload_add_cie(payload, cie);
-
-  nhrp_info("Sending Purge Request (of protocol address) to %s",
-            nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp));
-
-  packet->dst_peer = nhrp_peer_get(peer);
-  packet->dst_iface = peer->interface;
-  sent = nhrp_packet_send(packet);
-error_free_packet:
-  nhrp_packet_put(packet);
-error:
-  if (sent)
-    nhrp_peer_schedule(peer, 2, nhrp_peer_send_register_cb);
-  else
-    nhrp_peer_restart_error(peer);
-}
-
 static int nhrp_add_local_route_cie(void *ctx, struct nhrp_peer *route) {
   struct nhrp_packet *packet = (struct nhrp_packet *)ctx;
   struct nhrp_payload *payload;
@@ -936,10 +915,6 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
   case NHRP_CODE_SUCCESS:
     peer->registration_failed = FALSE;
     break;
-  case NHRP_CODE_UNIQUE_ADDRESS_REGISTERED:
-    peer->registration_failed = TRUE;
-    nhrp_peer_send_protocol_purge(peer);
-    goto ret;
   default:
     peer->registration_failed = TRUE;
     nhrp_peer_schedule(peer, NHRP_RETRY_REGISTER_TIME,
@@ -1214,6 +1189,10 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 
   if (nhrp_address_cmp(&peer->protocol_address, &cie->protocol_address) == 0) {
     /* Destination is within NBMA network; update cache */
+    peer->flags = (peer->flags & ~NHRP_PEER_FLAG_UNIQUE) |
+                  ((reply->hdr.flags & NHRP_FLAG_RESOLUTION_UNIQUE)
+                       ? NHRP_PEER_FLAG_UNIQUE
+                       : 0);
     peer->mtu = ntohs(cie->hdr.mtu);
     peer->prefix_length = cie->hdr.prefix_length;
     peer->next_hop_address = natcie->nbma_address;
@@ -1248,6 +1227,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
   if (np == NULL) {
     np = nhrp_peer_alloc(iface);
     np->type = NHRP_PEER_TYPE_CACHED;
+    if (reply->hdr.flags & NHRP_FLAG_RESOLUTION_UNIQUE)
+      np->flags |= NHRP_PEER_FLAG_UNIQUE;
     np->afnum = reply->hdr.afnum;
     np->protocol_type = reply->hdr.protocol_type;
     np->protocol_address = cie->protocol_address;
@@ -1264,6 +1245,8 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
   /* Off NBMA destination; a shortcut route */
   np = nhrp_peer_alloc(iface);
   np->type = NHRP_PEER_TYPE_SHORTCUT_ROUTE;
+  if (reply->hdr.flags & NHRP_FLAG_RESOLUTION_UNIQUE)
+    np->flags |= NHRP_PEER_FLAG_UNIQUE;
   np->afnum = reply->hdr.afnum;
   np->protocol_type = reply->hdr.protocol_type;
   np->protocol_address = peer->protocol_address;
@@ -1349,6 +1332,7 @@ struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface) {
   p->ref = 1;
   p->interface = iface;
   list_init(&p->peer_list_entry);
+  list_init(&p->enumeration_entry);
   list_init(&p->mcast_list_entry);
   ev_timer_init(&p->timer, NULL, 0., 0.);
   ev_child_init(&p->child, NULL, 0, 0);
@@ -1654,6 +1638,8 @@ void nhrp_peer_insert(struct nhrp_peer *peer) {
   else
     list_add(&peer->peer_list_entry, &peer->interface->peer_list);
 
+  list_add(&peer->enumeration_entry, &enumeration_peers);
+
   /* Start peers life */
   if (nhrp_running || peer->type == NHRP_PEER_TYPE_LOCAL_ADDR)
     nhrp_peer_insert_cb(&peer->timer, 0);
@@ -1732,6 +1718,7 @@ static void nhrp_peer_remove_cb(struct ev_timer *w, int revents) {
   peer->flags |= NHRP_PEER_FLAG_REMOVED;
   peer->purge_reason = "expired";
   nhrp_peer_is_down(peer);
+  enumeration_remove(peer);
   list_del(&peer->peer_list_entry);
 
   type = peer->type;

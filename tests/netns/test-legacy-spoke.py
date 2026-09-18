@@ -5,6 +5,7 @@ Exercise real registration packets and kernel GRE forwarding. The packet sender
 models legacy wire behavior; it is not an actual old OpenNHRP binary. Coordinators
 are paused so role and replication transitions can be tested deterministically.
 """
+import json
 import os
 from pathlib import Path
 import signal
@@ -22,7 +23,11 @@ def run(*args):
     return subprocess.check_output([str(a) for a in args], stderr=subprocess.STDOUT, text=True)
 
 
-def send_registration(hub, mode, addresses):
+def send_registration(hub, mode, addresses, source="192.0.2.13", nbma=None,
+                      unique=None, cie_prefix=None, expected=0, holding=120):
+    nbma = nbma or source
+    unique = len(addresses) == 1 if unique is None else unique
+    cie_prefix = (255 if unique else 32) if cie_prefix is None else cie_prefix
     member = b"bootstrap"
     ha = struct.pack("!BBHI", 2, 1, len(member), 1) + member
     invalid = mode.startswith("invalid")
@@ -34,16 +39,16 @@ def send_registration(hub, mode, addresses):
     extensions = b""
     if mode != "legacy":
         extensions = struct.pack("!HH", 8 if vendor else 0x3801, len(ha)) + ha
-    extensions += b"\0\0\0\0"
+    extensions += struct.pack("!HH", 4, 0) + b"\0\0\0\0"
     ip = socket.inet_aton
-    body = ip("192.0.2.13") + ip(addresses[0]) + ip("10.20.0.1")
+    body = ip(nbma) + ip(addresses[0]) + ip("10.20.0.1")
     for address in addresses:
-        body += struct.pack("!BBHHHBBBB", 0, 32, 0, 1400, 120, 4, 0, 4, 0)
-        body += ip("192.0.2.13") + ip(address)
+        body += struct.pack("!BBHHHBBBB", 0, cie_prefix, 0, 1400, holding, 4, 0, 4, 0)
+        body += ip(nbma) + ip(address)
     request_id = os.getpid()
     header = struct.pack("!HH5sBHHHBBBBBBHI", 1, 0x800, b"\0" * 5, 16,
                          28 + len(body) + len(extensions), 0, 28 + len(body),
-                         1, 3, 4, 0, 4, 4, 0x8000, request_id)
+                         1, 3, 4, 0, 4, 4, 0x8000 if unique else 0, request_id)
     packet = bytearray(header + body + extensions)
     padded = packet + b"\0" if len(packet) % 2 else packet
     checksum = sum(struct.unpack(f"!{len(padded)//2}H", padded))
@@ -51,7 +56,7 @@ def send_registration(hub, mode, addresses):
         checksum = (checksum & 0xffff) + (checksum >> 16)
     struct.pack_into("!H", packet, 12, ~checksum & 0xffff)
     with socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_GRE) as sock:
-        sock.bind(("192.0.2.13", 0))
+        sock.bind((source, 0))
         sock.settimeout(2)
         sock.sendto(struct.pack("!HHI", 0x2000, 0x2001, 1020) + packet, (hub, 0))
         deadline = time.monotonic() + 2
@@ -62,12 +67,15 @@ def send_registration(hub, mode, addresses):
                 assert invalid, "Registration Reply timed out"
                 return
             reply = reply[(reply[0] & 15) * 4 + 8:]
+            if expected == "protocol-error" and len(reply) >= 28 and reply[17] == 7:
+                assert struct.unpack_from("!H", reply, 24)[0] == 7
+                return
             if len(reply) < 40 or reply[17] != 4 or struct.unpack_from("!I", reply, 24)[0] != request_id:
                 continue
             assert not invalid, "invalid HA registration was accepted"
             offset = 28 + reply[18] + reply[19] + reply[20] + reply[21]
             for _ in addresses:
-                assert reply[offset] == 0, f"registration rejected: {reply.hex()}"
+                assert reply[offset] == expected, f"registration rejected: {reply.hex()}"
                 offset += 12 + reply[offset + 8] + reply[offset + 9] + reply[offset + 10]
             return
         raise AssertionError("no matching Registration Reply")
@@ -100,8 +108,8 @@ def main():
         def present(node, address):
             return f"Protocol-Address: {address}" in ctl(node, "show")
 
-        def eventually(check):
-            for _ in range(100):
+        def eventually(check, attempts=100):
+            for _ in range(attempts):
                 if check():
                     return
                 time.sleep(.05)
@@ -143,6 +151,16 @@ def main():
                 ns(node, "sysctl", "-qw", "net.ipv4.conf.all.rp_filter=0", "net.ipv4.conf.gre-ha.rp_filter=0")
             for last in range(200, 207):
                 ns("sp", "ip", "addr", "add", f"10.20.0.{last}/32", "dev", "gre-ha")
+            script = work / "authorize"
+            script.write_text("#!/bin/sh\n"
+                              "if [ \"$1\" = peer-register ] && "
+                              "[ \"$NHRP_DESTADDR\" = 10.20.0.215 ]; then\n"
+                              f"  touch {work}/pending-$NHRP_DESTNBMA\n"
+                              "  case $NHRP_DESTNBMA in\n"
+                              "    192.0.2.13) sleep .2;;\n"
+                              "    *) sleep .8;;\n"
+                              "  esac\nfi\nexit 0\n")
+            script.chmod(0o755)
             for node, suffix in (("h1", 11), ("h2", 12)):
                 state = work / f"{node}-state"
                 state.mkdir(mode=0o700)
@@ -151,7 +169,7 @@ def main():
                 with (work / f"{node}.log").open("w") as log:
                     process = subprocess.Popen(["ip", "netns", "exec", f"{prefix}-{node}",
                         str(REPO / "build/nhrp/opennhrp"), "-a", str(work / f"{node}.sock"),
-                        "-H", str(state), "-c", str(config), "-s", "/bin/true", "-p", str(work / f"{node}.pid"), "-v"],
+                        "-H", str(state), "-c", str(config), "-s", str(script), "-p", str(work / f"{node}.pid"), "-v"],
                         stdout=log, stderr=log, start_new_session=True)
                 processes.append(process)
                 eventually(lambda: (work / f"{node}.sock").exists())
@@ -161,6 +179,65 @@ def main():
                     os.kill(int(child), signal.SIGSTOP)
                     paused.append(int(child))
                 role(node, "leader" if node == "h1" else "standby", 1000)
+
+            ns("sp", "ip", "addr", "add", "192.0.2.14/24", "dev", "br0")
+
+            def unique_send(address="10.20.0.210", node="h1", **options):
+                args = dict(hub=f"192.0.2.{11 if node == 'h1' else 12}",
+                            mode="legacy", addresses=[address])
+                args.update(options)
+                ns("sp", sys.executable, __file__, "--send-options", json.dumps(args))
+
+            def binding(address="10.20.0.210"):
+                return ctl("h1", "show protocol", address)
+
+            unique_send()
+            unique_send()  # same-binding renewal
+            assert "unique" in binding()
+            unique_send(source="192.0.2.14", expected=14)
+            assert "NBMA-Address: 192.0.2.13" in binding()
+            assert "192.0.2.13" in ns("h1", "ip", "neigh", "show", "to", "10.20.0.210")
+            unique_send(cie_prefix=32, expected="protocol-error")
+            unique_send(addresses=["10.20.0.210", "10.20.0.211"], unique=True,
+                        expected="protocol-error")
+            assert not present("h1", "10.20.0.211")
+            # U=0 can replace; a unique request can replace a nonunique binding.
+            unique_send(source="192.0.2.14", unique=False)
+            assert "NBMA-Address: 192.0.2.14" in binding()
+            unique_send()
+            unique_send(source="192.0.2.14", expected=14)
+            # NAT identity includes both the effective and original NBMA.
+            unique_send(address="10.20.0.212", nbma="10.99.0.1")
+            unique_send(address="10.20.0.212", nbma="10.99.0.1")
+            unique_send(address="10.20.0.212", nbma="10.99.0.2", expected=14)
+            unique_send(address="10.20.0.212", nbma="10.99.0.1",
+                        source="192.0.2.14", expected=14)
+            # Expired leases no longer exclude another endpoint.
+            unique_send(address="10.20.0.213", holding=1)
+            time.sleep(1.1)
+            unique_send(address="10.20.0.213", source="192.0.2.14")
+            # Both authorizations start before either registration commits.
+            pending = []
+            for source, expected in (("192.0.2.13", 0), ("192.0.2.14", 14)):
+                args = dict(hub="192.0.2.11", mode="legacy", addresses=["10.20.0.215"],
+                            source=source, expected=expected)
+                pending.append(subprocess.Popen([
+                    "ip", "netns", "exec", f"{prefix}-sp", sys.executable,
+                    __file__, "--send-options", json.dumps(args)]))
+            for child in pending:
+                assert child.wait(timeout=5) == 0
+            assert (work / "pending-192.0.2.13").exists()
+            assert (work / "pending-192.0.2.14").exists()
+            assert "NBMA-Address: 192.0.2.13" in binding("10.20.0.215")
+
+            # Unprojected replica must enforce uniqueness on a Standby too.
+            ctl("h2", "ha registration sync begin interface gre-ha term 1000 index 0")
+            ctl("h2", "ha registration sync apply interface gre-ha protocol 10.20.0.214/32",
+                "nbma 192.0.2.13 mtu 1400 holding 120 flags 97 term 1000 index 0")
+            ctl("h2", "ha registration sync end interface gre-ha")
+            assert not present("h2", "10.20.0.214")
+            unique_send(address="10.20.0.214", node="h2", source="192.0.2.14", expected=14)
+            unique_send(address="10.20.0.214", node="h2", mode="ha")
 
             register("h1", "legacy", "10.20.0.200", "10.20.0.201")
             register("h1", "ha", "10.20.0.202", "10.20.0.203")
@@ -204,7 +281,28 @@ def main():
                 role("h1", "standby", term)
                 for last in (200, 201, 203, 204, 206):
                     ping("h1", f"10.20.0.{last}")
-            print("PASS: legacy/HA/Vendor/invalid/multiple CIE, renewal, sync, failover, failback, neighbors and GRE ping")
+            # A real rejected client must not purge another endpoint's binding.
+            # Remove the wire-test aliases so the daemon selects 10.20.0.2.
+            for last in range(200, 207):
+                ns("sp", "ip", "addr", "del", f"10.20.0.{last}/32", "dev", "gre-ha")
+            unique_send(address="10.20.0.2", source="192.0.2.14")
+            state = work / "sp-state"
+            state.mkdir(mode=0o700)
+            config = work / "sp.conf"
+            config.write_text("interface gre-ha\n map 10.20.0.1/32 192.0.2.11 register\n")
+            with (work / "sp.log").open("w") as log:
+                process = subprocess.Popen([
+                    "ip", "netns", "exec", f"{prefix}-sp", str(REPO / "build/nhrp/opennhrp"),
+                    "-a", str(work / "sp.sock"), "-H", str(state), "-c", str(config),
+                    "-s", "/bin/true", "-p", str(work / "sp.pid"), "-v"],
+                    stdout=log, stderr=log, start_new_session=True)
+            processes.append(process)
+            eventually(lambda: "unique address already registered" in (work / "sp.log").read_text(), attempts=200)
+            time.sleep(2.5)
+            assert "Sending Purge Request (of protocol address)" not in (work / "sp.log").read_text()
+            assert "NBMA-Address: 192.0.2.14" in binding("10.20.0.2")
+
+            print("PASS: unique conflicts/NAT/expiry/concurrent authorization/shadows, legacy/HA/Vendor, renewal, sync, failover, neighbors and GRE ping")
         except Exception:
             for log in work.glob("*.log"):
                 print(f"--- {log.name} ---\n{log.read_text()[-12000:]}", file=sys.stderr)
@@ -226,5 +324,7 @@ def main():
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--send":
         send_registration(sys.argv[2], sys.argv[3], sys.argv[4:])
+    elif len(sys.argv) > 1 and sys.argv[1] == "--send-options":
+        send_registration(**json.loads(sys.argv[2]))
     else:
         main()

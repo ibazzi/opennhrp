@@ -94,6 +94,7 @@ struct nhrp_peer {
   unsigned int flags;
 
   struct list_head peer_list_entry;
+  struct list_head enumeration_entry;
   struct list_head mcast_list_entry;
   struct hlist_node nbma_hash_entry;
 
@@ -142,6 +143,16 @@ struct nhrp_peer_selector {
 
   struct nhrp_address local_nbma_address;
 };
+
+/* Live cursor: removal advances cursors before unlinking a peer. New peers
+ * are inserted ahead of the cursor and are left to the next query. */
+struct nhrp_peer_cursor {
+  struct list_head entry;
+  struct list_head *next;
+};
+void nhrp_peer_cursor_open(struct nhrp_peer_cursor *cursor);
+struct nhrp_peer *nhrp_peer_cursor_next(struct nhrp_peer_cursor *cursor);
+void nhrp_peer_cursor_close(struct nhrp_peer_cursor *cursor);
 
 extern const char *const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
 typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);

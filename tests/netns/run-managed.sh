@@ -733,6 +733,7 @@ interface gre-ha
 EOF
 cat >"$runtime_dir/private-spoke.conf" <<EOF
 interface gre-ha
+  holding-time 60
   map 10.20.0.1/32 $hub1_private_nbma register
 EOF
 grep -q '^  map 10.20.0.1/32 ' "$runtime_dir/spoke.conf"
@@ -1188,6 +1189,26 @@ ip netns exec "$private_spoke_ns" ping -I 10.20.0.3 -c 3 -W 1 \
 	198.18.20.1 >"$runtime_dir/private-spoke.initial-ping.txt"
 
 log "validating endpoint failover within the Primary member"
+# Keep this case within one member. Cross-member fallback would keep renewing
+# the old private-NBMA lease on another Hub, preventing its expiry by design.
+# The core can fail over even with the coordinator paused, so isolate backups.
+ip netns exec "$private_spoke_ns" iptables -N onhrp-endpoint-test
+ip netns exec "$private_spoke_ns" iptables -A onhrp-endpoint-test \
+	-d "$hub1_underlay" -j RETURN
+ip netns exec "$private_spoke_ns" iptables -A onhrp-endpoint-test \
+	-d "$hub1_private_nbma" -j RETURN
+ip netns exec "$private_spoke_ns" iptables -A onhrp-endpoint-test -j DROP
+ip netns exec "$private_spoke_ns" iptables -I OUTPUT -p gre -j onhrp-endpoint-test
+for _ in {1..200}; do
+	private_spoke_state=$(private_spoke_ha_show)
+	if ! grep -Eq '"member":"hub-backup[12]"[^}]*"ready":true' <<<"$private_spoke_state"; then
+		break
+	fi
+	sleep 0.05
+done
+! grep -Eq '"member":"hub-backup[12]"[^}]*"ready":true' <<<"$private_spoke_state"
+private_spoke_ha_pid=$(pgrep -P "$private_spoke_pid" | head -n 1)
+kill -STOP "$private_spoke_ha_pid"
 ip -n "$private_spoke_ns" addr add 192.0.2.15/24 dev u-private
 for _ in {1..200}; do
 	private_spoke_state=$(private_spoke_ha_show)
@@ -1200,30 +1221,48 @@ done
 grep -q '"member":"hub-primary"[^}]*"endpoint_reachable":\[true,true\][^}]*"selected_address":"'"$hub1_private_nbma"'"' \
 	<<<"$private_spoke_state"
 ip -n "$hub1_ns" addr del "$hub1_private_nbma/24" dev u-hub1
-for _ in {1..400}; do
+# Changing the selected underlay changes the Spoke NBMA too. A live unique
+# lease must expire before a different binding can take its place.
+for _ in {1..1800}; do
 	private_spoke_state=$(private_spoke_ha_show)
-	if grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_underlay"'"[^}]*"ready":true' \
-		<<<"$private_spoke_state"; then
+	if grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_underlay"'"[^}]*"registered":true[^}]*"ready":true' \
+		<<<"$private_spoke_state" &&
+		ip -n "$hub1_ns" neigh show 10.20.0.3 dev gre-ha |
+			grep -q 'lladdr 192.0.2.15'; then
 		break
 	fi
 	sleep 0.05
 done
-grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_underlay"'"[^}]*"ready":true' \
+grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_underlay"'"[^}]*"registered":true[^}]*"ready":true' \
 	<<<"$private_spoke_state"
 activate_spoke_member hub-primary "$runtime_dir/private_spoke.socket"
 wait_private_spoke_neighbor "$hub1_underlay"
+ip -n "$hub1_ns" neigh show 10.20.0.3 dev gre-ha | grep -q 'lladdr 192.0.2.15'
+ip netns exec "$private_spoke_ns" ping -I 10.20.0.3 -c 2 -W 1 198.18.20.1 \
+	>"$runtime_dir/private-spoke.public-endpoint.txt"
 ip -n "$hub1_ns" addr add "$hub1_private_nbma/24" dev u-hub1
-for _ in {1..200}; do
+for _ in {1..1800}; do
 	private_spoke_state=$(private_spoke_ha_show)
-	if grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_private_nbma"'"[^}]*"ready":true' \
-		<<<"$private_spoke_state"; then
+	if grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_private_nbma"'"[^}]*"registered":true[^}]*"ready":true' \
+		<<<"$private_spoke_state" &&
+		ip -n "$hub1_ns" neigh show 10.20.0.3 dev gre-ha |
+			grep -q "lladdr $private_spoke_underlay"; then
 		break
 	fi
 	sleep 0.05
 done
-grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_private_nbma"'"[^}]*"ready":true' \
+grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_private_nbma"'"[^}]*"registered":true[^}]*"ready":true' \
 	<<<"$private_spoke_state"
 wait_private_spoke_neighbor "$hub1_private_nbma"
+ip -n "$hub1_ns" neigh show 10.20.0.3 dev gre-ha | grep -q "lladdr $private_spoke_underlay"
+ip netns exec "$private_spoke_ns" ping -I 10.20.0.3 -c 2 -W 1 198.18.20.1 \
+	>"$runtime_dir/private-spoke.private-endpoint.txt"
+
+ip -n "$private_spoke_ns" addr del 192.0.2.15/24 dev u-private
+ip netns exec "$private_spoke_ns" iptables -D OUTPUT -p gre -j onhrp-endpoint-test
+ip netns exec "$private_spoke_ns" iptables -F onhrp-endpoint-test
+ip netns exec "$private_spoke_ns" iptables -X onhrp-endpoint-test
+kill -CONT "$private_spoke_ha_pid"
 
 log "validating public and private Spoke endpoint selection"
 spoke_ha_pid=$(pgrep -P "$spoke_pid" | head -n 1)

@@ -138,13 +138,17 @@ with
 Use
 .B no-unique
 keyword to disable setting of unique flag for registration requests.
-This is required if the peer is running Cisco IOS and this node has
-a dynamic IP.
+With the unique flag set, Registration Requests must contain exactly one
+CIE with a prefix-length field of 0xff. A different NBMA binding is rejected
+with code 14 while an existing unique registration is valid. The same binding
+can renew; NAT bindings compare both the observed and original NBMA address.
+A change of NBMA address therefore requires the old binding to expire or be
+explicitly removed. A rejected client retries without purging the old binding.
+The flag is a binding constraint, not client authentication.
 .PP
 The deprecated
 .B cisco
-keyword will fix statically the Registration Request ID so that
-a matching Purge Request can be sent if NBMA address has changed.
+keyword fixes the Registration Request ID for Cisco interoperability.
 Use
 .B no-unique
 instead on new installations.
