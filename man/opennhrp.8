@@ -56,6 +56,12 @@ Pid-file is not created unless
 .B -d
 is specified too.
 
+.IP "\fB\-H \fIstate\-directory"
+Use
+.I state-directory
+for managed HA state and the graceful-restart peer cache. The default is
+.IR /etc/opennhrp/ha .
+
 .IP "\fB-d"
 Run in daemon mode, forking to background after initialization.
 
@@ -71,6 +77,10 @@ Print version and exit.
 Forget all cached information about other system addresses.
 .IP \fBSIGUSR1
 Dump NHRP peer database to system log.
+
+.IP "\fBSIGINT, SIGTERM"
+Save eligible learned peers and terminate cleanly. The original absolute
+expiration time is retained, so downtime consumes the remaining holding time.
 
 .SH FILES
 .I /etc/opennhrp/opennhrp.conf
@@ -92,6 +102,17 @@ for more information how the script is executed.
 .I /var/run/opennhrp.socket
 .RS
 .BR opennhrp "(8) control socket"
+.RE
+
+.I /etc/opennhrp/ha/peer-cache.state
+.RS
+Owner-only, atomically replaced graceful-restart snapshot. A Hub saves only
+non-HA dynamic registrations. A Spoke saves learned cached adjacencies and
+shortcut routes. Static mappings, dynamic NHS mappings, local mappings,
+negative or incomplete entries, HA active mappings, and HA candidate or owner
+selection state are not stored. The snapshot is consumed after startup
+validation; missing, expired, incompatible, or invalid records do not prevent
+the daemon from starting.
 .RE
 
 .SH BUGS

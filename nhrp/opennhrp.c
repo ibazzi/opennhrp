@@ -901,7 +901,7 @@ int usage(const char *prog) {
       "\t-c config-file\tread configuration from config-file\n"
       "\t-s script-file\tuse specified script-file for event handling\n"
       "\t-p pid-file\tspecify pid-file\n"
-      "\t-H ha-state-dir\tload managed HA state from directory\n"
+      "\t-H state-dir\tload HA and peer cache state from directory\n"
       "\t-d\t\tfork to background after startup\n"
       "\t-v\t\tverbose logging\n"
       "\t-V\t\tshow version number and exit\n"
@@ -992,6 +992,7 @@ int main(int argc, char **argv) {
 
   write_pid();
 
+  nhrp_peer_cache_load(nhrp_ha_state_dir);
   nhrp_running = TRUE;
   ha_process_start();
   nhrp_ha_start();
@@ -999,6 +1000,7 @@ int main(int argc, char **argv) {
   nhrp_running = FALSE;
 
   ha_process_cleanup();
+  nhrp_peer_cache_save(nhrp_ha_state_dir);
   forward_cleanup();
   kernel_stop_listening();
   nhrp_ha_cleanup();

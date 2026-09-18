@@ -209,10 +209,7 @@ static void binding_from_peer(struct nhrp_ha_hub_binding *binding,
 
 static int is_local_registration(void *ctx, struct nhrp_peer *peer) {
   (void)ctx;
-  return !(peer->flags & (NHRP_PEER_FLAG_HA_CAPABLE |
-                         NHRP_PEER_FLAG_HA_PROJECTED |
-                         NHRP_PEER_FLAG_REMOVED | NHRP_PEER_FLAG_REPLACED)) &&
-         peer->expire_time > ev_now();
+  return nhrp_peer_is_persistable(peer);
 }
 
 static int has_local_registration(struct nhrp_interface *iface,

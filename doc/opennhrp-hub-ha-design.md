@@ -256,6 +256,10 @@ opennhrpctl ha show interface gre-ha format json
 - 未携带 HA 注册扩展的普通 Spoke 留在原注册 Hub，该 Hub 降为 standby
   后仍接受普通注册并转发；这些注册不参与 HA 复制。原 Hub 宕机时旧版 Spoke
   不会自动迁移。HA 能力复用现有 HA/Vendor bootstrap 扩展识别；
+- `SIGINT`/`SIGTERM` 优雅退出会在 `-H` 状态目录的 `peer-cache.state` 中保存
+  未过期的普通 dynamic 注册，以及 Spoke 学习到的 cached 邻接和 shortcut
+  route；启动时按原绝对过期时间恢复，并重新执行 `peer-up`/`route-up` 和邻居
+  注入。`HA_ACTIVE`、`active_member`、候选评分和 HA owner 状态不进入该快照；
 - `ha-local-nbma` 只覆盖某个 Hub 的本地 GRE/NBMA 目的地址，不启用 HA，也不
   改变注册身份；
 - 旧 `ha-hub`、`ha-member-id`、`ha-cluster-id`、`ha-auth`、`ha-auth-key`、
@@ -267,13 +271,16 @@ opennhrpctl ha show interface gre-ha format json
 ```sh
 make compile
 make -C tests test
+sudo python3 tests/netns/test-peer-cache.py
 sudo python3 tests/netns/test-legacy-spoke.py
 sudo tests/netns/run-managed.sh
 ```
 
-前者覆盖 wire、认证、持久状态、Join、复制、failback 和仲裁单元测试；后者覆盖
-自动 Primary、两个 Backup Join、Spoke 自动升级、两 Hub Witness、Manager/Hub
-分区自隔离、安全回退、三 Hub 多数派、接口/健康故障、复制和 failback。
+单元测试覆盖 wire、认证、持久状态、Join、复制、failback 和仲裁；
+`test-peer-cache.py` 覆盖 legacy dynamic、Spoke learned peer 的优雅重启恢复和
+无效快照处理；`run-managed.sh` 覆盖自动 Primary、两个 Backup Join、Spoke 自动
+升级、两 Hub Witness、Manager/Hub 分区自隔离、安全回退、三 Hub 多数派、接口/
+健康故障、复制和 failback。
 
 `test-legacy-spoke.py` 使用真实报文模拟旧版 Spoke，覆盖注册能力分类、多个 CIE、
 standby 续注册、旧 HA 缓存替换及同步冲突，并检查内核邻居和 GRE ping；

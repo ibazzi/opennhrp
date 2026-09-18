@@ -154,6 +154,9 @@ extern const char * const nhrp_peer_type[NHRP_PEER_TYPE_MAX];
 typedef int (*nhrp_peer_enumerator)(void *ctx, struct nhrp_peer *peer);
 
 void nhrp_peer_cleanup(void);
+int nhrp_peer_is_persistable(const struct nhrp_peer *peer);
+int nhrp_peer_cache_save(const char *directory);
+int nhrp_peer_cache_load(const char *directory);
 
 struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface);
 struct nhrp_peer *nhrp_peer_get(struct nhrp_peer *peer);

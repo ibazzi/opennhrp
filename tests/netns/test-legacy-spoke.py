@@ -176,20 +176,22 @@ def main():
                 assert f"entry 10.20.0.{last} " in snap
             register("h1", "legacy", "10.20.0.203")
             assert "entry 10.20.0.203 " not in snapshot("h1")
+            # A Follower keeps replicas as shadows. These low-level role commands
+            # do not synthesize the Spoke owner-release handshake.
             sync("h2", "10.20.0.202/32", 1000)
             assert not present("h2", "10.20.0.202")
             role("h2", "follower", 1000)
-            ping("h2", "10.20.0.202")
+            assert not present("h2", "10.20.0.202")
             role("h2", "standby", 1001)
             assert not present("h2", "10.20.0.202")
             role("h1", "standby", 1001)
             role("h2", "leader", 1001)
-            assert not present("h1", "10.20.0.202")
+            assert present("h1", "10.20.0.202")
             ping("h2", "10.20.0.202")
             register("h1", "legacy", "10.20.0.200", "10.20.0.201")
             register("h1", "legacy", "10.20.0.206")
             register("h1", "ha", "10.20.0.202")
-            assert not present("h1", "10.20.0.202")
+            assert present("h1", "10.20.0.202")
             register("h1", "legacy", "10.20.0.204")
             assert "entry 10.20.0.204 " not in snapshot("h1")
             for term in (1002, 1003, 1004):
