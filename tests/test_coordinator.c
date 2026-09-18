@@ -204,9 +204,38 @@ int main(void) {
 
   memset(&decision, 0, sizeof(decision));
   assert(parse_service(authenticated_event, &view));
-  candidate = select_migration(&view, &decision, 1.0, &reason);
+  assert(select_migration(&view, &decision, 1.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 15.9, &reason) == NULL);
+  candidate = select_migration(&view, &decision, 16.0, &reason);
   assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
-  assert(strcmp(reason, "unavailable") == 0);
+  assert(strcmp(reason, "quality") == 0);
+
+  /* Zero score obeys cooldown; a recovery or no READY target resets the hold. */
+  decision.cooldown_until = 50.0;
+  assert(select_migration(&view, &decision, 49.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 50.0, &reason) == NULL);
+  view.candidates[0].ready = 1;
+  view.candidates[0].score = 100;
+  assert(select_migration(&view, &decision, 52.56, &reason) == NULL);
+  view.candidates[0].ready = 0;
+  view.candidates[0].score = 0;
+  view.candidates[1].ready = 0;
+  assert(select_migration(&view, &decision, 60.0, &reason) == NULL);
+  view.candidates[1].ready = 1;
+  view.candidates[1].score = 0;
+  assert(best_ready_candidate(&view) == NULL);
+  assert(select_migration(&view, &decision, 60.5, &reason) == NULL);
+  view.candidates[1].score = 80;
+  assert(select_migration(&view, &decision, 61.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 75.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 76.0, &reason) == &view.candidates[1]);
+
+  /* A failed manually selected Hub uses the same score hold. */
+  view.selection_manual = 1;
+  assert(select_migration(&view, &decision, 80.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 94.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 95.0, &reason) == &view.candidates[1]);
+  assert(strcmp(reason, "quality") == 0);
 
   memset(&decision, 0, sizeof(decision));
   assert(parse_service(transfer_transition_event, &view));

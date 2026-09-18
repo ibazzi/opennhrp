@@ -245,6 +245,13 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer) {
       nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp),
       peer->prefix_length);
 
+  if (peer->type == NHRP_PEER_TYPE_DYNAMIC)
+    i += admin_append(
+        &buf[i], len - i, "Registration-Mode: %s\n",
+        peer->flags & (NHRP_PEER_FLAG_HA_CAPABLE | NHRP_PEER_FLAG_HA_PROJECTED)
+            ? "ha"
+            : "legacy");
+
   if (peer->next_hop_address.type != PF_UNSPEC) {
     switch (peer->type) {
     case NHRP_PEER_TYPE_SHORTCUT_ROUTE:

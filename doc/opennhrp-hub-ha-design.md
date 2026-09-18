@@ -7,7 +7,7 @@
 
 - Hub：在 mGRE 接口上配置 `enable-ha`，共享同一个 Protocol Address/prefix，
   各自拥有独立的 NBMA endpoint。
-- Spoke：继续使用普通 `map ... register`。收到托管 Hub List 后自动建立暖注册，
+- Spoke：继续使用普通 `map ... register`。收到托管 Hub List 后自动发现候选并向 active Hub 注册，
   无需维护一份单独的 HA Hub 配置。
 - `opennhrp-ha`：由 `opennhrp` 自动启动和监管。Hub 模式负责成员、复制、选举、
   仲裁和 failback；Spoke 模式负责候选 Hub 探测与切换。
@@ -132,8 +132,8 @@ Leader 会在认证成功后把 Hub TCP 实际源地址作为 observed endpoint�
 配置 reload 会原地替换 endpoint 和健康目标，不需要重启 `opennhrp`。恢复节点
 先保持隔离，连接 active 成员并学习当前 term/Leader 后才重新投影注册。
 
-每个 Spoke 独立探测当前 active Hub；切换期间再探测目标 Hub，并按当前选中
-endpoint 的链路质量评分。丢包使用 `α=1/8` 的 EWMA，分数固定为：
+每个 Spoke 独立探测各候选 Hub，并按各自当前选中 endpoint 的链路质量评分。
+丢包使用 `α=1/8` 的 EWMA，分数固定为：
 
 ```text
 60 * max(0, 1 - loss_pct / 30)
@@ -141,9 +141,18 @@ endpoint 的链路质量评分。丢包使用 `α=1/8` 的 EWMA，分数固定�
 + 10 * min(priority, 100) / 100
 ```
 
-不可服务、离线、未注册或认证失败的候选得 0 分。相同最高 term 内，目标高出
-当前 Hub 至少 10 分并持续 15 秒后迁移；迁移后冷却 30 秒。当前 Hub 不可用或
-term 陈旧时立即迁移。单次探测失败进入 `suspect` 只降低评分，不立即切换。
+不可服务、选中 endpoint 不可达或认证失败的候选得 0 分；当前 Hub 的注册
+实际失效时同样得 0 分。备用 Hub 无需预先注册即可参与评分，只有实际迁移时
+才注册。探测连续三次失败且达到超时条件后，
+将选中 endpoint 标记为不可达，保留当前注册；有效探测回复恢复可达性，并更新
+Hub 的可服务状态。注册回复不覆盖探测得到的可服务状态。
+
+相同最高 term 内，目标高出当前 Hub 至少 10 分并持续 15 秒后迁移；迁移后冷却
+30 秒。当前 Hub 为 0 分、Hub 明确不可服务、其他 Hub 恢复可用均遵守这些规则。
+优势不再满足时重新计时。较高优先级候选以不足 10 分的优势回切需要持续 120 秒。
+无合格目标时保留当前选择并继续探测。任期保护、带 owner 版本证据的接管和
+显式手动切换独立保留；手动选择的 Hub 不可用时，也通过评分规则选择备用。
+实际迁移负责目标注册和旧 owner 清理，同一 Hub 的 endpoint 更换仍需相应注册。
 
 ## 5. 两 Hub Witness
 

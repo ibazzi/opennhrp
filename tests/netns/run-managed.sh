@@ -628,7 +628,7 @@ grep -q '"member":"hub-backup1".*"address":"'"$hub2_underlay"'","origin":"config
 
 invite=$(OPENNHRP_HA_STATE_DIR="$runtime_dir/hub1-state" \
 	"$bin_dir/opennhrpctl" ha invite create --member-id hub-backup2 \
-	--format plain)
+	--priority 80 --format plain)
 printf '%s\n' "$invite" | ip netns exec "$hub3_ns" env \
 	OPENNHRP_HA_STATE_DIR="$runtime_dir/hub3-state" \
 	"$bin_dir/opennhrpctl" ha join --interface gre-ha \
@@ -1027,6 +1027,22 @@ activate_spoke_member hub-primary
 wait_single_spoke_owner hub1 hub-primary
 grep -q '"selection_mode":"auto"' <<<"$(spoke_ha_show)"
 
+log "validating a short probe outage preserves the active registration"
+ip netns exec "$spoke_ns" iptables -I OUTPUT -p gre \
+	-m comment --comment opennhrp-ha-short-outage -j DROP
+sleep 2.56
+spoke_state=$(spoke_ha_show)
+printf '%s\n' "$spoke_state" >"$runtime_dir/spoke.short-outage.json"
+grep -q '"active_member":"hub-primary"' <<<"$spoke_state"
+grep -q '"member":"hub-primary"[^}]*"registered":true[^}]*"score":0' <<<"$spoke_state"
+grep -q '"switching":false' <<<"$spoke_state"
+ip netns exec "$spoke_ns" iptables -D OUTPUT -p gre \
+	-m comment --comment opennhrp-ha-short-outage -j DROP
+sleep 5
+spoke_state=$(spoke_ha_show)
+grep -q '"member":"hub-primary"[^}]*"registered":true[^}]*"ready":true' <<<"$spoke_state"
+grep -q '"active_member":"hub-primary"' <<<"$spoke_state"
+
 log "validating per-Spoke latency/loss scoring and migration hysteresis"
 degrade_spoke_primary
 sleep 3
@@ -1082,7 +1098,7 @@ ip netns exec "$spoke_ns" iptables -I OUTPUT -d "$hub1_underlay" \
 	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
 ip netns exec "$spoke_ns" iptables -I OUTPUT -d "$hub1_private_nbma" \
 	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
-for _ in {1..300}; do
+for _ in {1..1000}; do
 	spoke_state=$(spoke_ha_show)
 	if grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"; then
 		break
@@ -1191,7 +1207,7 @@ ip netns exec "$private_spoke_ns" ping -I 10.20.0.3 -c 3 -W 1 \
 log "validating endpoint failover within the Primary member"
 # Keep this case within one member. Cross-member fallback would keep renewing
 # the old private-NBMA lease on another Hub, preventing its expiry by design.
-# The core can fail over even with the coordinator paused, so isolate backups.
+# Isolate backups so this case tests only same-member endpoint recovery.
 ip netns exec "$private_spoke_ns" iptables -N onhrp-endpoint-test
 ip netns exec "$private_spoke_ns" iptables -A onhrp-endpoint-test \
 	-d "$hub1_underlay" -j RETURN

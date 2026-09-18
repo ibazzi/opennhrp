@@ -52,6 +52,28 @@ int main(void) {
   struct nhrp_peer_cursor a = {0}, b = {0};
 
   ev_default_loop(0);
+  /* Report registration capability, including projected HA owners. */
+  for (i = 0; i < 4; i++) {
+    struct nhrp_peer peer = {0};
+    ssize_t n;
+    peer.type = i == 3 ? NHRP_PEER_TYPE_STATIC : NHRP_PEER_TYPE_DYNAMIC;
+    peer.flags = i == 1 ? NHRP_PEER_FLAG_HA_CAPABLE
+                       : i == 2 ? NHRP_PEER_FLAG_HA_PROJECTED : 0;
+    assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, fd) == 0);
+    r = remote_new(fd[0]);
+    admin_show_peer(r, &peer);
+    admin_send_cb(&r->output_io, EV_WRITE);
+    n = recv(fd[1], buffer, sizeof(buffer) - 1, 0);
+    assert(n > 0);
+    buffer[n] = 0;
+    if (i == 3)
+      assert(strstr(buffer, "Registration-Mode:") == NULL);
+    else
+      assert(strstr(buffer, i == 0 ? "Registration-Mode: legacy\n"
+                                   : "Registration-Mode: ha\n") != NULL);
+    admin_free_remote(r);
+    close(fd[1]);
+  }
   assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, fd) == 0);
   assert(setsockopt(fd[0], SOL_SOCKET, SO_SNDBUF, &small, sizeof(small)) == 0);
   r = remote_new(fd[0]);

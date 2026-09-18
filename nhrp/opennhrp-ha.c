@@ -239,7 +239,7 @@ static struct candidate_view *best_ready_candidate(struct service_view *view) {
   size_t i;
 
   for (i = 0; i < view->candidate_count; i++) {
-    if (!view->candidates[i].ready)
+    if (!view->candidates[i].ready || view->candidates[i].score == 0)
       continue;
     if (view->auth_required && !view->candidates[i].authenticated)
       continue;
@@ -283,7 +283,7 @@ static int initial_candidate_pending(const struct service_view *view,
 
 static int candidate_usable(const struct service_view *view,
                             const struct candidate_view *candidate) {
-  return candidate != NULL &&
+  return candidate != NULL && candidate->score != 0 &&
          (candidate->ready || strcmp(candidate->state, "suspect") == 0) &&
          (!view->auth_required || candidate->authenticated);
 }
@@ -337,12 +337,6 @@ static struct candidate_view *select_migration(struct service_view *view,
       *reason = "initial";
     return best;
   }
-  if (!candidate_usable(view, active)) {
-    decision_reset_superior(state);
-    if (best != NULL)
-      *reason = "unavailable";
-    return best;
-  }
   if (best == NULL || active->term > best->term) {
     decision_reset_superior(state);
     return NULL;
@@ -358,7 +352,7 @@ static struct candidate_view *select_migration(struct service_view *view,
     *reason = "stale-term";
     return leader;
   }
-  if (view->selection_manual) {
+  if (view->selection_manual && active->score != 0) {
     struct candidate_view *manual = find_candidate(view, view->manual_member);
 
     decision_reset_superior(state);
@@ -477,7 +471,7 @@ static void process_event(const char *socket_path, const char *interface_name,
     state->degraded = 0;
     return;
   }
-  if (!candidate_usable(&view, active)) {
+  if (best_ready_candidate(&view) == NULL) {
     size_t i;
 
     if (view.auth_required) {

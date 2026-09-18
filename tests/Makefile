@@ -6,7 +6,7 @@ CFLAGS += -Wall -Wextra -Werror -std=gnu99 -I../nhrp/core -I../nhrp/ha \
 BUILD_DIR ?= ../build/tests
 TESTS := test_extensions test_ha_wire test_ha_auth test_ha_seen \
 	test_ha_control test_ha_store test_ha_delta test_ha_failback \
-	test_ha_managed test_ha_join test_coordinator test_admin
+	test_ha_managed test_ha_join test_coordinator test_admin test_ha_candidate
 TEST_BINS := $(addprefix $(BUILD_DIR)/,$(TESTS))
 
 .PHONY: all test clean
@@ -51,7 +51,7 @@ $(BUILD_DIR)/test_ha_managed: test_ha_managed.c ../nhrp/ha/nhrp_ha_managed.c ../
 $(BUILD_DIR)/test_ha_join: test_ha_join.c ../nhrp/ha/nhrp_ha_join.c ../nhrp/ha/nhrp_ha_managed.c ../nhrp/ha/nhrp_ha_auth.c
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
 
-$(BUILD_DIR)/test_coordinator: test_coordinator.c
+$(BUILD_DIR)/test_coordinator: test_coordinator.c ../nhrp/opennhrp-ha.c ../nhrp/ha/nhrp_ha.h
 	$(CC) $(CFLAGS) -o $@ $<
 
 clean:
@@ -60,3 +60,6 @@ clean:
 # Include production internals to exercise queue and cursor lifetimes directly.
 $(BUILD_DIR)/test_admin: test_admin.c ../nhrp/admin.c ../nhrp/core/nhrp_peer.c ../nhrp/core/nhrp_peer.h ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c
 	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ test_admin.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c -lm -lcares
+
+$(BUILD_DIR)/test_ha_candidate: test_ha_candidate.c ../nhrp/ha/nhrp_ha.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c ../nhrp/ha/nhrp_ha_auth.c
+	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ test_ha_candidate.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c ../nhrp/ha/nhrp_ha_auth.c -lm -lcares -lcrypto

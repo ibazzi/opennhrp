@@ -48,7 +48,7 @@ check-format:
 
 install:
 	$(INSTALLDIR) $(DESTDIR)$(DOCDIR)
-	$(INSTALL) README $(DESTDIR)$(DOCDIR)
+	$(INSTALL) README.md $(DESTDIR)$(DOCDIR)
 
 deb:
 	rm -rf build/src
