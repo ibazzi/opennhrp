@@ -35,9 +35,12 @@ struct candidate_view {
 struct service_view {
   char protocol[64];
   char active_member[64];
+  char manual_member[64];
+  char manual_leader[64];
   unsigned int generation;
   int switching;
   int auth_required;
+  int selection_manual;
   struct candidate_view candidates[32];
   size_t candidate_count;
 };
@@ -45,6 +48,7 @@ struct service_view {
 struct decision_state {
   char protocol[64];
   char active_member[64];
+  int selection_manual;
   char superior_member[64];
   double superior_since;
   double cooldown_until;
@@ -167,6 +171,14 @@ static int parse_service(const char *line, struct service_view *view) {
     return 0;
   view->switching = strstr(line, "\"switching\":true") != NULL;
   view->auth_required = strstr(line, "\"auth_mode\":\"required\"") != NULL;
+  view->selection_manual =
+      strstr(line, "\"selection_mode\":\"manual\"") != NULL;
+  if (view->selection_manual &&
+      (!json_string(line, "manual_member", view->manual_member,
+                    sizeof(view->manual_member)) ||
+       !json_string(line, "manual_leader", view->manual_leader,
+                    sizeof(view->manual_leader))))
+    return 0;
 
   active = strstr(line, "\"active_member\":");
   if (active == NULL)
@@ -307,6 +319,11 @@ static struct candidate_view *select_migration(struct service_view *view,
   double hold = SCORE_SWITCH_HOLD;
 
   *reason = NULL;
+  if (state->selection_manual != view->selection_manual) {
+    state->selection_manual = view->selection_manual;
+    state->cooldown_until = 0.0;
+    decision_reset_superior(state);
+  }
   if (strcmp(state->active_member, view->active_member) != 0) {
     snprintf(state->active_member, sizeof(state->active_member), "%s",
              view->active_member);
@@ -340,6 +357,20 @@ static struct candidate_view *select_migration(struct service_view *view,
       return NULL;
     *reason = "stale-term";
     return leader;
+  }
+  if (view->selection_manual) {
+    struct candidate_view *manual =
+        find_candidate(view, view->manual_member);
+
+    decision_reset_superior(state);
+    if (best->leader[0] == 0 ||
+        strcmp(best->leader, view->manual_leader) != 0)
+      return NULL;
+    if (!candidate_usable(view, manual) || manual->term != best->term ||
+        strcmp(manual->leader, view->manual_leader) != 0 || manual == active)
+      return NULL;
+    *reason = "manual";
+    return manual;
   }
   if (best == active || now < state->cooldown_until ||
       best->score <= active->score) {

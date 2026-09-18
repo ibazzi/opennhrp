@@ -767,6 +767,37 @@ static void admin_ha_activate_done(void *ctx, int status,
 		admin_free_remote(remote);
 }
 
+static void admin_ha_mode(void *ctx, const char *cmd)
+{
+	struct admin_remote *remote = ctx;
+	char mode[16] = "";
+	char member[64] = "";
+	char trailing[2];
+	const char *reason = "invalid-argument";
+
+	if (!parse_word(&cmd, sizeof(mode), mode))
+		goto invalid;
+	if (strcmp(mode, "manual") == 0) {
+		if (!parse_word(&cmd, sizeof(member), member))
+			goto invalid;
+	} else if (strcmp(mode, "auto") != 0) {
+		goto invalid;
+	}
+	if (parse_word(&cmd, sizeof(trailing), trailing))
+		goto invalid;
+
+	remote->deferred = TRUE;
+	if (nhrp_ha_set_selection_mode(mode, member, admin_ha_activate_done,
+				       remote, &reason))
+		return;
+	remote->deferred = FALSE;
+	admin_write(ctx, "Status: failed\nReason: %s\n", reason);
+	return;
+
+invalid:
+	admin_write(ctx, "Status: failed\nReason: invalid-argument\n");
+}
+
 static void admin_ha_activate(void *ctx, const char *cmd)
 {
 	struct admin_remote *remote = ctx;
@@ -1121,6 +1152,7 @@ static struct {
 	{ "ha cluster set", admin_ha_cluster_set },
 	{ "ha hub role", admin_ha_hub_role },
 	{ "ha hub show", admin_ha_hub_show },
+	{ "ha mode", admin_ha_mode },
 	{ "ha activate", admin_ha_activate },
 	{ "ha monitor", admin_ha_monitor },
 	{ "ha show", admin_ha_show },

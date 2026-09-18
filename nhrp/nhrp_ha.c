@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <endian.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <math.h>
 #include <openssl/crypto.h>
@@ -11,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -30,6 +32,8 @@
 #define HA_STANDBY_PROBE_INTERVAL 0.50
 #define HA_ACTIVE_MIN_RTO 0.25
 #define HA_STANDBY_MIN_RTO 0.75
+#define HA_SELECTION_MAGIC "NHSL"
+#define HA_SELECTION_VERSION 1
 
 enum nhrp_ha_candidate_state {
   NHRP_HA_CANDIDATE_INIT,
@@ -152,7 +156,20 @@ struct nhrp_ha_service {
   struct nhrp_ha_candidate *reconcile_candidate;
   struct nhrp_address reconcile_nbma;
   int reconcile_has_local_nbma;
+  int selection_manual;
+  char manual_member[NHRP_HA_MEMBER_ID_MAX + 1];
+  char manual_leader[NHRP_HA_AUTH_LEADER_MAX + 1];
 };
+
+struct nhrp_ha_selection_disk {
+  uint8_t magic[4];
+  uint8_t version;
+  uint8_t manual;
+  uint8_t reserved[2];
+  char protocol[64];
+  char member[NHRP_HA_MEMBER_ID_MAX + 1];
+  char leader[NHRP_HA_AUTH_LEADER_MAX + 1];
+} __attribute__((packed));
 
 struct nhrp_ha_local_override {
   struct list_head list_entry;
@@ -653,6 +670,83 @@ service_find(struct nhrp_interface *iface,
   return NULL;
 }
 
+static int selection_path(const struct nhrp_ha_service *service, char *path,
+                          size_t size) {
+  return snprintf(path, size, "%s/spoke-%s.selection",
+                  managed_state_directory, service->interface->name) <
+         (int)size;
+}
+
+static int selection_save(const struct nhrp_ha_service *service) {
+  struct nhrp_ha_selection_disk disk;
+  char path[PATH_MAX];
+
+  if (!selection_path(service, path, sizeof(path)))
+    return FALSE;
+  memset(&disk, 0, sizeof(disk));
+  memcpy(disk.magic, HA_SELECTION_MAGIC, sizeof(disk.magic));
+  disk.version = HA_SELECTION_VERSION;
+  disk.manual = service->selection_manual;
+  nhrp_address_format(&service->protocol, sizeof(disk.protocol),
+                      disk.protocol);
+  if (service->selection_manual) {
+    snprintf(disk.member, sizeof(disk.member), "%s", service->manual_member);
+    snprintf(disk.leader, sizeof(disk.leader), "%s", service->manual_leader);
+  }
+  return nhrp_ha_secure_file_write(path, &disk, sizeof(disk));
+}
+
+static void selection_load(struct nhrp_ha_service *service) {
+  struct nhrp_ha_selection_disk disk;
+  struct nhrp_address protocol;
+  struct stat status;
+  char path[PATH_MAX];
+  uint8_t prefix;
+  uint8_t trailing;
+  ssize_t length;
+  int fd;
+
+  service->selection_manual = FALSE;
+  service->manual_member[0] = 0;
+  service->manual_leader[0] = 0;
+  if (!selection_path(service, path, sizeof(path)))
+    return;
+  fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0) {
+    if (errno != ENOENT)
+      nhrp_error("Unable to read HA selection state %s: %s", path,
+                 strerror(errno));
+    return;
+  }
+  length = read(fd, &disk, sizeof(disk));
+  if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) ||
+      (status.st_mode & 077) != 0 || status.st_uid != geteuid() ||
+      length != sizeof(disk) || read(fd, &trailing, 1) != 0 ||
+      memcmp(disk.magic, HA_SELECTION_MAGIC, sizeof(disk.magic)) != 0 ||
+      disk.version != HA_SELECTION_VERSION || disk.manual > 1 ||
+      disk.reserved[0] != 0 || disk.reserved[1] != 0 ||
+      memchr(disk.protocol, 0, sizeof(disk.protocol)) == NULL ||
+      memchr(disk.member, 0, sizeof(disk.member)) == NULL ||
+      memchr(disk.leader, 0, sizeof(disk.leader)) == NULL ||
+      !nhrp_address_parse(disk.protocol, &protocol, &prefix) ||
+      nhrp_address_cmp(&protocol, &service->protocol) != 0 ||
+      (disk.manual && (!member_id_valid(disk.member) ||
+                       !member_id_valid(disk.leader)))) {
+    nhrp_error("Ignoring invalid HA selection state %s; using auto mode",
+               path);
+    close(fd);
+    return;
+  }
+  close(fd);
+  if (!disk.manual)
+    return;
+  service->selection_manual = TRUE;
+  snprintf(service->manual_member, sizeof(service->manual_member), "%s",
+           disk.member);
+  snprintf(service->manual_leader, sizeof(service->manual_leader), "%s",
+           disk.leader);
+}
+
 static struct nhrp_ha_candidate *candidate_find(struct nhrp_ha_service *service,
                                                 const char *member_id) {
   struct nhrp_ha_candidate *candidate;
@@ -662,6 +756,30 @@ static struct nhrp_ha_candidate *candidate_find(struct nhrp_ha_service *service,
       return candidate;
   }
   return NULL;
+}
+
+static const char *service_current_leader(struct nhrp_ha_service *service) {
+  struct nhrp_ha_candidate *candidate;
+  struct nhrp_ha_candidate *best = NULL;
+
+  list_for_each_entry(candidate, &service->candidates, list_entry) {
+    if (!candidate->auth_valid || candidate->auth_leader[0] == 0)
+      continue;
+    if (best == NULL || candidate->auth_term > best->auth_term ||
+        (candidate->auth_term == best->auth_term &&
+         candidate->auth_commit_index > best->auth_commit_index))
+      best = candidate;
+  }
+  return best != NULL ? best->auth_leader : NULL;
+}
+
+static int service_manual_suspended(struct nhrp_ha_service *service) {
+  const char *leader;
+
+  if (!service->selection_manual)
+    return FALSE;
+  leader = service_current_leader(service);
+  return leader != NULL && strcmp(leader, service->manual_leader) != 0;
 }
 
 static struct nhrp_ha_candidate *candidate_best(
@@ -1861,7 +1979,13 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   }
   candidate->consecutive_misses = 0;
   free(request);
-  if (candidate != active && !candidate->registered &&
+  if (active != NULL && candidate != active && candidate->registered &&
+      (!candidate->service->switching ||
+       candidate->service->switch_target != candidate)) {
+    candidate_release_owner(candidate->service, candidate, TRUE);
+    candidate_retire_owner(candidate);
+    candidate_set_state(candidate, NHRP_HA_CANDIDATE_READY);
+  } else if (candidate != active && !candidate->registered &&
       candidate->state == NHRP_HA_CANDIDATE_READY &&
       candidate->registration_request_id != 0) {
     if (candidate_release_owner(candidate->service, candidate, FALSE)) {
@@ -2875,6 +2999,7 @@ int nhrp_ha_config_map(struct nhrp_interface *iface,
     service->configured = TRUE;
     list_init(&service->candidates);
     ev_timer_init(&service->reconcile_timer, reconcile_timer_cb, 0.0, 0.0);
+    selection_load(service);
     list_add_tail(&service->list_entry, &services);
   } else if (service->prefix_length != prefix_length) {
     return FALSE;
@@ -3491,6 +3616,9 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
           "%s{\"event_sequence\":%llu,\"interface\":\"%s\","
           "\"mode\":\"%s\",\"coordinator_state\":\"%s\","
           "\"coordinator_last_exit\":%d,"
+          "\"selection_mode\":\"%s\","
+          "\"manual_member\":%s%s%s,\"manual_leader\":%s%s%s,"
+          "\"manual_suspended\":%s,"
           "\"protocol\":\"%s\",\"prefix_length\":%u,"
           "\"generation\":%u,\"hub_list_generation\":%u,"
           "\"hub_list_source\":%s%s%s,\"switching\":%s,"
@@ -3502,7 +3630,15 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
           rendered > 1 ? "\n" : "", (unsigned long long)service->event_sequence,
           service->interface->name, mode,
           status != NULL && status->state[0] != 0 ? status->state : "stopped",
-          status != NULL ? status->last_exit : 0, protocol,
+          status != NULL ? status->last_exit : 0,
+          service->selection_manual ? "manual" : "auto",
+          service->selection_manual ? "\"" : "",
+          service->selection_manual ? service->manual_member : "null",
+          service->selection_manual ? "\"" : "",
+          service->selection_manual ? "\"" : "",
+          service->selection_manual ? service->manual_leader : "null",
+          service->selection_manual ? "\"" : "",
+          service_manual_suspended(service) ? "true" : "false", protocol,
           service->prefix_length, service->generation,
           service->hub_list_generation,
           service->hub_list_source[0] != 0 ? "\"" : "",
@@ -3622,14 +3758,20 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
       offset = append(
           buffer, size, offset,
           "Interface: %s\nMode: %s\nCoordinator-State: %s\n"
-          "Coordinator-Last-Exit: %d\nProtocol-Address: %s/%u\nGeneration: %u\n"
+          "Coordinator-Last-Exit: %d\nSelection-Mode: %s\n"
+          "Manual-Member: %s\nManual-Leader: %s\nManual-Suspended: %s\n"
+          "Protocol-Address: %s/%u\nGeneration: %u\n"
           "Hub-List-Generation: %u\nHub-List-Source: %s\n"
           "Switching: %s\nAuth-Mode: %s\nSeen-Term: %llu\n"
           "Seen-Commit-Index: %llu\nSeen-Leader: %s\n"
           "Current-Key-ID: %s\nNext-Key-ID: %s\nActive-Member: %s\n",
           service->interface->name, mode,
           status != NULL && status->state[0] != 0 ? status->state : "stopped",
-          status != NULL ? status->last_exit : 0, protocol,
+          status != NULL ? status->last_exit : 0,
+          service->selection_manual ? "manual" : "auto",
+          service->selection_manual ? service->manual_member : "-",
+          service->selection_manual ? service->manual_leader : "-",
+          service_manual_suspended(service) ? "yes" : "no", protocol,
           service->prefix_length, service->generation,
           service->hub_list_generation,
           service->hub_list_source[0] != 0 ? service->hub_list_source : "none",
@@ -4038,4 +4180,161 @@ int nhrp_ha_activate(const char *interface_name,
     return FALSE;
   }
   return TRUE;
+}
+
+struct nhrp_ha_selection_request {
+  struct nhrp_ha_service *service;
+  int old_manual;
+  char old_member[NHRP_HA_MEMBER_ID_MAX + 1];
+  char old_leader[NHRP_HA_AUTH_LEADER_MAX + 1];
+  nhrp_ha_activate_callback callback;
+  void *callback_ctx;
+};
+
+static void selection_restore(struct nhrp_ha_selection_request *request) {
+  struct nhrp_ha_service *service = request->service;
+
+  service->selection_manual = request->old_manual;
+  snprintf(service->manual_member, sizeof(service->manual_member), "%s",
+           request->old_member);
+  snprintf(service->manual_leader, sizeof(service->manual_leader), "%s",
+           request->old_leader);
+  if (!selection_save(service))
+    nhrp_error("Unable to roll back HA selection mode for %s",
+               service->interface->name);
+  service_changed(service);
+}
+
+static void selection_activate_done(void *ctx, int status, const char *reason,
+                                    uint32_t generation) {
+  struct nhrp_ha_selection_request *request = ctx;
+  nhrp_ha_activate_callback callback = request->callback;
+  void *callback_ctx = request->callback_ctx;
+
+  if (status != 0)
+    selection_restore(request);
+  free(request);
+  if (callback != NULL)
+    callback(callback_ctx, status, reason, generation);
+}
+
+int nhrp_ha_set_selection_mode(const char *mode, const char *member_id,
+                               nhrp_ha_activate_callback callback, void *ctx,
+                               const char **reason) {
+  struct nhrp_ha_selection_request *request;
+  struct nhrp_ha_auth_profile *profile;
+  struct nhrp_ha_service *service = NULL;
+  struct nhrp_ha_service *entry;
+  struct nhrp_ha_candidate *candidate = NULL;
+  const char *leader;
+  int manual;
+
+  if (strcmp(mode, "auto") == 0) {
+    manual = FALSE;
+    if (member_id != NULL && member_id[0] != 0) {
+      *reason = "invalid-argument";
+      return FALSE;
+    }
+  } else if (strcmp(mode, "manual") == 0) {
+    manual = TRUE;
+    if (member_id == NULL || !member_id_valid(member_id)) {
+      *reason = "invalid-argument";
+      return FALSE;
+    }
+  } else {
+    *reason = "invalid-mode";
+    return FALSE;
+  }
+
+  list_for_each_entry(entry, &services, list_entry) {
+    struct nhrp_ha_candidate *match =
+        manual ? candidate_find(entry, member_id) : NULL;
+
+    if (!entry->configured || (manual && match == NULL))
+      continue;
+    if (service != NULL) {
+      *reason = "service-ambiguous";
+      return FALSE;
+    }
+    service = entry;
+    candidate = match;
+  }
+  if (service == NULL) {
+    *reason = manual ? "candidate-not-found" : "service-not-found";
+    return FALSE;
+  }
+  if (!manual) {
+    int old_manual = service->selection_manual;
+    char old_member[NHRP_HA_MEMBER_ID_MAX + 1];
+    char old_leader[NHRP_HA_AUTH_LEADER_MAX + 1];
+
+    snprintf(old_member, sizeof(old_member), "%s", service->manual_member);
+    snprintf(old_leader, sizeof(old_leader), "%s", service->manual_leader);
+    service->selection_manual = FALSE;
+    service->manual_member[0] = 0;
+    service->manual_leader[0] = 0;
+    if (!selection_save(service)) {
+      service->selection_manual = old_manual;
+      snprintf(service->manual_member, sizeof(service->manual_member), "%s",
+               old_member);
+      snprintf(service->manual_leader, sizeof(service->manual_leader), "%s",
+               old_leader);
+      *reason = "selection-persist-failed";
+      return FALSE;
+    }
+    service_changed(service);
+    if (callback != NULL)
+      callback(ctx, 0, "auto", service->generation);
+    return TRUE;
+  }
+
+  profile = auth_profile_find(service->interface, FALSE);
+  if (service->switching) {
+    *reason = "switch-in-progress";
+    return FALSE;
+  }
+  if (candidate->state != NHRP_HA_CANDIDATE_READY ||
+      candidate->endpoint_count == 0 ||
+      (profile != NULL && profile->auth_required && !candidate->auth_valid)) {
+    *reason = "candidate-not-ready";
+    return FALSE;
+  }
+  leader = service_current_leader(service);
+  if (leader == NULL || !member_id_valid(leader)) {
+    *reason = "leader-unavailable";
+    return FALSE;
+  }
+  request = calloc(1, sizeof(*request));
+  if (request == NULL) {
+    *reason = "out-of-memory";
+    return FALSE;
+  }
+  request->service = service;
+  request->old_manual = service->selection_manual;
+  snprintf(request->old_member, sizeof(request->old_member), "%s",
+           service->manual_member);
+  snprintf(request->old_leader, sizeof(request->old_leader), "%s",
+           service->manual_leader);
+  request->callback = callback;
+  request->callback_ctx = ctx;
+
+  service->selection_manual = TRUE;
+  snprintf(service->manual_member, sizeof(service->manual_member), "%s",
+           member_id);
+  snprintf(service->manual_leader, sizeof(service->manual_leader), "%s",
+           leader);
+  if (!selection_save(service)) {
+    selection_restore(request);
+    free(request);
+    *reason = "selection-persist-failed";
+    return FALSE;
+  }
+  service_changed(service);
+  if (nhrp_ha_activate(service->interface->name, &service->protocol, member_id,
+                       service->generation, selection_activate_done, request,
+                       reason))
+    return TRUE;
+  selection_restore(request);
+  free(request);
+  return FALSE;
 }

@@ -908,6 +908,24 @@ PY
 	return 1
 }
 
+set_spoke_mode() {
+	local mode=$1 member=${2:-} response
+
+	for _ in {1..400}; do
+		response=$($bin_dir/opennhrpctl -a "$runtime_dir/spoke.socket" \
+			ha mode "$mode" ${member:+"$member"})
+		grep -q '^Status: ok' <<<"$response" && return 0
+		if ! grep -Eq '^Reason: (candidate-not-ready|switch-in-progress)' \
+			<<<"$response"; then
+			break
+		fi
+		sleep 0.05
+	done
+	printf 'setting Spoke HA mode %s %s failed:\n%s\n' \
+		"$mode" "$member" "$response" >&2
+	return 1
+}
+
 active_candidate_ready() {
 	local state=$1 member
 
@@ -959,8 +977,12 @@ wait_spoke_neighbor "$hub1_local_nbma"
 wait_single_spoke_owner hub1 hub-primary
 
 log "validating coordinator exit immediately fences the Hub"
-activate_spoke_member hub-backup1
+set_spoke_mode manual hub-backup1
 wait_single_spoke_owner hub2 hub-backup1
+spoke_state=$(spoke_ha_show)
+grep -q '"selection_mode":"manual"' <<<"$spoke_state"
+grep -q '"manual_member":"hub-backup1"' <<<"$spoke_state"
+grep -q '"manual_leader":"hub-primary"' <<<"$spoke_state"
 hub2_coordinator_pid=$(pgrep -P "$hub2_pid" -x opennhrp-ha | head -n 1)
 [[ -n $hub2_coordinator_pid ]]
 kill -KILL "$hub2_coordinator_pid"
@@ -987,12 +1009,22 @@ done
 [[ -n $hub2_restarted_coordinator &&
 	$hub2_restarted_coordinator != "$hub2_coordinator_pid" ]]
 wait_core_role hub2 follower
+wait_single_spoke_owner hub2 hub-backup1
 stop_pid "$spoke_pid"
 spoke_pid=
 rm -f -- "$runtime_dir/spoke.socket" "$runtime_dir/spoke.pid"
 start_core spoke "$spoke_ns" "$runtime_dir/spoke-state" \
 	"$runtime_dir/spoke.conf"
+wait_single_spoke_owner hub2 hub-backup1
+spoke_state=$(spoke_ha_show)
+grep -q '"selection_mode":"manual"' <<<"$spoke_state"
+grep -q '"manual_member":"hub-backup1"' <<<"$spoke_state"
+"$bin_dir/opennhrpctl" -a "$runtime_dir/spoke.socket" \
+	ha mode auto >"$runtime_dir/spoke-mode-auto.txt"
+grep -q '^Status: ok' "$runtime_dir/spoke-mode-auto.txt"
+activate_spoke_member hub-primary
 wait_single_spoke_owner hub1 hub-primary
+grep -q '"selection_mode":"auto"' <<<"$(spoke_ha_show)"
 
 log "validating per-Spoke latency/loss scoring and migration hysteresis"
 degrade_spoke_primary
@@ -1323,6 +1355,8 @@ for _ in {1..400}; do
 	sleep 0.1
 done
 grep -q '"health_interval_seconds":10' <<<"$hub1_cluster"
+set_spoke_mode manual hub-primary
+wait_single_spoke_owner hub1 hub-primary
 ip netns exec "$hub1_ns" iptables -I OUTPUT -p icmp --icmp-type echo-request \
 	-d 198.51.100.250 -m comment --comment opennhrp-ha-health-test -j DROP
 sleep 11
@@ -1340,6 +1374,9 @@ for _ in {1..400}; do
 		grep -q '"service_available":false' <<<"$hub1_cluster" &&
 		grep -q '"leader":"hub-backup1"' <<<"$hub2_cluster" &&
 		grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state" &&
+		grep -q '"selection_mode":"manual"' <<<"$spoke_state" &&
+		grep -q '"manual_member":"hub-primary"' <<<"$spoke_state" &&
+		grep -q '"manual_suspended":true' <<<"$spoke_state" &&
 		grep -Eq '"active_member":"hub-backup[12]"' \
 			<<<"$private_spoke_state" &&
 		grep -q '"member":"hub-backup1"[^}]*"ready":true' \
@@ -1354,6 +1391,7 @@ grep -q '"network_health":"unhealthy"' <<<"$hub1_cluster"
 grep -q '"health_interval_seconds":1' <<<"$hub1_cluster"
 grep -q '"leader":"hub-backup1"' <<<"$hub2_cluster"
 grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state"
+grep -q '"manual_suspended":true' <<<"$spoke_state"
 grep -Eq '"active_member":"hub-backup[12]"' <<<"$private_spoke_state"
 ip netns exec "$hub1_ns" iptables -D OUTPUT -p icmp --icmp-type echo-request \
 	-d 198.51.100.251 -m comment --comment opennhrp-ha-health-test -j DROP
@@ -1377,6 +1415,9 @@ for _ in {1..400}; do
 	spoke_state=$(spoke_ha_show)
 	private_spoke_state=$(private_spoke_ha_show)
 	if grep -q '"leader":"hub-primary"' <<<"$hub1_cluster" &&
+		grep -q '"active_member":"hub-primary"' <<<"$spoke_state" &&
+		grep -q '"selection_mode":"manual"' <<<"$spoke_state" &&
+		grep -q '"manual_suspended":false' <<<"$spoke_state" &&
 		active_candidate_ready "$spoke_state" &&
 		active_candidate_ready "$private_spoke_state"; then
 		break
@@ -1384,8 +1425,16 @@ for _ in {1..400}; do
 	sleep 0.1
 done
 grep -q '"leader":"hub-primary"' <<<"$hub1_cluster"
+grep -q '"active_member":"hub-primary"' <<<"$spoke_state"
+grep -q '"selection_mode":"manual"' <<<"$spoke_state"
+grep -q '"manual_suspended":false' <<<"$spoke_state"
 active_candidate_ready "$spoke_state"
 active_candidate_ready "$private_spoke_state"
+"$bin_dir/opennhrpctl" -a "$runtime_dir/spoke.socket" \
+	ha mode auto >"$runtime_dir/spoke-mode-ha-auto.txt"
+grep -q '^Status: ok' "$runtime_dir/spoke-mode-ha-auto.txt"
+activate_spoke_member hub-primary
+wait_single_spoke_owner hub1 hub-primary
 
 log "validating gre-ha down isolation, takeover, and recovered-node rejoin"
 ip netns exec "$spoke_ns" ping -I 10.20.0.2 -c 5 -W 1 198.18.20.1 \

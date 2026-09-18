@@ -85,6 +85,21 @@ int main(void) {
       "{\"member\":\"hub-backup1\",\"priority\":90,"
       "\"state\":\"ready\",\"ready\":true,"
       "\"authenticated\":true,\"score\":60,\"term\":5000000000}]}";
+  static const char manual_event[] =
+      "{\"protocol\":\"10.20.0.1\",\"generation\":7,"
+      "\"switching\":false,\"auth_mode\":\"required\","
+      "\"selection_mode\":\"manual\","
+      "\"manual_member\":\"hub-backup1\","
+      "\"manual_leader\":\"hub-primary\","
+      "\"active_member\":\"hub-primary\",\"candidates\":["
+      "{\"member\":\"hub-primary\",\"priority\":100,"
+      "\"state\":\"ready\",\"ready\":true,"
+      "\"authenticated\":true,\"score\":100,\"term\":20,"
+      "\"leader\":\"hub-primary\"},"
+      "{\"member\":\"hub-backup1\",\"priority\":90,"
+      "\"state\":\"ready\",\"ready\":true,"
+      "\"authenticated\":true,\"score\":40,\"term\":20,"
+      "\"leader\":\"hub-primary\"}]}";
   static const uint8_t snapshot[] = "entry 10.20.0.1 32 192.0.2.1 -\n";
   static const uint8_t stale_snapshot[] = "entry 10.20.0.2 32 192.0.2.2 -\n";
   struct nhrp_ha_managed_state current_manifest;
@@ -201,6 +216,52 @@ int main(void) {
   candidate = select_migration(&view, &decision, 2.0, &reason);
   assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
   assert(strcmp(reason, "stale-term") == 0);
+
+  memset(&decision, 0, sizeof(decision));
+  assert(parse_service(manual_event, &view));
+  assert(view.selection_manual);
+  assert(strcmp(view.manual_member, "hub-backup1") == 0);
+  candidate = select_migration(&view, &decision, 1.0, &reason);
+  assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
+  assert(strcmp(reason, "manual") == 0);
+  snprintf(view.active_member, sizeof(view.active_member), "%s",
+           "hub-backup1");
+  view.candidates[0].score = 100;
+  view.candidates[1].score = 1;
+  assert(select_migration(&view, &decision, 1000.0, &reason) == NULL);
+  snprintf(view.manual_member, sizeof(view.manual_member), "%s",
+           "hub-primary");
+  snprintf(view.candidates[0].leader, sizeof(view.candidates[0].leader), "%s",
+           "hub-backup1");
+  snprintf(view.candidates[1].leader, sizeof(view.candidates[1].leader), "%s",
+           "hub-backup1");
+  assert(select_migration(&view, &decision, 1001.0, &reason) == NULL);
+  snprintf(view.candidates[0].leader, sizeof(view.candidates[0].leader), "%s",
+           "hub-primary");
+  snprintf(view.candidates[1].leader, sizeof(view.candidates[1].leader), "%s",
+           "hub-primary");
+  candidate = select_migration(&view, &decision, 1002.0, &reason);
+  assert(candidate != NULL && strcmp(candidate->member, "hub-primary") == 0);
+  assert(strcmp(reason, "manual") == 0);
+  snprintf(view.active_member, sizeof(view.active_member), "%s",
+           "hub-primary");
+  view.candidates[1].term = 21;
+  snprintf(view.candidates[1].leader, sizeof(view.candidates[1].leader), "%s",
+           "hub-backup1");
+  candidate = select_migration(&view, &decision, 1003.0, &reason);
+  assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
+  assert(strcmp(reason, "stale-term") == 0);
+  snprintf(view.active_member, sizeof(view.active_member), "%s",
+           "hub-backup1");
+  view.candidates[0].term = 22;
+  view.candidates[1].term = 22;
+  snprintf(view.candidates[0].leader, sizeof(view.candidates[0].leader), "%s",
+           "hub-primary");
+  snprintf(view.candidates[1].leader, sizeof(view.candidates[1].leader), "%s",
+           "hub-primary");
+  candidate = select_migration(&view, &decision, 1004.0, &reason);
+  assert(candidate != NULL && strcmp(candidate->member, "hub-primary") == 0);
+  assert(strcmp(reason, "manual") == 0);
 
   first_service = decision_state_find("10.20.0.1");
   second_service = decision_state_find("10.30.0.1");

@@ -114,5 +114,8 @@ int nhrp_ha_activate(const char *interface_name,
                      uint32_t expect_generation,
                      nhrp_ha_activate_callback callback, void *ctx,
                      const char **reason);
+int nhrp_ha_set_selection_mode(const char *mode, const char *member_id,
+                               nhrp_ha_activate_callback callback, void *ctx,
+                               const char **reason);
 
 #endif
