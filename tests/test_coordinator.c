@@ -177,6 +177,17 @@ int main(void) {
   assert(candidate != NULL && strcmp(reason, "quality") == 0);
 
   memset(&decision, 0, sizeof(decision));
+  assert(parse_service(legacy_disabled_event, &view));
+  view.candidates[0].score = 100;
+  view.candidates[1].score = 96;
+  assert(select_migration(&view, &decision, 200.0, &reason) == NULL);
+  assert(strcmp(decision.superior_member, "hub-primary") == 0);
+  assert(select_migration(&view, &decision, 319.9, &reason) == NULL);
+  candidate = select_migration(&view, &decision, 320.0, &reason);
+  assert(candidate != NULL && strcmp(candidate->member, "hub-primary") == 0);
+  assert(strcmp(reason, "failback") == 0);
+
+  memset(&decision, 0, sizeof(decision));
   assert(parse_service(authenticated_event, &view));
   candidate = select_migration(&view, &decision, 1.0, &reason);
   assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
@@ -184,7 +195,10 @@ int main(void) {
 
   memset(&decision, 0, sizeof(decision));
   assert(parse_service(transfer_transition_event, &view));
-  candidate = select_migration(&view, &decision, 1.0, &reason);
+  assert(select_migration(&view, &decision, 1.0, &reason) == NULL);
+  snprintf(view.candidates[1].leader, sizeof(view.candidates[1].leader), "%s",
+           view.candidates[1].member);
+  candidate = select_migration(&view, &decision, 2.0, &reason);
   assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
   assert(strcmp(reason, "stale-term") == 0);
 

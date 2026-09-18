@@ -221,9 +221,9 @@ elif [[ $mode == ha-default ]]; then
 		"HA candidate hub-primary") -eq $state_lines ]]
 	sleep 65
 	[[ $(count_log "$runtime_dir/hub.log" \
-		"Received HA Registration Request") -eq 0 ]]
+		"Received HA Registration Request") -ge 1 ]]
 	[[ $(count_log "$runtime_dir/hub.log" \
-		"Sending HA Registration Reply") -eq 0 ]]
+		"Sending HA Registration Reply") -ge 1 ]]
 	[[ $(count_log "$runtime_dir/hub.log" \
 		"Received HA Resolution Probe") -eq 0 ]]
 	[[ $(count_log "$runtime_dir/spoke.log" \

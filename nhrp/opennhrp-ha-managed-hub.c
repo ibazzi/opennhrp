@@ -675,8 +675,13 @@ static int set_core_state(struct managed_runtime *runtime) {
   for (attempt = 0; attempt < 2; attempt++) {
     int local_leader =
         strcmp(runtime->state.local_member, runtime->state.leader) == 0;
+    int failback_handoff =
+        runtime->failback.transfer_pending &&
+        strcmp(runtime->state.local_member,
+               runtime->state.primary_member) != 0;
     int serviceable = runtime->service_available && !runtime->isolated &&
-                      service_quorum(runtime, monotonic_ms());
+                      (service_quorum(runtime, monotonic_ms()) ||
+                       failback_handoff);
     const char *role = serviceable ? (local_leader ? "leader" : "follower")
                                    : "standby";
     int status;
@@ -1305,14 +1310,22 @@ static int snapshot_apply(struct managed_runtime *runtime,
     unsigned int mtu;
     unsigned int holding;
     unsigned int flags;
+    unsigned int registration_id;
     unsigned long long old_term;
     unsigned long long old_index;
+    char owner_member[NHRP_HA_MANAGED_MEMBER_MAX + 1];
 
     if (++count > 4096 ||
-        sscanf(line, "entry %63s %u %63s %63s %u %u %u %llu %llu %15s %c",
+        sscanf(line,
+               "entry %63s %u %63s %63s %u %u %u %llu %llu %u %63s %15s %c",
                protocol, &prefix, nbma, nat_oa, &mtu, &holding, &flags,
-               &old_term, &old_index, origin, &extra) != 10 ||
-        prefix > 32 || mtu > UINT16_MAX || holding == 0 || holding > UINT16_MAX)
+               &old_term, &old_index, &registration_id, owner_member, origin,
+               &extra) != 12 ||
+        prefix > 32 || mtu > UINT16_MAX || holding == 0 ||
+        holding > UINT16_MAX ||
+        (strcmp(owner_member, "-") != 0 &&
+         strlen(owner_member) > NHRP_HA_MANAGED_MEMBER_MAX) ||
+        (strcmp(origin, "direct") != 0 && strcmp(origin, "replica") != 0))
       goto failed;
   }
   snprintf(command, sizeof(command),
@@ -1334,19 +1347,24 @@ static int snapshot_apply(struct managed_runtime *runtime,
     unsigned int mtu;
     unsigned int holding;
     unsigned int flags;
+    unsigned int registration_id;
     unsigned long long old_term;
     unsigned long long old_index;
+    char owner_member[NHRP_HA_MANAGED_MEMBER_MAX + 1];
 
-    if (sscanf(line, "entry %63s %u %63s %63s %u %u %u %llu %llu %15s",
+    if (sscanf(line,
+               "entry %63s %u %63s %63s %u %u %u %llu %llu %u %63s %15s",
                protocol, &prefix, nbma, nat_oa, &mtu, &holding, &flags,
-               &old_term, &old_index, origin) != 10)
+               &old_term, &old_index, &registration_id, owner_member,
+               origin) != 12)
       goto failed;
     snprintf(command, sizeof(command),
              "ha registration sync apply interface %s protocol %s/%u nbma %s "
-             "nat-oa %s mtu %u holding %u flags %u term %llu index %llu\n",
+             "nat-oa %s mtu %u holding %u flags %u registration-id %u "
+             "owner-member %s term %llu index %llu\n",
              runtime->state.interface, protocol, prefix, nbma, nat_oa, mtu,
-             holding, flags, (unsigned long long)frame->term,
-             (unsigned long long)frame->index);
+             holding, flags, registration_id, owner_member,
+             old_term, old_index);
     if (!admin_ok(runtime, command))
       goto failed;
   }
@@ -1834,7 +1852,7 @@ static int frame_process(struct managed_runtime *runtime,
             0 ||
         strcmp(frame->sender, runtime->state.leader) != 0 ||
         frame->payload_length != 64 || runtime->local_index < frame->index ||
-        strcmp((const char *)frame->payload, runtime->local_digest) != 0)
+        memcmp(frame->payload, runtime->local_digest, 64) != 0)
       return 0;
     if (!become_leader(runtime))
       return 0;
@@ -2412,7 +2430,7 @@ static int failback_tick(struct managed_runtime *runtime, uint64_t now) {
                 "backoff level %u until %llu\n",
                 runtime->failback.backoff_level,
                 (unsigned long long)runtime->failback.not_before_ms);
-    return 1;
+    return set_core_state(runtime);
   }
   synchronized = primary != NULL &&
                  primary->match_index >= runtime->local_index &&
@@ -2423,6 +2441,7 @@ static int failback_tick(struct managed_runtime *runtime, uint64_t now) {
                                        primary_healthy, synchronized))
     return 1;
   request = runtime->failback.request;
+  nhrp_ha_failback_transfer_sent(&runtime->failback, now);
   if (!adopt_leader(runtime, runtime->state.term + 1,
                     runtime->state.local_member))
     return 0;
@@ -2430,7 +2449,6 @@ static int failback_tick(struct managed_runtime *runtime, uint64_t now) {
                   (const uint8_t *)runtime->local_digest, 64,
                   runtime->local_index, runtime->local_index))
     return 0;
-  nhrp_ha_failback_transfer_sent(&runtime->failback, now);
   managed_log(
       "opennhrp-ha: %s safe failback transfer to Primary %s at index "
       "%llu\n",

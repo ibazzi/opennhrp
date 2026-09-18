@@ -79,6 +79,7 @@
 #define NHRP_PEER_FLAG_HA_PROJECTED	0x800	/* Managed Hub HA projection */
 #define NHRP_PEER_FLAG_HA_BOOTSTRAP 0x1000 /* Dormant automatic HA anchor */
 #define NHRP_PEER_FLAG_HA_CAPABLE 0x2000 /* Validated HA registration */
+#define NHRP_PEER_FLAG_HA_DIRECT 0x4000 /* Managed Hub direct owner */
 
 #define NHRP_PEER_FIND_ROUTE		0x01
 #define NHRP_PEER_FIND_EXACT		0x02
@@ -125,6 +126,7 @@ struct nhrp_peer {
 	struct nhrp_address protocol_address;
 	unsigned int holding_time;
 	uint32_t ha_discovery_generation;
+	uint32_t ha_registration_id;
 
 	char *nbma_hostname;
 	/* NHRP_PEER_TYPE_ROUTE: protocol addr., others: NBMA addr. */

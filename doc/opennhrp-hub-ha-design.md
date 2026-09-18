@@ -98,8 +98,9 @@ interface gre-ha
 ```
 
 Registration Request 携带非强制 HA 探测。普通 Hub 忽略它并保持传统行为；托管
-Hub 返回 Hub List 后，Spoke 建立暖注册，在第一个 HA neighbor 成功提交后休眠
-传统 map。普通非 HA 配置不受影响。
+Hub 返回 Hub List 后，Spoke 只在当前 active Hub 保持注册，其他 Hub 只作为迁移
+候选。active Hub 故障时，Spoke 将注册迁移到目标 Hub，再提交新的 HA neighbor。
+普通非 HA 配置不受影响。
 
 需要认证时，在 Hub 导出 keyring 并通过可信通道复制：
 
@@ -131,8 +132,8 @@ Leader 会在认证成功后把 Hub TCP 实际源地址作为 observed endpoint�
 配置 reload 会原地替换 endpoint 和健康目标，不需要重启 `opennhrp`。恢复节点
 先保持隔离，连接 active 成员并学习当前 term/Leader 后才重新投影注册。
 
-每个 Spoke 独立探测 Hub List 中的所有 Hub，并按当前选中 endpoint 的链路质量
-评分。丢包使用 `α=1/8` 的 EWMA，分数固定为：
+每个 Spoke 独立探测当前 active Hub；切换期间再探测目标 Hub，并按当前选中
+endpoint 的链路质量评分。丢包使用 `α=1/8` 的 EWMA，分数固定为：
 
 ```text
 60 * max(0, 1 - loss_pct / 30)

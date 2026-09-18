@@ -66,6 +66,9 @@ struct nhrp_ha_candidate {
   int bootstrap_anchor;
   int registered;
   int registration_pending;
+  uint32_t registration_request_id;
+  struct nhrp_address registered_endpoint;
+  int registered_endpoint_valid;
   uint32_t registration_generation;
   uint32_t endpoint_generation;
   enum nhrp_ha_candidate_state state;
@@ -89,6 +92,9 @@ struct nhrp_ha_candidate {
   uint8_t auth_key_id[NHRP_HA_AUTH_KEY_ID_SIZE];
   uint64_t auth_term;
   uint64_t auth_commit_index;
+  uint64_t owner_term;
+  uint64_t owner_index;
+  int cleanup_owner;
   char auth_leader[NHRP_HA_AUTH_LEADER_MAX + 1];
 };
 
@@ -96,6 +102,8 @@ struct nhrp_ha_registration_request {
   struct nhrp_ha_candidate *candidate;
   uint32_t endpoint_generation;
   uint32_t registration_generation;
+  uint32_t request_id;
+  struct nhrp_address endpoint;
   struct nhrp_address bootstrap_local_nbma;
   int has_bootstrap_local_nbma;
 };
@@ -126,7 +134,13 @@ struct nhrp_ha_service {
   char bootstrap_member[NHRP_HA_MEMBER_ID_MAX + 1];
   uint64_t event_sequence;
   ev_tstamp last_quality_event;
+  uint64_t owner_term;
+  uint64_t owner_index;
+  uint64_t switch_owner_term;
+  uint64_t switch_owner_index;
+  int switch_owner_set;
   int switching;
+  int switch_committing;
   int configured;
   int automatic;
   nhrp_ha_activate_callback switch_callback;
@@ -237,6 +251,17 @@ static void probe_timer_cb(struct ev_timer *timer, int revents);
 static void reconcile_timer_cb(struct ev_timer *timer, int revents);
 static void reconcile_schedule(struct nhrp_ha_service *service,
                                ev_tstamp delay);
+static int candidate_begin_activation(struct nhrp_ha_service *service,
+                                      struct nhrp_ha_candidate *candidate);
+static void activate_neighbor_done(void *ctx, int status);
+static int candidate_release_owner_token(
+    struct nhrp_ha_service *service, struct nhrp_ha_candidate *old,
+    uint32_t registration_id, const struct nhrp_address *endpoint,
+    int exact_token);
+static int candidate_release_owner(struct nhrp_ha_service *service,
+                                   struct nhrp_ha_candidate *old,
+                                   int exact_token);
+static void candidate_retire_owner(struct nhrp_ha_candidate *candidate);
 static int candidate_authenticate(struct nhrp_ha_candidate *candidate,
                                   struct nhrp_packet *reply,
                                   const struct nhrp_buffer *ha);
@@ -481,10 +506,70 @@ static int ha_member_parse(const struct nhrp_buffer *buffer, char *member_id,
   return member_id_valid(member_id);
 }
 
+static struct nhrp_buffer *ha_owner_release_payload(
+    const char *member_id, uint8_t prefix_length, uint32_t registration_id,
+    uint64_t term, uint64_t index) {
+  struct nhrp_buffer *buffer;
+  uint16_t member_length = strlen(member_id);
+  uint16_t wire_member_length = htons(member_length);
+  uint32_t wire_registration_id = htonl(registration_id);
+  uint64_t wire_term = htobe64(term);
+  uint64_t wire_index = htobe64(index);
+
+  if (!member_id_valid(member_id) || member_length > NHRP_HA_MEMBER_ID_MAX)
+    return NULL;
+  buffer = nhrp_buffer_alloc(26 + member_length);
+  if (buffer == NULL)
+    return NULL;
+  buffer->data[0] = NHRP_HA_WIRE_VERSION;
+  buffer->data[1] = NHRP_HA_OWNER_RELEASE;
+  buffer->data[2] = prefix_length;
+  buffer->data[3] = 0;
+  memcpy(&buffer->data[4], &wire_registration_id, sizeof(wire_registration_id));
+  memcpy(&buffer->data[8], &wire_term, sizeof(wire_term));
+  memcpy(&buffer->data[16], &wire_index, sizeof(wire_index));
+  memcpy(&buffer->data[24], &wire_member_length, sizeof(wire_member_length));
+  memcpy(&buffer->data[26], member_id, member_length);
+  return buffer;
+}
+
+static int ha_owner_release_parse(const struct nhrp_buffer *buffer,
+                                  char *member_id, size_t member_id_size,
+                                  uint8_t *prefix_length,
+                                  uint32_t *registration_id, uint64_t *term,
+                                  uint64_t *index) {
+  uint16_t member_length;
+  uint32_t wire_registration_id;
+  uint64_t wire64;
+
+  if (buffer == NULL || buffer->length < 26 ||
+      buffer->data[0] != NHRP_HA_WIRE_VERSION ||
+      buffer->data[1] != NHRP_HA_OWNER_RELEASE || buffer->data[2] > 32)
+    return FALSE;
+  memcpy(&member_length, &buffer->data[24], sizeof(member_length));
+  member_length = ntohs(member_length);
+  if (member_length == 0 || member_length >= member_id_size ||
+      buffer->length != 26 + member_length)
+    return FALSE;
+  memcpy(&wire_registration_id, &buffer->data[4], sizeof(wire_registration_id));
+  memcpy(&wire64, &buffer->data[8], sizeof(wire64));
+  *term = be64toh(wire64);
+  memcpy(&wire64, &buffer->data[16], sizeof(wire64));
+  *index = be64toh(wire64);
+  *registration_id = ntohl(wire_registration_id);
+  if (*registration_id == 0)
+    return FALSE;
+  *prefix_length = buffer->data[2];
+  memcpy(member_id, &buffer->data[26], member_length);
+  member_id[member_length] = 0;
+  return member_id_valid(member_id);
+}
+
 static struct nhrp_buffer *
 ha_probe_payload(uint8_t message_type, const char *member_id, uint32_t sequence,
                  uint32_t generation, uint64_t nonce, uint64_t sent_nanoseconds,
-                 int serviceable) {
+                 uint8_t prefix_length, int serviceable, int takeover,
+                 uint64_t takeover_term, uint64_t takeover_index) {
   struct nhrp_buffer *buffer;
   uint16_t member_length = strlen(member_id);
   uint16_t wire_member_length = htons(member_length);
@@ -492,8 +577,10 @@ ha_probe_payload(uint8_t message_type, const char *member_id, uint32_t sequence,
   uint32_t wire_generation = htonl(generation);
   uint64_t wire_nonce = htobe64(nonce);
   uint64_t wire_sent = htobe64(sent_nanoseconds);
+  uint64_t wire_term = htobe64(takeover_term);
+  uint64_t wire_index = htobe64(takeover_index);
 
-  buffer = nhrp_buffer_alloc(29 + member_length);
+  buffer = nhrp_buffer_alloc(47 + member_length);
   if (buffer == NULL)
     return NULL;
   buffer->data[0] = NHRP_HA_WIRE_VERSION;
@@ -504,7 +591,11 @@ ha_probe_payload(uint8_t message_type, const char *member_id, uint32_t sequence,
   memcpy(&buffer->data[12], &wire_nonce, sizeof(wire_nonce));
   memcpy(&buffer->data[20], &wire_sent, sizeof(wire_sent));
   buffer->data[28] = serviceable ? 1 : 0;
-  memcpy(&buffer->data[29], member_id, member_length);
+  buffer->data[29] = prefix_length;
+  buffer->data[30] = takeover ? 1 : 0;
+  memcpy(&buffer->data[31], &wire_term, sizeof(wire_term));
+  memcpy(&buffer->data[39], &wire_index, sizeof(wire_index));
+  memcpy(&buffer->data[47], member_id, member_length);
   return buffer;
 }
 
@@ -512,19 +603,22 @@ static int ha_probe_parse(const struct nhrp_buffer *buffer,
                           uint8_t expected_type, char *member_id,
                           size_t member_id_size, uint32_t *sequence,
                           uint32_t *generation, uint64_t *nonce,
-                          uint64_t *sent_nanoseconds, int *serviceable) {
+                          uint64_t *sent_nanoseconds, uint8_t *prefix_length,
+                          int *serviceable, int *takeover,
+                          uint64_t *takeover_term, uint64_t *takeover_index) {
   uint16_t member_length;
   uint32_t wire32;
   uint64_t wire64;
 
-  if (buffer == NULL || buffer->length < 29 ||
+  if (buffer == NULL || buffer->length < 47 ||
       buffer->data[0] != NHRP_HA_WIRE_VERSION ||
-      buffer->data[1] != expected_type || buffer->data[28] > 1)
+      buffer->data[1] != expected_type || buffer->data[28] > 1 ||
+      buffer->data[29] > 32 || buffer->data[30] > 1)
     return FALSE;
   memcpy(&member_length, &buffer->data[2], sizeof(member_length));
   member_length = ntohs(member_length);
   if (member_length == 0 || member_length >= member_id_size ||
-      buffer->length != 29 + member_length)
+      buffer->length != 47 + member_length)
     return FALSE;
   memcpy(&wire32, &buffer->data[4], sizeof(wire32));
   *sequence = ntohl(wire32);
@@ -535,7 +629,13 @@ static int ha_probe_parse(const struct nhrp_buffer *buffer,
   memcpy(&wire64, &buffer->data[20], sizeof(wire64));
   *sent_nanoseconds = be64toh(wire64);
   *serviceable = buffer->data[28] != 0;
-  memcpy(member_id, &buffer->data[29], member_length);
+  *prefix_length = buffer->data[29];
+  *takeover = buffer->data[30] != 0;
+  memcpy(&wire64, &buffer->data[31], sizeof(wire64));
+  *takeover_term = be64toh(wire64);
+  memcpy(&wire64, &buffer->data[39], sizeof(wire64));
+  *takeover_index = be64toh(wire64);
+  memcpy(member_id, &buffer->data[47], member_length);
   member_id[member_length] = 0;
   return member_id_valid(member_id);
 }
@@ -562,6 +662,43 @@ static struct nhrp_ha_candidate *candidate_find(struct nhrp_ha_service *service,
       return candidate;
   }
   return NULL;
+}
+
+static struct nhrp_ha_candidate *candidate_best(
+    struct nhrp_ha_service *service, const struct nhrp_ha_candidate *exclude) {
+  struct nhrp_ha_candidate *best = NULL;
+  struct nhrp_ha_candidate *candidate;
+
+  list_for_each_entry(candidate, &service->candidates, list_entry) {
+    if (candidate == exclude || !candidate->configured ||
+        candidate->state == NHRP_HA_CANDIDATE_DISABLED ||
+        candidate->endpoint_count == 0)
+      continue;
+    if (best == NULL || candidate->priority > best->priority ||
+        (candidate->priority == best->priority &&
+         strcmp(candidate->member_id, best->member_id) < 0))
+      best = candidate;
+  }
+  return best;
+}
+
+static struct nhrp_ha_candidate *candidate_best_ready(
+    struct nhrp_ha_service *service, const struct nhrp_ha_candidate *exclude) {
+  struct nhrp_ha_candidate *best = NULL;
+  struct nhrp_ha_candidate *candidate;
+
+  list_for_each_entry(candidate, &service->candidates, list_entry) {
+    if (candidate == exclude || !candidate->configured ||
+        candidate->state != NHRP_HA_CANDIDATE_READY ||
+        candidate->endpoint_count == 0 ||
+        !candidate->endpoint_ready[candidate->endpoint_index])
+      continue;
+    if (best == NULL || candidate->priority > best->priority ||
+        (candidate->priority == best->priority &&
+         strcmp(candidate->member_id, best->member_id) < 0))
+      best = candidate;
+  }
+  return best;
 }
 
 static struct nhrp_ha_candidate *
@@ -621,6 +758,7 @@ static void
 candidate_select_available_endpoint(struct nhrp_ha_candidate *candidate) {
   size_t i;
 
+  candidate->probe_pending = FALSE;
   for (i = 0; i < candidate->endpoint_count; i++) {
     if (i == candidate->endpoint_index || !candidate->endpoint_ready[i])
       continue;
@@ -734,13 +872,149 @@ static void packet_add_standard_extensions(struct nhrp_packet *packet) {
                         NHRP_PAYLOAD_TYPE_CIE_LIST);
   nhrp_packet_extension(
       packet, NHRP_EXTENSION_RESPONDER_ADDRESS | NHRP_EXTENSION_FLAG_COMPULSORY,
-      NHRP_PAYLOAD_TYPE_CIE_LIST);
+                        NHRP_PAYLOAD_TYPE_CIE_LIST);
+}
+
+static int candidate_release_owner_token(
+    struct nhrp_ha_service *service, struct nhrp_ha_candidate *old,
+    uint32_t registration_id, const struct nhrp_address *endpoint,
+    int exact_token) {
+  struct nhrp_packet *packet = NULL;
+  struct nhrp_peer *direct_peer = NULL;
+  struct nhrp_payload *payload;
+  struct nhrp_cie *cie;
+  struct nhrp_buffer *release;
+  char protocol[64];
+  int sent = FALSE;
+
+  if (old == NULL || registration_id == 0)
+    return FALSE;
+  if (endpoint == NULL)
+    endpoint = &old->nbma;
+  direct_peer = candidate_direct_peer(old, endpoint);
+  packet = nhrp_packet_alloc();
+  if (direct_peer == NULL || packet == NULL)
+    goto done;
+
+  packet->hdr = (struct nhrp_packet_header){
+      .afnum = direct_peer->afnum,
+      .protocol_type = direct_peer->protocol_type,
+      .version = NHRP_VERSION_RFC2332,
+      .type = NHRP_PACKET_PURGE_REQUEST,
+      .hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT,
+      .flags = NHRP_FLAG_PURGE_NO_REPLY,
+  };
+  packet->src_nbma_address = direct_peer->my_nbma_address;
+  packet->src_protocol_address = service->interface->protocol_address;
+  packet->dst_protocol_address = service->protocol;
+  packet->dst_iface = service->interface;
+  packet->dst_peer = direct_peer;
+  payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
+  cie = nhrp_cie_alloc();
+  if (payload == NULL) {
+    nhrp_cie_free(cie);
+    goto done;
+  }
+  if (cie == NULL)
+    goto done;
+  cie->hdr.code = NHRP_CODE_SUCCESS;
+  cie->hdr.prefix_length = service->prefix_length;
+  cie->protocol_address = service->protocol;
+  nhrp_payload_add_cie(payload, cie);
+  packet_add_standard_extensions(packet);
+  release = ha_owner_release_payload(
+      old->member_id, service->prefix_length, registration_id,
+      exact_token ? 0 : service->owner_term,
+      exact_token ? 0 : service->owner_index);
+  payload = nhrp_packet_extension(packet, NHRP_EXTENSION_HA,
+                                  NHRP_PAYLOAD_TYPE_RAW);
+  if (release == NULL || payload == NULL) {
+    nhrp_buffer_free(release);
+    goto done;
+  }
+  nhrp_payload_set_raw(payload, release);
+  nhrp_info("HA owner release for %s from %s to %s",
+            old->member_id,
+            nhrp_address_format(&service->protocol, sizeof(protocol), protocol),
+            service->interface->name);
+  sent = nhrp_packet_send(packet);
+
+done:
+  if (packet != NULL)
+    nhrp_packet_put(packet);
+  else if (direct_peer != NULL)
+    nhrp_peer_put(direct_peer);
+  return sent;
+}
+
+static int candidate_release_owner(struct nhrp_ha_service *service,
+                                   struct nhrp_ha_candidate *old,
+                                   int exact_token) {
+  const struct nhrp_address *endpoint =
+      old != NULL && old->registered_endpoint_valid
+          ? &old->registered_endpoint
+          : NULL;
+
+  return candidate_release_owner_token(
+      service, old, old != NULL ? old->registration_request_id : 0, endpoint,
+      exact_token);
 }
 
 static void registration_schedule(struct nhrp_ha_candidate *candidate,
                                   ev_tstamp delay);
 static void probe_schedule(struct nhrp_ha_candidate *candidate,
                            ev_tstamp delay);
+
+static void candidate_schedule_failover_target(
+    struct nhrp_ha_service *service) {
+  struct nhrp_ha_candidate *target =
+      candidate_best_ready(service, service->active);
+
+  if (target == NULL || service->switching)
+    return;
+  service->switching = TRUE;
+  service->switch_owner_set = FALSE;
+  service->switch_target = target;
+  service->switch_callback = NULL;
+  service->switch_callback_ctx = NULL;
+  service_changed(service);
+  if (target->registered && target->state == NHRP_HA_CANDIDATE_READY) {
+    if (!candidate_begin_activation(service, target)) {
+      service->switching = FALSE;
+      service->switch_target = NULL;
+      service->switch_owner_set = FALSE;
+      service_changed(service);
+    }
+    return;
+  }
+  if (!target->registered && !target->registration_pending)
+    registration_schedule(target, 0.01);
+}
+
+static void candidate_mark_offline(struct nhrp_ha_candidate *candidate) {
+  candidate->registered = FALSE;
+  candidate->last_registration_reply = 0.0;
+  candidate->registration_generation++;
+  candidate->endpoint_generation++;
+  candidate->registration_pending = FALSE;
+  candidate->cleanup_owner = FALSE;
+  candidate->probe_pending = FALSE;
+  ev_timer_stop(&candidate->registration_timer);
+  candidate_set_state(candidate, NHRP_HA_CANDIDATE_OFFLINE);
+  if (nhrp_running && candidate->configured && candidate->endpoint_count != 0)
+    probe_schedule(candidate, HA_STANDBY_PROBE_INTERVAL);
+}
+
+static void candidate_retire_owner(struct nhrp_ha_candidate *candidate) {
+  candidate->registered = FALSE;
+  candidate->last_registration_reply = 0.0;
+  candidate->registration_generation++;
+  candidate->registration_pending = FALSE;
+  candidate->cleanup_owner = FALSE;
+  ev_timer_stop(&candidate->registration_timer);
+  if (candidate->state == NHRP_HA_CANDIDATE_REGISTERING)
+    candidate_set_state(candidate, NHRP_HA_CANDIDATE_INIT);
+}
 
 static struct nhrp_buffer *
 hub_list_payload(struct nhrp_ha_advertisement *advertisement,
@@ -903,8 +1177,8 @@ static int hub_list_apply(struct nhrp_ha_candidate *source,
     candidate->configured = TRUE;
     if (candidate->state == NHRP_HA_CANDIDATE_DISABLED)
       candidate->state = NHRP_HA_CANDIDATE_INIT;
-    if (nhrp_running && candidate != source)
-      registration_schedule(candidate, 0.01);
+    if (nhrp_running)
+      probe_schedule(candidate, 0.01);
   }
 
   list_for_each_entry(candidate, &service->candidates, list_entry) {
@@ -940,9 +1214,13 @@ static void registration_reply(void *ctx, struct nhrp_packet *reply) {
   int has_bootstrap_local_nbma = request->has_bootstrap_local_nbma;
   int has_hub_list = FALSE;
   int code = -1;
+  uint32_t request_id = request->request_id;
+  struct nhrp_address registration_endpoint = request->endpoint;
 
   if (request->endpoint_generation != candidate->endpoint_generation ||
       request->registration_generation != candidate->registration_generation) {
+    candidate_release_owner_token(candidate->service, candidate, request_id,
+                                  &registration_endpoint, TRUE);
     free(request);
     return;
   }
@@ -1029,6 +1307,11 @@ static void registration_reply(void *ctx, struct nhrp_packet *reply) {
   }
 
   candidate->registered = TRUE;
+  if (request_id != 0) {
+    candidate->registration_request_id = request_id;
+    candidate->registered_endpoint = registration_endpoint;
+    candidate->registered_endpoint_valid = TRUE;
+  }
   if (!candidate->preferred_endpoint_valid) {
     candidate->preferred_endpoint = candidate->nbma;
     candidate->preferred_endpoint_valid = TRUE;
@@ -1036,6 +1319,17 @@ static void registration_reply(void *ctx, struct nhrp_packet *reply) {
   candidate->endpoint_ready[candidate->endpoint_index] = TRUE;
   candidate->endpoint_misses[candidate->endpoint_index] = 0;
   candidate->last_registration_reply = ev_now();
+  if (candidate->service->active != NULL &&
+      candidate != candidate->service->active &&
+      (!candidate->service->switching ||
+       candidate->service->switch_target != candidate)) {
+    candidate->cleanup_owner = FALSE;
+    candidate_release_owner(candidate->service, candidate, TRUE);
+    candidate_retire_owner(candidate);
+    candidate_set_state(candidate, NHRP_HA_CANDIDATE_READY);
+    probe_schedule(candidate, 0.01);
+    return;
+  }
   if (candidate->state != NHRP_HA_CANDIDATE_READY)
     candidate_set_state(candidate, NHRP_HA_CANDIDATE_REGISTERED);
   registration_schedule(candidate,
@@ -1046,10 +1340,17 @@ static void registration_reply(void *ctx, struct nhrp_packet *reply) {
   return;
 
 failed:
+  if (candidate == candidate->service->active &&
+      candidate->state == NHRP_HA_CANDIDATE_OFFLINE) {
+    candidate_mark_offline(candidate);
+    candidate_schedule_failover_target(candidate->service);
+    return;
+  }
   if (candidate->last_registration_reply == 0.0 ||
       ev_now() - candidate->last_registration_reply > 60.0) {
     candidate->registered = FALSE;
     candidate_select_available_endpoint(candidate);
+    probe_schedule(candidate, 0.01);
     if (candidate->state != NHRP_HA_CANDIDATE_OFFLINE)
       candidate_set_state(candidate, NHRP_HA_CANDIDATE_REGISTERING);
   }
@@ -1191,6 +1492,8 @@ int nhrp_ha_handle_registration_discovery(struct nhrp_peer *peer,
   request->candidate = candidate;
   request->endpoint_generation = candidate->endpoint_generation;
   request->registration_generation = candidate->registration_generation;
+  request->endpoint = candidate->nbma;
+  request->request_id = ntohl(reply->hdr.u.request_id);
   if (peer->local_connect_address.type != PF_UNSPEC) {
     request->bootstrap_local_nbma = peer->local_connect_address;
     request->has_bootstrap_local_nbma = TRUE;
@@ -1209,12 +1512,29 @@ static void registration_timer_cb(struct ev_timer *timer, int revents) {
   struct nhrp_cie *cie;
   struct nhrp_buffer *member;
   struct nhrp_ha_registration_request *request = NULL;
+  size_t endpoint;
 
   if (!candidate->configured || candidate->registration_pending ||
       service->interface->index == 0 ||
       service->interface->protocol_address.type == PF_UNSPEC) {
     registration_schedule(candidate, HA_REGISTRATION_RETRY);
     return;
+  }
+  if (service->active != NULL && candidate != service->active &&
+      service->active->state != NHRP_HA_CANDIDATE_OFFLINE &&
+      !service->switching && !candidate->cleanup_owner) {
+    ev_timer_stop(&candidate->registration_timer);
+    return;
+  }
+  if (candidate->endpoint_index < candidate->endpoint_count &&
+      !candidate->endpoint_ready[candidate->endpoint_index]) {
+    for (endpoint = 0; endpoint < candidate->endpoint_count; endpoint++) {
+      if (endpoint != candidate->endpoint_index &&
+          candidate->endpoint_ready[endpoint]) {
+        candidate_select_available_endpoint(candidate);
+        break;
+      }
+    }
   }
 
   direct_peer = candidate_direct_peer(candidate, &candidate->nbma);
@@ -1290,11 +1610,15 @@ static void registration_timer_cb(struct ev_timer *timer, int revents) {
   request->candidate = candidate;
   request->endpoint_generation = candidate->endpoint_generation;
   request->registration_generation = candidate->registration_generation;
+  request->endpoint = candidate->nbma;
 
   candidate->registration_pending = TRUE;
-  if (!candidate->registered && candidate->state != NHRP_HA_CANDIDATE_OFFLINE)
+  if (!candidate->registered && candidate->state != NHRP_HA_CANDIDATE_OFFLINE &&
+      !(service->switching && service->switch_target == candidate &&
+        candidate->state == NHRP_HA_CANDIDATE_READY))
     candidate_set_state(candidate, NHRP_HA_CANDIDATE_REGISTERING);
   nhrp_packet_send_request_timed(packet, registration_reply, request, 1.0, 1);
+  request->request_id = ntohl(packet->hdr.u.request_id);
   nhrp_packet_put(packet);
   return;
 
@@ -1307,6 +1631,8 @@ failed:
 static void registration_schedule(struct nhrp_ha_candidate *candidate,
                                   ev_tstamp delay) {
   ev_timer_stop(&candidate->registration_timer);
+  if (!nhrp_running)
+    return;
   ev_timer_set(&candidate->registration_timer, delay, 0.0);
   ev_timer_start(&candidate->registration_timer);
 }
@@ -1348,25 +1674,69 @@ static void candidate_record_loss(struct nhrp_ha_candidate *candidate,
 }
 
 static void candidate_probe_missed(struct nhrp_ha_candidate *candidate) {
-  double deadline;
+  struct nhrp_ha_service *service = candidate->service;
+  ev_tstamp deadline;
+  size_t failed_endpoint;
+  size_t endpoint;
+  int alternate_ready = FALSE;
+  int endpoint_retryable = FALSE;
 
   candidate->probe_pending = FALSE;
   candidate->consecutive_misses++;
   if (candidate->consecutive_misses == 1)
     candidate_set_state(candidate, NHRP_HA_CANDIDATE_SUSPECT);
+  if (candidate->consecutive_misses < 3)
+    return;
 
   deadline = candidate->rto > 0.0 ? candidate->rto * 3.0
                                   : candidate_min_rto(candidate) * 3.0;
-  if (candidate->consecutive_misses >= 3 &&
-      (candidate->last_probe_reply == 0.0 ||
-       ev_now() - candidate->last_probe_reply >= deadline)) {
-    candidate->registered = FALSE;
-    candidate->last_registration_reply = 0.0;
-    candidate->endpoint_ready[candidate->endpoint_index] = FALSE;
+  if (candidate->last_probe_reply != 0.0 &&
+      ev_now() - candidate->last_probe_reply < deadline)
+    return;
+
+  failed_endpoint = candidate->endpoint_index;
+  if (candidate->endpoint_misses[failed_endpoint] < UINT8_MAX)
+    candidate->endpoint_misses[failed_endpoint]++;
+  candidate->endpoint_ready[failed_endpoint] = FALSE;
+  if (candidate != service->active) {
+    for (endpoint = 0; endpoint < candidate->endpoint_count; endpoint++) {
+      if (candidate->endpoint_misses[endpoint] < 3) {
+        endpoint_retryable = TRUE;
+        break;
+      }
+    }
+    candidate_mark_offline(candidate);
     candidate_select_available_endpoint(candidate);
-    candidate_set_state(candidate, NHRP_HA_CANDIDATE_OFFLINE);
-    registration_schedule(candidate, 0.01);
+    if (service->switching && service->switch_target == candidate) {
+      nhrp_ha_activate_callback callback = service->switch_callback;
+      void *callback_ctx = service->switch_callback_ctx;
+
+      if (!endpoint_retryable) {
+        service->switch_callback = NULL;
+        service->switch_callback_ctx = NULL;
+        service->switching = FALSE;
+        service->switch_target = NULL;
+        service->switch_owner_set = FALSE;
+        service_changed(service);
+        if (callback != NULL)
+          callback(callback_ctx, -EHOSTDOWN, "target-unavailable",
+                   service->generation);
+      }
+    }
+    return;
   }
+  for (endpoint = 0; endpoint < candidate->endpoint_count; endpoint++) {
+    if (endpoint != failed_endpoint && candidate->endpoint_ready[endpoint]) {
+      alternate_ready = TRUE;
+      break;
+    }
+  }
+  candidate_mark_offline(candidate);
+  candidate_select_available_endpoint(candidate);
+  if (alternate_ready)
+    registration_schedule(candidate, 0.01);
+  else
+    candidate_schedule_failover_target(service);
 }
 
 static void probe_reply(void *ctx, struct nhrp_packet *reply) {
@@ -1380,7 +1750,12 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   uint32_t generation;
   uint64_t nonce;
   uint64_t sent_nanoseconds;
+  uint8_t prefix_length;
   int serviceable;
+  int takeover;
+  int prefer_takeover;
+  uint64_t takeover_term;
+  uint64_t takeover_index;
   uint64_t previous_commit;
 
   if (request->endpoint_generation != candidate->endpoint_generation ||
@@ -1402,8 +1777,11 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   if (payload == NULL ||
       !ha_probe_parse(payload->u.raw, NHRP_HA_PROBE_REPLY, member_id,
                       sizeof(member_id), &sequence, &generation, &nonce,
-                      &sent_nanoseconds, &serviceable) ||
+                      &sent_nanoseconds, &prefix_length, &serviceable, &takeover,
+                      &takeover_term, &takeover_index) ||
       strcmp(member_id, candidate->member_id) != 0 ||
+      prefix_length !=
+          candidate->service->interface->protocol_address.addr_len * 8 ||
       sequence != request->sequence || generation != request->generation ||
       nonce != request->nonce)
     goto missed;
@@ -1411,6 +1789,21 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   previous_commit = candidate->auth_commit_index;
   if (!candidate_authenticate(candidate, reply, ha))
     goto missed;
+  candidate->owner_term = takeover_term;
+  candidate->owner_index = takeover_index;
+  prefer_takeover = request->selected_endpoint && takeover &&
+                    candidate->auth_valid &&
+                    strcmp(candidate->auth_leader, candidate->member_id) == 0 &&
+                    !candidate->service->switching && active != NULL &&
+                    active != candidate &&
+                    (takeover_term > candidate->service->owner_term ||
+                     (takeover_term == candidate->service->owner_term &&
+                      takeover_index > candidate->service->owner_index));
+  if (request->selected_endpoint)
+    candidate->cleanup_owner =
+        candidate != active && takeover && !prefer_takeover &&
+        (!candidate->service->switching ||
+         candidate->service->switch_target != candidate);
   if (candidate->auth_commit_index > previous_commit && candidate == active &&
       !active->registration_pending)
     registration_schedule(active, 0.01);
@@ -1419,8 +1812,28 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   candidate->endpoint_ready[request->endpoint_index] = TRUE;
   candidate->endpoint_misses[request->endpoint_index] = 0;
   candidate->last_probe_reply = ev_now();
+  if (prefer_takeover) {
+    candidate->service->switching = TRUE;
+    candidate->service->switch_owner_term = takeover_term;
+    candidate->service->switch_owner_index = takeover_index;
+    candidate->service->switch_owner_set = TRUE;
+    candidate->service->switch_target = candidate;
+    candidate->service->switch_callback = NULL;
+    candidate->service->switch_callback_ctx = NULL;
+    if (!candidate->registered && !candidate->registration_pending)
+      registration_schedule(candidate, 0.01);
+  }
   if (!request->selected_endpoint) {
-    if (!candidate->registration_pending &&
+    if (candidate != candidate->service->active && serviceable &&
+        !candidate->endpoint_ready[candidate->endpoint_index] &&
+        !candidate->registration_pending) {
+      candidate->endpoint_index = request->endpoint_index;
+      candidate->nbma = candidate->endpoints[request->endpoint_index];
+      candidate->endpoint_generation++;
+      candidate_reset_quality(candidate);
+      request->selected_endpoint = TRUE;
+      service_changed(candidate->service);
+    } else if (!candidate->registration_pending &&
         candidate->preferred_endpoint_valid &&
         nhrp_address_cmp(&candidate->endpoints[request->endpoint_index],
                          &candidate->preferred_endpoint) == 0) {
@@ -1440,18 +1853,84 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   }
   candidate_record_rtt(candidate, ev_now() - request->sent);
   candidate_record_loss(candidate, FALSE);
+  if (candidate == candidate->service->active && !serviceable) {
+    candidate_mark_offline(candidate);
+    candidate_schedule_failover_target(candidate->service);
+    free(request);
+    return;
+  }
   candidate->consecutive_misses = 0;
   free(request);
-  if (candidate->registered && serviceable)
+  if (candidate != active && !candidate->registered &&
+      candidate->state == NHRP_HA_CANDIDATE_READY &&
+      candidate->registration_request_id != 0) {
+    if (candidate_release_owner(candidate->service, candidate, FALSE)) {
+      candidate->registration_request_id = 0;
+      candidate->registered_endpoint_valid = FALSE;
+    }
+  }
+  if (serviceable &&
+      candidate == candidate->service->active && !candidate->registered) {
+    candidate_set_state(candidate, NHRP_HA_CANDIDATE_REGISTERING);
+    if (!candidate->registration_pending)
+      registration_schedule(candidate, 0.01);
+  } else if (serviceable)
     candidate_set_state(candidate, NHRP_HA_CANDIDATE_READY);
   else if (candidate->registered)
     candidate_set_state(candidate, NHRP_HA_CANDIDATE_REGISTERED);
+  else
+    candidate_set_state(candidate, NHRP_HA_CANDIDATE_SUSPECT);
+  if (candidate == candidate->service->active &&
+      candidate->state == NHRP_HA_CANDIDATE_READY &&
+      candidate->service->switching &&
+      candidate->service->switch_callback == NULL &&
+      !candidate->service->switch_committing &&
+      !candidate->service->switch_owner_set) {
+    candidate->service->switching = FALSE;
+    candidate->service->switch_target = NULL;
+    candidate->service->switch_owner_set = FALSE;
+    service_changed(candidate->service);
+  }
+  if (candidate->state == NHRP_HA_CANDIDATE_READY &&
+      candidate->registered &&
+      candidate->service->switching &&
+      !candidate->service->switch_committing &&
+      candidate->service->switch_target == candidate &&
+      !candidate_begin_activation(candidate->service, candidate)) {
+    nhrp_ha_activate_callback callback = candidate->service->switch_callback;
+    void *callback_ctx = candidate->service->switch_callback_ctx;
+
+    candidate->service->switch_callback = NULL;
+    candidate->service->switch_callback_ctx = NULL;
+    candidate->service->switching = FALSE;
+    candidate->service->switch_target = NULL;
+    candidate->service->switch_owner_set = FALSE;
+    service_changed(candidate->service);
+    if (callback != NULL)
+      callback(callback_ctx, -EAGAIN, "netlink-transaction-unavailable",
+               candidate->service->generation);
+  }
+  if (candidate->state == NHRP_HA_CANDIDATE_READY &&
+      candidate->service->active != NULL &&
+      candidate->service->active->state == NHRP_HA_CANDIDATE_OFFLINE &&
+      !candidate->service->switching)
+    candidate_schedule_failover_target(candidate->service);
+  if (candidate->state == NHRP_HA_CANDIDATE_READY &&
+      !candidate->registered && !candidate->registration_pending &&
+      candidate->service->switching &&
+      candidate->service->switch_target == candidate)
+    registration_schedule(candidate, 0.01);
+  if (candidate->cleanup_owner && !candidate->registered &&
+      !candidate->registration_pending)
+    registration_schedule(candidate, 0.01);
   probe_schedule(candidate, candidate->service->active == candidate
                                 ? HA_ACTIVE_PROBE_INTERVAL
                                 : HA_STANDBY_PROBE_INTERVAL);
   return;
 
 missed:
+  if (request->selected_endpoint)
+    candidate->cleanup_owner = FALSE;
   if (!request->selected_endpoint) {
     candidate->probe_pending = FALSE;
     if (request->endpoint_index < candidate->endpoint_count &&
@@ -1485,9 +1964,9 @@ static void probe_timer_cb(struct ev_timer *timer, int revents) {
   int selected_endpoint = TRUE;
   double timeout;
 
-  if (!candidate->configured || !candidate->registered ||
+  if (!candidate->configured || candidate->endpoint_count == 0 ||
       service->interface->index == 0) {
-    probe_schedule(candidate, HA_STANDBY_PROBE_INTERVAL);
+    ev_timer_stop(&candidate->probe_timer);
     return;
   }
   if (candidate->probe_pending) {
@@ -1543,7 +2022,9 @@ static void probe_timer_cb(struct ev_timer *timer, int revents) {
   probe =
       ha_probe_payload(NHRP_HA_PROBE, candidate->member_id,
                        candidate->probe_sequence, candidate->probe_generation,
-                       candidate->probe_nonce, monotonic_nanoseconds(), FALSE);
+                       candidate->probe_nonce, monotonic_nanoseconds(),
+                       service->interface->protocol_address.addr_len * 8,
+                       FALSE, FALSE, 0, 0);
   payload =
       nhrp_packet_extension(packet, NHRP_EXTENSION_HA, NHRP_PAYLOAD_TYPE_RAW);
   if (probe == NULL || payload == NULL) {
@@ -1579,6 +2060,8 @@ static void probe_timer_cb(struct ev_timer *timer, int revents) {
 static void probe_schedule(struct nhrp_ha_candidate *candidate,
                            ev_tstamp delay) {
   ev_timer_stop(&candidate->probe_timer);
+  if (!nhrp_running)
+    return;
   ev_timer_set(&candidate->probe_timer, delay, 0.0);
   ev_timer_start(&candidate->probe_timer);
 }
@@ -1644,7 +2127,13 @@ void nhrp_ha_start(void) {
       }
     }
     list_for_each_entry(candidate, &service->candidates, list_entry)
-        registration_schedule(candidate, 0.01);
+      if (candidate->configured)
+        probe_schedule(candidate, 0.01);
+    candidate = service->active != NULL
+                   ? service->active
+                   : candidate_best(service, NULL);
+    if (candidate != NULL)
+      registration_schedule(candidate, 0.01);
     reconcile_schedule(service, 0.01);
   }
 }
@@ -2421,8 +2910,12 @@ int nhrp_ha_config_map(struct nhrp_interface *iface,
   candidate->static_configured = TRUE;
   if (candidate->state == NHRP_HA_CANDIDATE_DISABLED)
     candidate->state = NHRP_HA_CANDIDATE_INIT;
-  if (nhrp_running)
+  if (nhrp_running &&
+      (service->active == candidate ||
+       (service->active == NULL && candidate == candidate_best(service, NULL))))
     registration_schedule(candidate, 0.01);
+  if (nhrp_running)
+    probe_schedule(candidate, 0.01);
   return TRUE;
 }
 
@@ -2614,7 +3107,14 @@ int nhrp_ha_prepare_probe_reply(struct nhrp_packet *packet) {
   uint32_t generation;
   uint64_t nonce;
   uint64_t sent_nanoseconds;
+  uint8_t prefix_length;
   int serviceable;
+  int takeover;
+  uint64_t takeover_term;
+  uint64_t takeover_index;
+  uint64_t reply_term = 0;
+  uint64_t reply_index = 0;
+  int reply_takeover;
 
   payload = nhrp_packet_extension(
       packet, NHRP_EXTENSION_HA | NHRP_EXTENSION_FLAG_NOCREATE,
@@ -2625,17 +3125,58 @@ int nhrp_ha_prepare_probe_reply(struct nhrp_packet *packet) {
   if (packet->src_iface->ha_member_id[0] == 0 ||
       !ha_probe_parse(payload->u.raw, NHRP_HA_PROBE, requested_member,
                       sizeof(requested_member), &sequence, &generation, &nonce,
-                      &sent_nanoseconds, &serviceable) ||
+                      &sent_nanoseconds, &prefix_length, &serviceable, &takeover,
+                      &takeover_term, &takeover_index) ||
       strcmp(requested_member, packet->src_iface->ha_member_id) != 0)
     return FALSE;
+  (void)takeover;
+  (void)takeover_term;
+  (void)takeover_index;
 
+  reply_takeover = nhrp_ha_hub_takeover_version(
+      packet->src_iface, &packet->src_protocol_address, prefix_length,
+      &reply_term, &reply_index);
   probe = ha_probe_payload(NHRP_HA_PROBE_REPLY, packet->src_iface->ha_member_id,
                            sequence, generation, nonce, sent_nanoseconds,
-                           nhrp_ha_hub_serviceable(packet->src_iface));
+                           prefix_length,
+                           nhrp_ha_hub_serviceable(packet->src_iface),
+                           reply_takeover,
+                           reply_term, reply_index);
   if (probe == NULL)
     return FALSE;
   nhrp_payload_set_raw(payload, probe);
   return 2;
+}
+
+int nhrp_ha_handle_owner_release(struct nhrp_packet *packet) {
+  struct nhrp_payload *payload;
+  char member_id[NHRP_HA_MEMBER_ID_MAX + 1];
+  uint8_t prefix_length;
+  uint32_t registration_id;
+  uint64_t term;
+  uint64_t index;
+
+  payload = nhrp_packet_extension(
+      packet, NHRP_EXTENSION_HA | NHRP_EXTENSION_FLAG_NOCREATE,
+      NHRP_PAYLOAD_TYPE_RAW);
+  if (payload == NULL || payload->u.raw == NULL || payload->u.raw->length < 2 ||
+      payload->u.raw->data[1] != NHRP_HA_OWNER_RELEASE)
+    return 0;
+  if (!ha_owner_release_parse(payload->u.raw, member_id, sizeof(member_id),
+                              &prefix_length, &registration_id, &term,
+                              &index) ||
+      packet->src_iface == NULL ||
+      strcmp(member_id, packet->src_iface->ha_member_id) != 0)
+    return -1;
+  if (!nhrp_ha_hub_retire_direct(
+          packet->src_iface, &packet->src_protocol_address, prefix_length,
+          &packet->src_nbma_address, registration_id, term, index)) {
+    nhrp_debug("Ignoring stale HA owner release for protocol address");
+    return 1;
+  }
+  nhrp_info("Retired HA owner for protocol address on %s",
+            packet->src_iface->name);
+  return 1;
 }
 
 static const char *auth_initial_leader(struct nhrp_interface *iface,
@@ -3012,8 +3553,7 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
           nhrp_ha_auth_key_id_format(candidate->auth_key_id, candidate_key_id);
         if (local != NULL)
           nhrp_address_format(local, sizeof(local_nbma), local_nbma);
-        quality_eligible = candidate->registered &&
-                           (candidate->state == NHRP_HA_CANDIDATE_READY ||
+        quality_eligible = (candidate->state == NHRP_HA_CANDIDATE_READY ||
                             (service->active == candidate &&
                              candidate->state == NHRP_HA_CANDIDATE_SUSPECT)) &&
                            (profile == NULL || !profile->auth_required ||
@@ -3122,8 +3662,7 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
           nhrp_address_format(local, sizeof(local_nbma), local_nbma);
         if (candidate->auth_valid)
           nhrp_ha_auth_key_id_format(candidate->auth_key_id, candidate_key_id);
-        quality_eligible = candidate->registered &&
-                           (candidate->state == NHRP_HA_CANDIDATE_READY ||
+        quality_eligible = (candidate->state == NHRP_HA_CANDIDATE_READY ||
                             (service->active == candidate &&
                              candidate->state == NHRP_HA_CANDIDATE_SUSPECT)) &&
                            (profile == NULL || !profile->auth_required ||
@@ -3303,31 +3842,72 @@ static void reconcile_timer_cb(struct ev_timer *timer, int revents) {
   }
 }
 
+static int candidate_begin_activation(struct nhrp_ha_service *service,
+                                      struct nhrp_ha_candidate *candidate) {
+  service->switch_target = candidate;
+  if (!service->switch_owner_set) {
+    service->switch_owner_term = candidate->owner_term;
+    service->switch_owner_index = candidate->owner_index;
+  }
+  {
+    const struct nhrp_address *local = candidate_local_nbma(candidate, NULL);
+
+    service->switch_has_local_nbma = local != NULL;
+    service->switch_nbma = local != NULL ? *local : candidate->nbma;
+  }
+  service_changed(service);
+  service->switch_committing = TRUE;
+  if (!kernel_inject_neighbor_async(&service->protocol, &service->switch_nbma,
+                                    service->interface, activate_neighbor_done,
+                                    service)) {
+    service->switch_committing = FALSE;
+    return FALSE;
+  }
+  return TRUE;
+}
+
 static void activate_neighbor_done(void *ctx, int status) {
   struct nhrp_ha_service *service = ctx;
+  struct nhrp_ha_candidate *old = service->active;
+  struct nhrp_ha_candidate *target = service->switch_target;
   struct nhrp_peer *peer;
   nhrp_ha_activate_callback callback = service->switch_callback;
   void *callback_ctx = service->switch_callback_ctx;
   char protocol[64];
+  char nbma[64];
 
+  service->switch_committing = FALSE;
   service->switch_callback = NULL;
   service->switch_callback_ctx = NULL;
   if (status != 0) {
     service->switching = FALSE;
     service->switch_target = NULL;
+    service->switch_owner_set = FALSE;
     service_changed(service);
     if (callback != NULL)
       callback(callback_ctx, status, "netlink-ack-failed", service->generation);
     return;
   }
+  if (target == NULL || service->switch_target != target ||
+      target->state == NHRP_HA_CANDIDATE_OFFLINE) {
+    service->switching = FALSE;
+    service->switch_target = NULL;
+    service->switch_owner_set = FALSE;
+    service_changed(service);
+    if (callback != NULL)
+      callback(callback_ctx, -EHOSTDOWN, "target-unavailable",
+               service->generation);
+    return;
+  }
 
   peer = nhrp_peer_ha_commit(
       service->interface, &service->protocol, service->prefix_length,
-      &service->switch_target->nbma,
+      &target->nbma,
       service->switch_has_local_nbma ? &service->switch_nbma : NULL);
   if (peer == NULL) {
     service->switching = FALSE;
     service->switch_target = NULL;
+    service->switch_owner_set = FALSE;
     service_changed(service);
     if (callback != NULL)
       callback(callback_ctx, -ENOMEM, "peer-commit-failed",
@@ -3340,14 +3920,14 @@ static void activate_neighbor_done(void *ctx, int status) {
   service->active_peer = peer;
   if (service->automatic)
     nhrp_peer_ha_suspend_static(service->interface, &service->protocol);
-  if (service->active != NULL)
-    probe_schedule(service->active, 0.01);
-  nhrp_info("HA active Hub for %s on %s changed %s -> %s",
+  nhrp_info("HA active Hub for %s on %s changed %s -> %s via %s",
             nhrp_address_format(&service->protocol, sizeof(protocol), protocol),
             service->interface->name,
-            service->active != NULL ? service->active->member_id : "none",
-            service->switch_target->member_id);
-  service->active = service->switch_target;
+            old != NULL ? old->member_id : "none", target->member_id,
+            nhrp_address_format(&service->switch_nbma, sizeof(nbma), nbma));
+  service->active = target;
+  service->owner_term = service->switch_owner_term;
+  service->owner_index = service->switch_owner_index;
   if (service->active->srtt > 0.0)
     service->active->rto =
         service->active->srtt + 4.0 * service->active->rttvar;
@@ -3356,8 +3936,14 @@ static void activate_neighbor_done(void *ctx, int status) {
   probe_schedule(service->active, 0.01);
   service->interface->nat_cie = service->active->nat_cie;
   service->generation++;
+  if (old != NULL && old != target) {
+    candidate_release_owner(service, old, FALSE);
+    candidate_retire_owner(old);
+    probe_schedule(old, 0.01);
+  }
   service->switching = FALSE;
   service->switch_target = NULL;
+  service->switch_owner_set = FALSE;
   service_changed(service);
   reconcile_schedule(service, 0.01);
   if (callback != NULL)
@@ -3388,6 +3974,23 @@ int nhrp_ha_activate(const char *interface_name,
     *reason = "candidate-not-found";
     return FALSE;
   }
+  if (service->switching && service->active == candidate &&
+      candidate->state == NHRP_HA_CANDIDATE_READY &&
+      !service->switch_committing &&
+      !service->switch_owner_set) {
+    nhrp_ha_activate_callback pending_callback = service->switch_callback;
+    void *pending_callback_ctx = service->switch_callback_ctx;
+
+    service->switch_callback = NULL;
+    service->switch_callback_ctx = NULL;
+    service->switching = FALSE;
+    service->switch_target = NULL;
+    service->switch_owner_set = FALSE;
+    service_changed(service);
+    if (pending_callback != NULL)
+      pending_callback(pending_callback_ctx, -EAGAIN, "active-recovered",
+                       service->generation);
+  }
   if (service->switching) {
     *reason = "switch-in-progress";
     return FALSE;
@@ -3396,7 +3999,8 @@ int nhrp_ha_activate(const char *interface_name,
     *reason = "generation-mismatch";
     return FALSE;
   }
-  if (!candidate->registered || candidate->state != NHRP_HA_CANDIDATE_READY) {
+  if (candidate->state == NHRP_HA_CANDIDATE_DISABLED ||
+      candidate->endpoint_count == 0) {
     *reason = "candidate-not-ready";
     return FALSE;
   }
@@ -3408,21 +4012,25 @@ int nhrp_ha_activate(const char *interface_name,
   }
 
   service->switching = TRUE;
-  service->switch_target = candidate;
+  service->switch_owner_set = FALSE;
   service->switch_callback = callback;
   service->switch_callback_ctx = ctx;
-  {
-    const struct nhrp_address *local = candidate_local_nbma(candidate, NULL);
-
-    service->switch_has_local_nbma = local != NULL;
-    service->switch_nbma = local != NULL ? *local : candidate->nbma;
+  if (candidate->state != NHRP_HA_CANDIDATE_READY) {
+    service->switch_target = candidate;
+    service_changed(service);
+    probe_schedule(candidate, 0.01);
+    return TRUE;
   }
-  service_changed(service);
-  if (!kernel_inject_neighbor_async(&service->protocol, &service->switch_nbma,
-                                    service->interface, activate_neighbor_done,
-                                    service)) {
+  if (!candidate->registered) {
+    service->switch_target = candidate;
+    service_changed(service);
+    registration_schedule(candidate, 0.01);
+    return TRUE;
+  }
+  if (!candidate_begin_activation(service, candidate)) {
     service->switching = FALSE;
     service->switch_target = NULL;
+    service->switch_owner_set = FALSE;
     service->switch_callback = NULL;
     service->switch_callback_ctx = NULL;
     service_changed(service);

@@ -47,6 +47,7 @@ enum nhrp_ha_message_type {
   NHRP_HA_PROBE = 2,
   NHRP_HA_PROBE_REPLY = 3,
   NHRP_HA_HUB_LIST = 4,
+  NHRP_HA_OWNER_RELEASE = 5,
 };
 
 struct nhrp_interface;
@@ -104,6 +105,7 @@ int nhrp_ha_prepare_registration_discovery(struct nhrp_peer *peer,
                                            struct nhrp_packet *packet);
 int nhrp_ha_handle_registration_discovery(struct nhrp_peer *peer,
                                           struct nhrp_packet *reply);
+int nhrp_ha_handle_owner_release(struct nhrp_packet *packet);
 
 size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
                       int json);

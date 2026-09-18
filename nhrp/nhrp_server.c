@@ -274,7 +274,7 @@ static void nhrp_server_finish_reg(struct nhrp_pending_request *pr)
 	if (pr->rpeer != NULL &&
 	    nhrp_packet_reroute(packet, pr->rpeer)) {
 		if (ha_registration && pr->num_error == 0)
-			nhrp_debug("Sending HA Registration Reply from proto src %s to %s (%d bindings accepted, 0 rejected)",
+			nhrp_info("Sending HA Registration Reply from proto src %s to %s (%d bindings accepted, 0 rejected)",
 				   nhrp_address_format(&packet->dst_protocol_address,
 						       sizeof(tmp), tmp),
 				   nhrp_address_format(&packet->src_protocol_address,
@@ -403,8 +403,10 @@ static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr)
 	peer->protocol_type = packet->hdr.protocol_type;
 	peer->expire_time = pr->now + ntohs(cie->hdr.holding_time);
 	/* Registration validation has also normalized Vendor bootstrap to HA. */
-	if (nhrp_server_is_ha_registration(packet))
+	if (nhrp_server_is_ha_registration(packet)) {
 		peer->flags |= NHRP_PEER_FLAG_HA_CAPABLE;
+		peer->ha_registration_id = ntohl(packet->hdr.u.request_id);
+	}
 	peer->mtu = ntohs(cie->hdr.mtu);
 	if (cie->nbma_address.addr_len != 0)
 		peer->next_hop_address = cie->nbma_address;
@@ -459,7 +461,7 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet)
 	int ha_registration = nhrp_server_is_ha_registration(packet);
 
 	if (ha_registration)
-		nhrp_debug("Received HA Registration Request from proto src %s to %s",
+		nhrp_info("Received HA Registration Request from proto src %s to %s",
 			   nhrp_address_format(&packet->src_protocol_address,
 					       sizeof(tmp), tmp),
 			   nhrp_address_format(&packet->dst_protocol_address,
@@ -577,6 +579,7 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 	struct nhrp_payload *payload;
 	struct nhrp_cie *cie;
 	int flags, ret = TRUE;
+	int owner_release = nhrp_ha_handle_owner_release(packet);
 
 	nhrp_info("Received Purge Request from proto src %s to %s",
 		  nhrp_address_format(&packet->src_protocol_address,
@@ -595,6 +598,8 @@ static int nhrp_handle_purge_request(struct nhrp_packet *packet)
 		else
 			ret = FALSE;
 	}
+	if (owner_release != 0)
+		return ret;
 
 	payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
 	list_for_each_entry(cie, &payload->u.cie_list, cie_list_entry) {

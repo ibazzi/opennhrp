@@ -18,6 +18,7 @@
 #define BUFFER_SIZE 32768
 #define SCORE_SWITCH_MARGIN 10
 #define SCORE_SWITCH_HOLD 15.0
+#define SCORE_FAILBACK_HOLD 120.0
 #define SCORE_SWITCH_COOLDOWN 30.0
 
 struct candidate_view {
@@ -242,6 +243,32 @@ static struct candidate_view *best_ready_candidate(struct service_view *view) {
   return best;
 }
 
+static int candidate_precedes(const struct candidate_view *candidate,
+                              const struct candidate_view *other) {
+  return candidate->term > other->term ||
+         (candidate->term == other->term &&
+          (candidate->priority > other->priority ||
+           (candidate->priority == other->priority &&
+            strcmp(candidate->member, other->member) < 0)));
+}
+
+static int initial_candidate_pending(const struct service_view *view,
+                                     const struct candidate_view *best) {
+  size_t i;
+
+  for (i = 0; i < view->candidate_count; i++) {
+    const struct candidate_view *candidate = &view->candidates[i];
+
+    if (candidate == best || candidate->ready ||
+        strcmp(candidate->state, "offline") == 0 ||
+        strcmp(candidate->state, "disabled") == 0)
+      continue;
+    if (candidate_precedes(candidate, best))
+      return 1;
+  }
+  return 0;
+}
+
 static int candidate_usable(const struct service_view *view,
                             const struct candidate_view *candidate) {
   return candidate != NULL &&
@@ -277,6 +304,7 @@ static struct candidate_view *select_migration(struct service_view *view,
       view->active_member[0] != 0 ? find_candidate(view, view->active_member)
                                   : NULL;
   struct candidate_view *best = best_ready_candidate(view);
+  double hold = SCORE_SWITCH_HOLD;
 
   *reason = NULL;
   if (strcmp(state->active_member, view->active_member) != 0) {
@@ -286,6 +314,8 @@ static struct candidate_view *select_migration(struct service_view *view,
   }
   if (active == NULL) {
     decision_reset_superior(state);
+    if (best != NULL && initial_candidate_pending(view, best))
+      return NULL;
     if (best != NULL)
       *reason = "initial";
     return best;
@@ -301,14 +331,27 @@ static struct candidate_view *select_migration(struct service_view *view,
     return NULL;
   }
   if (best->term > active->term) {
+    struct candidate_view *leader =
+        best->leader[0] != 0 ? find_candidate(view, best->leader) : NULL;
+
     decision_reset_superior(state);
+    if (leader == NULL || !leader->ready || leader->term != best->term ||
+        (view->auth_required && !leader->authenticated))
+      return NULL;
     *reason = "stale-term";
-    return best;
+    return leader;
   }
   if (best == active || now < state->cooldown_until ||
-      best->score < active->score + SCORE_SWITCH_MARGIN) {
+      best->score <= active->score) {
     decision_reset_superior(state);
     return NULL;
+  }
+  if (best->score < active->score + SCORE_SWITCH_MARGIN) {
+    if (best->priority <= active->priority) {
+      decision_reset_superior(state);
+      return NULL;
+    }
+    hold = SCORE_FAILBACK_HOLD;
   }
   if (strcmp(state->superior_member, best->member) != 0) {
     snprintf(state->superior_member, sizeof(state->superior_member), "%s",
@@ -316,9 +359,9 @@ static struct candidate_view *select_migration(struct service_view *view,
     state->superior_since = now;
     return NULL;
   }
-  if (now - state->superior_since < SCORE_SWITCH_HOLD)
+  if (now - state->superior_since < hold)
     return NULL;
-  *reason = "quality";
+  *reason = hold == SCORE_FAILBACK_HOLD ? "failback" : "quality";
   return best;
 }
 

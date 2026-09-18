@@ -1060,6 +1060,16 @@ static void admin_ha_registration_sync_apply(void *ctx, const char *cmd)
 			if (!parse_u64(value, &parsed) || parsed > UINT32_MAX)
 				goto invalid;
 			binding.flags = parsed;
+		} else if (strcmp(keyword, "registration-id") == 0) {
+			if (!parse_u64(value, &parsed) || parsed > UINT32_MAX)
+				goto invalid;
+			binding.registration_id = parsed;
+		} else if (strcmp(keyword, "owner-member") == 0) {
+			if (strcmp(value, "-") != 0 &&
+			    (strlen(value) > NHRP_HA_MEMBER_ID_MAX || value[0] == 0))
+				goto invalid;
+			if (strcmp(value, "-") != 0)
+				strcpy(binding.owner_member, value);
 		} else if (strcmp(keyword, "term") == 0) {
 			if (!parse_u64(value, &binding.term))
 				goto invalid;
@@ -1174,7 +1184,12 @@ static void admin_receive_cb(struct ev_io *w, int revents)
 			    "Status: error\n"
 			    "Reason: unrecognized command\n");
 	}
-	if (rm->monitor || rm->deferred)
+	if (rm->deferred) {
+		ev_io_stop(&rm->io);
+		ev_timer_stop(&rm->timeout);
+		return;
+	}
+	if (rm->monitor)
 		return;
 
 err:

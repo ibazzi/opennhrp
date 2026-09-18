@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -25,6 +26,7 @@
 
 #include "nhrp_common.h"
 #include "nhrp_ha.h"
+#include "nhrp_ha_hub.h"
 #include "nhrp_ha_managed.h"
 #include "nhrp_interface.h"
 #include "nhrp_peer.h"
@@ -87,6 +89,8 @@ static void ha_child_exited_cb(struct ev_child *watcher, int revents) {
   child->last_status = watcher->rstatus;
   child->pid = 0;
   ev_child_stop(watcher);
+  if (child->role == NHRP_HA_CHILD_HUB)
+    nhrp_ha_hub_fence(child->interface);
   if (child->stopping || !nhrp_running) {
     nhrp_ha_set_coordinator_status(child->interface, "stopped",
                                    child->last_status);
@@ -216,11 +220,13 @@ static int ha_process_configure_hub(void) {
 }
 
 static void ha_child_spawn(struct nhrp_ha_child *child) {
+  pid_t parent;
   pid_t pid;
 
   if (child->role == NHRP_HA_CHILD_NONE || child->pid != 0 || child->stopping)
     return;
   ev_timer_stop(&child->restart);
+  parent = getpid();
   pid = fork();
   if (pid < 0) {
     nhrp_error("Unable to start HA coordinator for %s: %s",
@@ -230,8 +236,11 @@ static void ha_child_spawn(struct nhrp_ha_child *child) {
     nhrp_ha_set_coordinator_status(child->interface, "restarting", -errno);
     return;
   }
-  if (pid == 0)
+  if (pid == 0) {
+    if (prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 || getppid() != parent)
+      _exit(127);
     ha_child_exec(child);
+  }
   child->pid = pid;
   child->started = ev_now();
   if (child->restart_delay == 0)
@@ -314,6 +323,7 @@ static void ha_process_start(void) {
   if (!nhrp_ha_hub_enabled() || interface_name == NULL)
     return;
   iface = nhrp_interface_get_by_name(interface_name, FALSE);
+  nhrp_ha_hub_fence(iface);
   child = ha_child_find(NHRP_HA_CHILD_HUB, iface);
   if (child == NULL)
     return;

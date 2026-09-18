@@ -11,16 +11,22 @@
 #include "nhrp_interface.h"
 #include "nhrp_peer.h"
 
+extern void admin_ha_notify(struct nhrp_interface *iface);
+
 struct nhrp_ha_hub_value {
   struct nhrp_ha_hub_binding binding;
   ev_tstamp expires;
   int present;
+  int retired;
+  int prepared;
 };
 
 struct nhrp_ha_hub_entry {
   struct list_head list_entry;
   struct nhrp_address protocol;
   uint8_t prefix_length;
+  uint64_t owner_term;
+  uint64_t owner_index;
   struct nhrp_ha_hub_value direct;
   struct nhrp_ha_hub_value replica;
   int replica_seen;
@@ -105,12 +111,82 @@ static void hub_value_expire(struct nhrp_ha_hub_value *value) {
     value->present = FALSE;
 }
 
+static void hub_state_gc(struct nhrp_ha_hub_state *state) {
+  struct nhrp_ha_hub_entry *entry;
+  struct nhrp_ha_hub_entry *next;
+
+  list_for_each_entry_safe(entry, next, &state->entries, list_entry) {
+    hub_value_expire(&entry->direct);
+    hub_value_expire(&entry->replica);
+    if (!entry->direct.present && !entry->replica.present)
+      hub_entry_remove(state, entry);
+  }
+}
+
+static int binding_version_cmp(const struct nhrp_ha_hub_binding *left,
+                               const struct nhrp_ha_hub_binding *right) {
+  if (left->term != right->term)
+    return left->term > right->term ? 1 : -1;
+  if (left->index != right->index)
+    return left->index > right->index ? 1 : -1;
+  return 0;
+}
+
+static void binding_version_next(uint64_t *term, uint64_t *index) {
+  if (*index == UINT64_MAX) {
+    if (*term != UINT64_MAX)
+      (*term)++;
+    *index = 0;
+  } else {
+    (*index)++;
+  }
+}
+
+static void hub_owner_observe(struct nhrp_ha_hub_entry *entry,
+                              const struct nhrp_ha_hub_binding *binding) {
+  struct nhrp_ha_hub_binding owner;
+
+  memset(&owner, 0, sizeof(owner));
+  owner.term = entry->owner_term;
+  owner.index = entry->owner_index;
+  if (entry->owner_term == 0 || binding_version_cmp(binding, &owner) > 0) {
+    entry->owner_term = binding->term;
+    entry->owner_index = binding->index;
+  }
+}
+
+static void hub_owner_next(struct nhrp_ha_hub_state *state,
+                           struct nhrp_ha_hub_entry *entry, uint64_t *term,
+                           uint64_t *index) {
+  struct nhrp_ha_hub_binding next;
+  struct nhrp_ha_hub_binding owner;
+
+  memset(&next, 0, sizeof(next));
+  next.term = state->term;
+  owner.term = entry->owner_term;
+  owner.index = entry->owner_index;
+  if (entry->owner_term != 0 && binding_version_cmp(&owner, &next) > 0)
+    next = owner;
+  binding_version_next(&next.term, &next.index);
+  entry->owner_term = next.term;
+  entry->owner_index = next.index;
+  *term = next.term;
+  *index = next.index;
+}
+
 static const struct nhrp_ha_hub_value *
 hub_entry_value(struct nhrp_ha_hub_entry *entry) {
   hub_value_expire(&entry->direct);
   hub_value_expire(&entry->replica);
-  if (entry->direct.present)
+  if (entry->direct.present && !entry->direct.retired)
     return &entry->direct;
+  if (entry->direct.present && entry->direct.retired &&
+      entry->replica.present &&
+      binding_version_cmp(&entry->replica.binding,
+                          &entry->direct.binding) > 0)
+    return &entry->replica;
+  if (entry->direct.present && entry->direct.retired)
+    return NULL;
   if (entry->replica.present)
     return &entry->replica;
   return NULL;
@@ -152,15 +228,87 @@ static int has_local_registration(struct nhrp_interface *iface,
   return nhrp_peer_foreach(is_local_registration, NULL, &selector);
 }
 
+struct hub_peer_match {
+  const struct nhrp_address *protocol;
+  uint8_t prefix_length;
+  int direct_only;
+};
+
+static int hub_peer_matches(void *ctx, struct nhrp_peer *peer) {
+  struct hub_peer_match *match = ctx;
+
+  return (peer->flags & NHRP_PEER_FLAG_HA_PROJECTED) &&
+         (!match->direct_only || (peer->flags & NHRP_PEER_FLAG_HA_DIRECT)) &&
+         peer->prefix_length == match->prefix_length &&
+         nhrp_address_cmp(&peer->protocol_address, match->protocol) == 0;
+}
+
+static int remove_hub_peer(void *ctx, struct nhrp_peer *peer) {
+  if (hub_peer_matches(ctx, peer))
+    nhrp_peer_remove(peer);
+  return 0;
+}
+
+static int remove_replica_effective(void *ctx, struct nhrp_peer *peer) {
+  (void)ctx;
+  if ((peer->flags & NHRP_PEER_FLAG_HA_PROJECTED) &&
+      !(peer->flags & NHRP_PEER_FLAG_HA_DIRECT))
+    nhrp_peer_remove(peer);
+  return 0;
+}
+
+static int has_effective_registration(struct nhrp_interface *iface,
+                                      const struct nhrp_address *protocol,
+                                      uint8_t prefix_length) {
+  struct hub_peer_match match = {
+      .protocol = protocol,
+      .prefix_length = prefix_length,
+  };
+  struct nhrp_peer_selector selector = {
+      .flags = NHRP_PEER_FIND_EXACT,
+      .type_mask = BIT(NHRP_PEER_TYPE_DYNAMIC),
+      .interface = iface,
+      .protocol_address = *protocol,
+      .prefix_length = prefix_length,
+  };
+
+  return nhrp_peer_foreach(hub_peer_matches, &match, &selector);
+}
+
+static void remove_effective(struct nhrp_interface *iface,
+                             const struct nhrp_address *protocol,
+                             uint8_t prefix_length, int direct_only) {
+  struct hub_peer_match match = {
+      .protocol = protocol,
+      .prefix_length = prefix_length,
+      .direct_only = direct_only,
+  };
+  struct nhrp_peer_selector selector = {
+      .flags = NHRP_PEER_FIND_EXACT,
+      .type_mask = BIT(NHRP_PEER_TYPE_DYNAMIC),
+      .interface = iface,
+      .protocol_address = *protocol,
+      .prefix_length = prefix_length,
+  };
+
+  nhrp_peer_foreach(remove_hub_peer, &match, &selector);
+}
+
 static int project_entry(struct nhrp_ha_hub_state *state,
                          struct nhrp_ha_hub_entry *entry) {
   const struct nhrp_ha_hub_value *value = hub_entry_value(entry);
   struct nhrp_peer *peer;
-
   if (value == NULL || has_local_registration(state->interface,
                                               &entry->protocol,
                                               entry->prefix_length))
     return TRUE;
+  if (has_effective_registration(state->interface, &entry->protocol,
+                                 entry->prefix_length)) {
+    if (value == &entry->direct)
+      return TRUE;
+    remove_effective(state->interface, &entry->protocol, entry->prefix_length,
+                     FALSE);
+  }
   peer = nhrp_peer_alloc(state->interface);
   if (peer == NULL)
     return FALSE;
@@ -175,15 +323,25 @@ static int project_entry(struct nhrp_ha_hub_state *state,
   peer->holding_time = value->binding.holding_time;
   peer->expire_time = ev_now() + value->binding.holding_time;
   peer->flags = value->binding.flags | NHRP_PEER_FLAG_HA_PROJECTED;
+  peer->ha_registration_id = value->binding.registration_id;
+  if (value == &entry->direct)
+    peer->flags |= NHRP_PEER_FLAG_HA_DIRECT;
   nhrp_peer_insert(peer);
   nhrp_peer_put(peer);
   return TRUE;
 }
 
-static int remove_projected(void *ctx, struct nhrp_peer *peer) {
-  if (peer->flags & NHRP_PEER_FLAG_HA_PROJECTED)
-    nhrp_peer_remove(peer);
-  return 0;
+static int retire_direct_entry(struct nhrp_ha_hub_state *state,
+                               struct nhrp_ha_hub_entry *entry,
+                               int clear_replica) {
+  if (!entry->direct.present)
+    return FALSE;
+  entry->direct.retired = TRUE;
+  if (clear_replica)
+    entry->replica.present = FALSE;
+  remove_effective(state->interface, &entry->protocol, entry->prefix_length,
+                   TRUE);
+  return TRUE;
 }
 
 void nhrp_ha_hub_cleanup(void) {
@@ -201,12 +359,38 @@ void nhrp_ha_hub_cleanup(void) {
   }
 }
 
+void nhrp_ha_hub_fence(struct nhrp_interface *iface) {
+  struct nhrp_ha_hub_state *state;
+  struct nhrp_ha_hub_entry *entry;
+
+  if (iface == NULL)
+    return;
+  state = hub_state_find(iface, TRUE);
+  if (state == NULL)
+    return;
+  hub_state_gc(state);
+  list_for_each_entry(entry, &state->entries, list_entry) {
+    if (entry->direct.present && !entry->direct.retired) {
+      entry->direct.prepared = TRUE;
+      retire_direct_entry(state, entry, FALSE);
+    }
+    remove_effective(state->interface, &entry->protocol, entry->prefix_length,
+                     FALSE);
+  }
+  state->sync_active = FALSE;
+  state->role = NHRP_HA_HUB_STANDBY;
+  admin_ha_notify(iface);
+}
+
 int nhrp_ha_hub_capture_direct(struct nhrp_peer *peer) {
   struct nhrp_ha_hub_state *state = hub_state_find(peer->interface, FALSE);
   struct nhrp_ha_hub_entry *entry;
+  uint64_t owner_term;
+  uint64_t owner_index;
 
   if (state == NULL || state->role == NHRP_HA_HUB_UNMANAGED)
     return 1;
+  hub_state_gc(state);
   if (!(peer->flags & NHRP_PEER_FLAG_HA_CAPABLE)) {
     entry = hub_entry_find(state, &peer->protocol_address, peer->prefix_length);
     if (entry != NULL)
@@ -216,16 +400,77 @@ int nhrp_ha_hub_capture_direct(struct nhrp_peer *peer) {
   entry = hub_entry_get(state, &peer->protocol_address, peer->prefix_length);
   if (entry == NULL)
     return -1;
+  if (entry->direct.present)
+    hub_owner_observe(entry, &entry->direct.binding);
+  if (entry->replica.present)
+    hub_owner_observe(entry, &entry->replica.binding);
+  owner_term = entry->direct.present &&
+                       strcmp(entry->direct.binding.owner_member,
+                              peer->interface->ha_member_id) == 0 &&
+                       (!entry->direct.retired || !entry->replica.present ||
+                        binding_version_cmp(&entry->replica.binding,
+                                            &entry->direct.binding) <= 0)
+                   ? entry->direct.binding.term
+                   : 0;
+  owner_index = owner_term != 0 ? entry->direct.binding.index : 0;
+  if (owner_term == 0)
+    hub_owner_next(state, entry, &owner_term, &owner_index);
   binding_from_peer(&entry->direct.binding, peer);
-  entry->direct.binding.term = state->term;
-  entry->direct.binding.index = state->index;
+  entry->direct.binding.registration_id = peer->ha_registration_id;
+  entry->direct.binding.term = owner_term;
+  entry->direct.binding.index = owner_index;
+  snprintf(entry->direct.binding.owner_member,
+           sizeof(entry->direct.binding.owner_member), "%s",
+           peer->interface->ha_member_id);
   entry->direct.expires = ev_now() + entry->direct.binding.holding_time;
   entry->direct.present = TRUE;
+  entry->direct.retired = FALSE;
+  entry->direct.prepared = state->role == NHRP_HA_HUB_STANDBY;
   if (state->role != NHRP_HA_HUB_STANDBY) {
-    peer->flags |= NHRP_PEER_FLAG_HA_PROJECTED;
+    peer->flags |= NHRP_PEER_FLAG_HA_PROJECTED | NHRP_PEER_FLAG_HA_DIRECT;
     return 1;
   }
   return 0;
+}
+
+int nhrp_ha_hub_retire_direct(struct nhrp_interface *iface,
+                              const struct nhrp_address *protocol,
+                              uint8_t prefix_length,
+                              const struct nhrp_address *nbma,
+                              uint32_t registration_id, uint64_t term,
+                              uint64_t index) {
+  struct nhrp_ha_hub_state *state = hub_state_find(iface, FALSE);
+  struct nhrp_ha_hub_entry *entry;
+
+  if (state == NULL || protocol == NULL || registration_id == 0)
+    return FALSE;
+  hub_state_gc(state);
+  entry = hub_entry_find(state, protocol, prefix_length);
+  if (entry == NULL || !entry->direct.present ||
+      entry->direct.binding.registration_id != registration_id ||
+      (entry->direct.binding.owner_member[0] != 0 &&
+       strcmp(entry->direct.binding.owner_member,
+              iface->ha_member_id) != 0) ||
+      (nbma != NULL &&
+       nhrp_address_cmp(&entry->direct.binding.nbma, nbma) != 0 &&
+       (entry->direct.binding.nat_oa.type == PF_UNSPEC ||
+        nhrp_address_cmp(&entry->direct.binding.nat_oa, nbma) != 0)))
+    return FALSE;
+  if (term != 0 || index != 0) {
+    struct nhrp_ha_hub_binding version = entry->direct.binding;
+
+    version.term = term;
+    version.index = index;
+    if (binding_version_cmp(&version, &entry->direct.binding) < 0)
+      return FALSE;
+    hub_owner_observe(entry, &version);
+  }
+  /* Keep a newer replicated owner; a delayed release for the old token must
+   * not erase the next owner's shadow. */
+  if (!retire_direct_entry(state, entry, FALSE))
+    return FALSE;
+  admin_ha_notify(iface);
+  return TRUE;
 }
 
 int nhrp_ha_hub_serviceable(struct nhrp_interface *iface) {
@@ -234,27 +479,99 @@ int nhrp_ha_hub_serviceable(struct nhrp_interface *iface) {
   return state == NULL || state->role != NHRP_HA_HUB_STANDBY;
 }
 
+int nhrp_ha_hub_takeover_version(struct nhrp_interface *iface,
+                                  const struct nhrp_address *protocol,
+                                  uint8_t prefix_length,
+                                  uint64_t *term, uint64_t *index) {
+  struct nhrp_ha_hub_state *state = hub_state_find(iface, FALSE);
+  struct nhrp_ha_hub_entry *entry;
+  const struct nhrp_ha_hub_value *value;
+
+  if (state == NULL || protocol == NULL)
+    return FALSE;
+  hub_state_gc(state);
+  entry = hub_entry_find(state, protocol, prefix_length);
+  if (entry == NULL)
+    return FALSE;
+  value = hub_entry_value(entry);
+  if (value == NULL)
+    return FALSE;
+  if (term != NULL)
+    *term = value->binding.term;
+  if (index != NULL)
+    *index = value->binding.index;
+  return strcmp(value->binding.owner_member, iface->ha_member_id) == 0;
+}
+
 int nhrp_ha_hub_set_role(struct nhrp_interface *iface,
                          enum nhrp_ha_hub_role role, uint64_t term,
                          uint64_t index) {
   struct nhrp_ha_hub_state *state = hub_state_find(iface, TRUE);
   struct nhrp_peer_selector selector;
   struct nhrp_ha_hub_entry *entry;
+  enum nhrp_ha_hub_role previous_role;
+  uint64_t previous_term;
 
   if (state == NULL || role == NHRP_HA_HUB_UNMANAGED || term == 0 ||
       term < state->term || (term == state->term && index < state->index))
     return FALSE;
+  hub_state_gc(state);
+  previous_role = state->role;
+  previous_term = state->term;
   state->term = term;
   state->index = index;
-  if (state->role == role)
+  if (state->role == role &&
+      (role != NHRP_HA_HUB_LEADER || term == previous_term))
     return TRUE;
   if (role == NHRP_HA_HUB_STANDBY) {
     memset(&selector, 0, sizeof(selector));
     selector.interface = iface;
     selector.type_mask = BIT(NHRP_PEER_TYPE_DYNAMIC);
-    nhrp_peer_foreach(remove_projected, NULL, &selector);
+    nhrp_peer_foreach(remove_replica_effective, NULL, &selector);
+  } else if (role == NHRP_HA_HUB_FOLLOWER) {
+    /* Keep the old Leader's owners until each Spoke commits its takeover and
+     * releases them, or their holding time expires. */
+    if (previous_role != NHRP_HA_HUB_LEADER) {
+      memset(&selector, 0, sizeof(selector));
+      selector.interface = iface;
+      selector.type_mask = BIT(NHRP_PEER_TYPE_DYNAMIC);
+      nhrp_peer_foreach(remove_replica_effective, NULL, &selector);
+      list_for_each_entry(entry, &state->entries, list_entry)
+        if (entry->direct.prepared)
+          retire_direct_entry(state, entry, FALSE);
+    }
   } else {
     list_for_each_entry(entry, &state->entries, list_entry) {
+      uint64_t owner_term;
+      uint64_t owner_index;
+
+      if (entry->direct.present)
+        hub_owner_observe(entry, &entry->direct.binding);
+      if (entry->replica.present)
+        hub_owner_observe(entry, &entry->replica.binding);
+      hub_owner_next(state, entry, &owner_term, &owner_index);
+      if (entry->direct.present && entry->direct.retired &&
+          entry->direct.prepared &&
+          (!entry->replica.present ||
+           binding_version_cmp(&entry->direct.binding,
+                               &entry->replica.binding) >= 0))
+        entry->direct.retired = FALSE;
+      if (entry->direct.present && !entry->direct.retired) {
+        entry->direct.binding.term = owner_term;
+        entry->direct.binding.index = owner_index;
+        snprintf(entry->direct.binding.owner_member,
+                 sizeof(entry->direct.binding.owner_member), "%s",
+                 iface->ha_member_id);
+      }
+      if (entry->replica.present &&
+          (!entry->direct.present || entry->direct.retired)) {
+        entry->replica.binding.term = owner_term;
+        entry->replica.binding.index = owner_index;
+        entry->replica.binding.registration_id = 0;
+        snprintf(entry->replica.binding.owner_member,
+                 sizeof(entry->replica.binding.owner_member), "%s",
+                 iface->ha_member_id);
+      }
       if (!project_entry(state, entry))
         return FALSE;
     }
@@ -270,6 +587,7 @@ int nhrp_ha_hub_sync_begin(struct nhrp_interface *iface, uint64_t term,
 
   if (state == NULL || term == 0 || term < state->term || state->sync_active)
     return FALSE;
+  hub_state_gc(state);
   state->pending_term = term;
   state->pending_index = index;
   state->sync_active = TRUE;
@@ -287,20 +605,29 @@ int nhrp_ha_hub_sync_apply(struct nhrp_interface *iface,
 
   if (state == NULL || !state->sync_active || protocol->type != PF_INET ||
       binding->nbma.type != PF_INET || prefix_length > 32 ||
-      binding->holding_time == 0 || binding->term != state->pending_term ||
-      binding->index > state->pending_index)
+      binding->holding_time == 0 || binding->term > state->pending_term)
     return FALSE;
+  hub_state_gc(state);
   /* A replicated HA binding must never take over a local legacy spoke. */
   if (has_local_registration(iface, protocol, prefix_length))
     return TRUE;
   entry = hub_entry_get(state, protocol, prefix_length);
   if (entry == NULL)
     return FALSE;
+  hub_owner_observe(entry, binding);
+  if (entry->direct.present && !entry->direct.retired &&
+      strcmp(binding->owner_member, iface->ha_member_id) != 0 &&
+      binding_version_cmp(binding, &entry->direct.binding) > 0)
+    retire_direct_entry(state, entry, FALSE);
   entry->replica.binding = *binding;
   entry->replica.expires = ev_now() + binding->holding_time;
   entry->replica.present = TRUE;
   entry->replica_seen = TRUE;
-  if (state->role != NHRP_HA_HUB_STANDBY && !entry->direct.present)
+  /* A Follower normally keeps the replica for a future takeover.  A
+   * standby-to-follower transition may project it as a local fallback, but
+   * a retired direct owner remains fenced. */
+  if (state->role == NHRP_HA_HUB_LEADER &&
+      (!entry->direct.present || entry->direct.retired))
     return project_entry(state, entry);
   return TRUE;
 }
@@ -312,10 +639,13 @@ int nhrp_ha_hub_sync_end(struct nhrp_interface *iface) {
 
   if (state == NULL || !state->sync_active)
     return FALSE;
+  hub_state_gc(state);
   list_for_each_entry_safe(entry, next, &state->entries, list_entry) {
     if (!entry->replica_seen)
       entry->replica.present = FALSE;
-    if (hub_entry_value(entry) == NULL)
+    hub_value_expire(&entry->direct);
+    hub_value_expire(&entry->replica);
+    if (!entry->direct.present && !entry->replica.present)
       hub_entry_remove(state, entry);
   }
   state->term = state->pending_term;
@@ -364,12 +694,17 @@ static size_t snapshot_line(struct nhrp_ha_hub_entry *entry, char *buffer,
     nhrp_address_format(&value->binding.nat_oa, sizeof(nat_oa), nat_oa);
   else
     snprintf(nat_oa, sizeof(nat_oa), "-");
-  return snprintf(buffer, size, "entry %s %u %s %s %u %u %u %llu %llu %s\n",
+  return snprintf(buffer, size,
+                  "entry %s %u %s %s %u %u %u %llu %llu %u %s %s\n",
                   protocol, entry->prefix_length, nbma, nat_oa,
                   value->binding.mtu, value->binding.holding_time,
                   value->binding.flags, (unsigned long long)value->binding.term,
                   (unsigned long long)value->binding.index,
-                  entry->direct.present ? "direct" : "replica");
+                  value->binding.registration_id,
+                  value->binding.owner_member[0] != 0
+                      ? value->binding.owner_member
+                      : "-",
+                  value == &entry->direct ? "direct" : "replica");
 }
 
 size_t nhrp_ha_hub_snapshot_render(struct nhrp_interface *iface, char *buffer,
@@ -391,6 +726,7 @@ size_t nhrp_ha_hub_snapshot_render(struct nhrp_interface *iface, char *buffer,
   digest[0] = 0;
   if (state == NULL)
     return 0;
+  hub_state_gc(state);
   entries = calloc(state->count, sizeof(*entries));
   canonical_size = state->count * 256 + 1;
   canonical = malloc(canonical_size);
@@ -438,6 +774,7 @@ size_t nhrp_ha_hub_status_render(struct nhrp_interface *iface, char *buffer,
   if (state == NULL)
     return append(buffer, size, 0,
                   json ? "{\"role\":\"unmanaged\"}\n" : "Role: unmanaged\n");
+  hub_state_gc(state);
   role = state->role == NHRP_HA_HUB_LEADER     ? "leader"
          : state->role == NHRP_HA_HUB_FOLLOWER ? "follower"
          : state->role == NHRP_HA_HUB_STANDBY  ? "standby"
