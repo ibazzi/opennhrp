@@ -84,7 +84,7 @@ def main():
             return run("ip", "netns", "exec", f"{prefix}-{node}", *args)
 
         def ctl(node, *args):
-            result = run(REPO / "nhrp/opennhrpctl", "-a", work / f"{node}.sock", *args)
+            result = run(REPO / "build/nhrp/opennhrpctl", "-a", work / f"{node}.sock", *args)
             assert "Status: failed" not in result, result
             return result
 
@@ -150,7 +150,7 @@ def main():
                 config.write_text(f"interface gre-ha\n enable-ha member-id {node} advertise 192.0.2.{suffix}\n")
                 with (work / f"{node}.log").open("w") as log:
                     process = subprocess.Popen(["ip", "netns", "exec", f"{prefix}-{node}",
-                        str(REPO / "nhrp/opennhrp"), "-a", str(work / f"{node}.sock"),
+                        str(REPO / "build/nhrp/opennhrp"), "-a", str(work / f"{node}.sock"),
                         "-H", str(state), "-c", str(config), "-s", "/bin/true", "-p", str(work / f"{node}.pid"), "-v"],
                         stdout=log, stderr=log, start_new_session=True)
                 processes.append(process)

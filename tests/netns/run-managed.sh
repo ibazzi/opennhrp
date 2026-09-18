@@ -8,7 +8,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-bin_dir="$repo_dir/nhrp"
+bin_dir="$repo_dir/build/nhrp"
 runtime_dir=$(mktemp -d /tmp/opennhrp-ha-managed-netns.XXXXXX)
 hub1_ns=onhrp-mha-hub1
 hub2_ns=onhrp-mha-hub2

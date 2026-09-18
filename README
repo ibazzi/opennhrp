@@ -47,52 +47,9 @@ This should work with the configuration example in opennhrp.conf(5).
 
 	IPSEC ENCRYPTION OF GRE PACKETS
 
-ipsec-tools 0.8.0 or later is recommended. Earlier versions need patching
-for dmvpn to work properly.
-
-The ipsec-tools configuration I prefer to use is: encrypt all GRE
-traffic in transport mode. IPsec policy for that should be defined in
-/etc/ipsec.conf:
-	spdflush;
-	spdadd 0.0.0.0/0 0.0.0.0/0 gre -P out ipsec esp/transport//require;
-	spdadd 0.0.0.0/0 0.0.0.0/0 gre -P in  ipsec esp/transport//require;
-
-And ipsec-tools configuration with pre-shared key could look something
-like this:
-
-/etc/racoon/racoon.conf:
-	path pre_shared_key "/etc/racoon/psk.txt";
-	remote anonymous {
-		exchange_mode aggressive;
-		lifetime time 24 hour;
-		my_identifier user_fqdn "my-user-name@my-domain.example";
-		nat_traversal on;
-		# For ipsec-tools snapshot 2010-10-10 or later
-		script "/etc/opennhrp/racoon-ph1dead.sh" phase1_dead;
-		# For earlier ipsec-tools
-		# script "/etc/opennhrp/racoon-ph1down.sh" phase1_down;
-		proposal {
-			encryption_algorithm 3des;
-			hash_algorithm sha1;
-			authentication_method pre_shared_key;
-			dh_group 2;
-		}        
-	}
-	sainfo anonymous {
-		pfs_group 2;
-		lifetime time 12 hour;
-		encryption_algorithm 3des, blowfish 448, rijndael;
-		authentication_algorithm hmac_sha1, hmac_md5;
-		compression_algorithm deflate;
-	}
-
-And /etc/racoon/psk.txt:
-	my-user-name@my-domain.example	"my-secret-pre-shared-key"
-
-It is of course more secure to use certificates for authentication.
-And using aggressive main mode is not recommended either, but it is
-required to make FQDN pre-shared authentication work. This setup is
-fast to do and can get you started with testing OpenNHRP.
+Configure GRE encryption separately with your IPsec implementation.
+The installed opennhrp-script handles NHRP route events and invokes
+/etc/opennhrp/user-script when that file is executable.
 
 	DOCUMENTATION
 

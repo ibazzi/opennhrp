@@ -1,13 +1,17 @@
 progs-y			+= opennhrp
-opennhrp-objs		+= libev.o opennhrp.o nhrp_address.o nhrp_packet.o \
-			   nhrp_peer.o nhrp_server.o nhrp_interface.o admin.o \
-			   nhrp_extension.o nhrp_ha_wire.o nhrp_ha_auth.o \
-			   nhrp_ha_seen.o nhrp_ha_managed.o \
-			   nhrp_ha_hub.o nhrp_ha.o \
-			   sysdep_netlink.o sysdep_pfpacket.o \
-			   sysdep_syslog.o
+opennhrp-objs		+= platform/libev.o opennhrp.o \
+			   opennhrp_ha_process.o core/nhrp_address.o \
+			   core/nhrp_packet.o core/nhrp_peer.o \
+			   core/nhrp_peer_cache.o core/nhrp_server.o \
+			   core/nhrp_interface.o admin.o \
+			   core/nhrp_extension.o ha/nhrp_ha_wire.o \
+			   ha/nhrp_ha_auth.o ha/nhrp_ha_seen.o \
+			   ha/nhrp_ha_managed.o ha/nhrp_ha_hub.o \
+			   ha/nhrp_ha.o platform/sysdep_netlink.o \
+			   platform/sysdep_pfpacket.o platform/sysdep_syslog.o
 
-CFLAGS_libev.o		+= -Wno-unused -Wno-comment -Wno-parentheses
+CFLAGS_libev.o		+= -Wno-unused -Wno-comment -Wno-parentheses \
+			   -Wno-unused-result
 CFLAGS_opennhrp.o	+= -DOPENNHRP_VERSION=\"$(FULL_VERSION)\" \
 			   -DOPENNHRP_ADMIN_SOCKET=\"$(STATEDIR)/opennhrp.socket\"
 LIBS_opennhrp		+= -lm -lcrypto
@@ -19,20 +23,24 @@ LIBS_opennhrp  		+= -lcares
 endif
 
 progs-y			+= opennhrpctl
-opennhrpctl-objs	+= opennhrpctl.o nhrp_ha_auth.o nhrp_ha_managed.o \
-			   nhrp_ha_join.o nhrp_ha_seen.o nhrp_ha_control.o \
-			   nhrp_ha_store.o
+opennhrpctl-objs	+= opennhrpctl.o ha/nhrp_ha_auth.o \
+			   ha/nhrp_ha_managed.o ha/nhrp_ha_join.o \
+			   ha/nhrp_ha_seen.o ha/nhrp_ha_control.o \
+			   ha/nhrp_ha_store.o
 CFLAGS_opennhrpctl.o	+= $(CFLAGS_opennhrp.o)
 LIBS_opennhrpctl	+= -lcrypto
 
 progs-y			+= opennhrp-ha
-opennhrp-ha-objs	+= opennhrp-ha.o nhrp_ha_auth.o nhrp_ha_control.o \
-			   nhrp_ha_store.o nhrp_ha_managed.o nhrp_ha_join.o \
-			   nhrp_ha_failback.o opennhrp-ha-managed-hub.o
-opennhrp-ha-objs	+= nhrp_ha_delta.o
+opennhrp-ha-objs	+= opennhrp-ha.o ha/nhrp_ha_auth.o \
+			   ha/nhrp_ha_control.o ha/nhrp_ha_store.o \
+			   ha/nhrp_ha_managed.o ha/nhrp_ha_join.o \
+			   ha/nhrp_ha_failback.o ha/opennhrp-ha-managed-hub.o \
+			   ha/nhrp_ha_delta.o
 LIBS_opennhrp-ha	+= -lcrypto
 
-CFLAGS_EXTRA		+= -I$(srctree)/include -Wno-strict-aliasing
+CFLAGS_EXTRA		+= -I$(srctree)/include -I$(srctree)/nhrp/core \
+			   -I$(srctree)/nhrp/ha -I$(srctree)/nhrp/platform \
+			   -Wno-strict-aliasing
 
 install:
 	$(INSTALLDIR) $(DESTDIR)$(SBINDIR)

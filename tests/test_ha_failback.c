@@ -1,4 +1,4 @@
-#include "../nhrp/nhrp_ha_failback.h"
+#include "../nhrp/ha/nhrp_ha_failback.h"
 
 #include <assert.h>
 #include <stdio.h>

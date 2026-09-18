@@ -1,5 +1,5 @@
---- a/nhrp/nhrp_common.h
-+++ b/nhrp/nhrp_common.h
+--- a/nhrp/core/nhrp_common.h
++++ b/nhrp/core/nhrp_common.h
 @@ -12,6 +12,7 @@
  #include <stdint.h>
  #include <stdlib.h>

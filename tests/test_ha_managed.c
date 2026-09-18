@@ -10,7 +10,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "../nhrp/nhrp_ha_managed.h"
+#include "../nhrp/ha/nhrp_ha_managed.h"
 
 int main(void) {
   char directory[] = "/tmp/opennhrp-ha-managed-test.XXXXXX";

@@ -359,12 +359,10 @@ static struct candidate_view *select_migration(struct service_view *view,
     return leader;
   }
   if (view->selection_manual) {
-    struct candidate_view *manual =
-        find_candidate(view, view->manual_member);
+    struct candidate_view *manual = find_candidate(view, view->manual_member);
 
     decision_reset_superior(state);
-    if (best->leader[0] == 0 ||
-        strcmp(best->leader, view->manual_leader) != 0)
+    if (best->leader[0] == 0 || strcmp(best->leader, view->manual_leader) != 0)
       return NULL;
     if (!candidate_usable(view, manual) || manual->term != best->term ||
         strcmp(manual->leader, view->manual_leader) != 0 || manual == active)

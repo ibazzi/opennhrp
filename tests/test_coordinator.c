@@ -224,13 +224,11 @@ int main(void) {
   candidate = select_migration(&view, &decision, 1.0, &reason);
   assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
   assert(strcmp(reason, "manual") == 0);
-  snprintf(view.active_member, sizeof(view.active_member), "%s",
-           "hub-backup1");
+  snprintf(view.active_member, sizeof(view.active_member), "%s", "hub-backup1");
   view.candidates[0].score = 100;
   view.candidates[1].score = 1;
   assert(select_migration(&view, &decision, 1000.0, &reason) == NULL);
-  snprintf(view.manual_member, sizeof(view.manual_member), "%s",
-           "hub-primary");
+  snprintf(view.manual_member, sizeof(view.manual_member), "%s", "hub-primary");
   snprintf(view.candidates[0].leader, sizeof(view.candidates[0].leader), "%s",
            "hub-backup1");
   snprintf(view.candidates[1].leader, sizeof(view.candidates[1].leader), "%s",
@@ -243,16 +241,14 @@ int main(void) {
   candidate = select_migration(&view, &decision, 1002.0, &reason);
   assert(candidate != NULL && strcmp(candidate->member, "hub-primary") == 0);
   assert(strcmp(reason, "manual") == 0);
-  snprintf(view.active_member, sizeof(view.active_member), "%s",
-           "hub-primary");
+  snprintf(view.active_member, sizeof(view.active_member), "%s", "hub-primary");
   view.candidates[1].term = 21;
   snprintf(view.candidates[1].leader, sizeof(view.candidates[1].leader), "%s",
            "hub-backup1");
   candidate = select_migration(&view, &decision, 1003.0, &reason);
   assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
   assert(strcmp(reason, "stale-term") == 0);
-  snprintf(view.active_member, sizeof(view.active_member), "%s",
-           "hub-backup1");
+  snprintf(view.active_member, sizeof(view.active_member), "%s", "hub-backup1");
   view.candidates[0].term = 22;
   view.candidates[1].term = 22;
   snprintf(view.candidates[0].leader, sizeof(view.candidates[0].leader), "%s",

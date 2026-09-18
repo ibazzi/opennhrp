@@ -41,7 +41,7 @@ def main():
             raise AssertionError("condition timed out")
 
         def ctl(node):
-            output = run(REPO / "nhrp/opennhrpctl", "-a", work / f"{node}.sock", "show")
+            output = run(REPO / "build/nhrp/opennhrpctl", "-a", work / f"{node}.sock", "show")
             assert "Status: failed" not in output, output
             return output
 
@@ -50,7 +50,7 @@ def main():
             socket_path.unlink(missing_ok=True)
             log = (work / f"{node}.log").open("a")
             process = subprocess.Popen(
-                ["ip", "netns", "exec", f"{prefix}-{node}", str(REPO / "nhrp/opennhrp"),
+                ["ip", "netns", "exec", f"{prefix}-{node}", str(REPO / "build/nhrp/opennhrp"),
                  "-a", str(socket_path), "-H", str(work / f"{node}-state"),
                  "-c", str(work / f"{node}.conf"), "-s", str(work / "script"),
                  "-p", str(work / f"{node}.pid"), "-v"],

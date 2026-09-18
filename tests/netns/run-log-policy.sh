@@ -17,7 +17,7 @@ ordinary-default | ha-default | ha-verbose) ;;
 esac
 
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-bin_dir="$repo_dir/nhrp"
+bin_dir="$repo_dir/build/nhrp"
 runtime_dir=$(mktemp -d /tmp/opennhrp-log-policy.XXXXXX)
 hub_ns=onhrp-log-hub
 spoke_ns=onhrp-log-spoke

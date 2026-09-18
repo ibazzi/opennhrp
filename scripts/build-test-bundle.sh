@@ -20,18 +20,18 @@ make -C "$repo_dir" test
 make -C "$repo_dir" check-format
 
 install -d "$bundle_dir/bin" "$bundle_dir/lib" "$bundle_dir/config"
-install -m 0755 "$repo_dir/nhrp/opennhrp" "$bundle_dir/bin/opennhrp.bin"
-install -m 0755 "$repo_dir/nhrp/opennhrpctl" "$bundle_dir/bin/opennhrpctl"
-install -m 0755 "$repo_dir/nhrp/opennhrp-ha" "$bundle_dir/bin/opennhrp-ha.bin"
+install -m 0755 "$repo_dir/build/nhrp/opennhrp" "$bundle_dir/bin/opennhrp.bin"
+install -m 0755 "$repo_dir/build/nhrp/opennhrpctl" "$bundle_dir/bin/opennhrpctl"
+install -m 0755 "$repo_dir/build/nhrp/opennhrp-ha" "$bundle_dir/bin/opennhrp-ha.bin"
 
-cares_path=$(ldd "$repo_dir/nhrp/opennhrp" | awk '$1 == "libcares.so.2" { print $3 }')
+cares_path=$(ldd "$repo_dir/build/nhrp/opennhrp" | awk '$1 == "libcares.so.2" { print $3 }')
 if [ -z "$cares_path" ] || [ ! -f "$cares_path" ]; then
 	echo "unable to locate libcares.so.2" >&2
 	exit 1
 fi
 install -m 0755 "$cares_path" "$bundle_dir/lib/libcares.so.2"
 
-crypto_path=$(ldd "$repo_dir/nhrp/opennhrp-ha" | awk '$1 == "libcrypto.so.3" { print $3 }')
+crypto_path=$(ldd "$repo_dir/build/nhrp/opennhrp-ha" | awk '$1 == "libcrypto.so.3" { print $3 }')
 if [ -z "$crypto_path" ] || [ ! -f "$crypto_path" ]; then
 	echo "unable to locate libcrypto.so.3" >&2
 	exit 1

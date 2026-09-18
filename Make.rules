@@ -40,7 +40,7 @@ export quiet Q VERBOSE
 ##
 # Recursion helpers.
 srctree		:= $(CURDIR)
-objtree		:= $(CURDIR)
+objtree		:= $(CURDIR)/build
 
 export srctree objtree
 
@@ -92,7 +92,7 @@ src		:=
 obj		:=
 
 src		+= $(build)
-obj		:= $(build)
+obj		:= $(objtree)/$(build)
 
 ##
 # Include directory specific stuff
@@ -185,6 +185,7 @@ quiet_cmd_cc_o_c = CC      $@
 cmd_cc_o_c = $(CC) $(c_flags) -c -o $@ $<
 
 define rule_cc_o_c
+	$(INSTALLDIR) $(dir $@); \
 	$(call echo-cmd,cc_o_c) $(cmd_cc_o_c);		\
 	(echo 'cmd_$@ := $(call make-cmd,cc_o_c)'; echo; cat $(depfile)) \
 		> $(dot-target).cmd ; \
@@ -212,6 +213,7 @@ quiet_cmd_ld	= LD      $@
 $(__progs): override local-target-prereqs=$(addprefix $(obj)/,$($(*F)-objs))
 
 $(__progs): $(obj)/%: $(cobjs) FORCE
+	$(Q)$(INSTALLDIR) $(dir $@)
 	$(call if_changed,ld)
 
 targets += $(__progs) $(cobjs)

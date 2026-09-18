@@ -13,7 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "../nhrp/nhrp_ha_join.h"
+#include "../nhrp/ha/nhrp_ha_join.h"
 
 static void paths(const char *directory, char state[512], char keys[512],
                   char identity[512]) {
