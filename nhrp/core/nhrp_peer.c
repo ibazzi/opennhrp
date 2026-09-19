@@ -917,6 +917,12 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
     break;
   default:
     peer->registration_failed = TRUE;
+    /* A rejected private bootstrap can still advertise the public endpoint
+     * holding our NAT binding. Discovery validates the HA reply independently;
+     * it must not make this rejected registration usable. */
+    if (ec == NHRP_CODE_UNIQUE_ADDRESS_REGISTERED &&
+        nhrp_ha_handle_registration_discovery(peer, reply))
+      goto ret;
     nhrp_peer_schedule(peer, NHRP_RETRY_REGISTER_TIME,
                        nhrp_peer_send_register_cb);
     goto ret;

@@ -1360,9 +1360,15 @@ static void registration_reply(void *ctx, struct nhrp_packet *reply) {
     if (cie != NULL)
       code = cie->hdr.code;
   }
-  if (code != NHRP_CODE_SUCCESS)
+  if (code != NHRP_CODE_SUCCESS && code != NHRP_CODE_UNIQUE_ADDRESS_REGISTERED)
     goto failed;
-  if (has_hub_list && !hub_list_apply(candidate, &hub_list))
+  /* The validated Hub List remains useful even when this path conflicts
+   * with an existing NAT binding. It grants no registration ownership. */
+  if (has_hub_list && !hub_list_apply(candidate, &hub_list)) {
+    code = -1;
+    goto failed;
+  }
+  if (code != NHRP_CODE_SUCCESS)
     goto failed;
 
   memset(&candidate->nat_cie, 0, sizeof(candidate->nat_cie));
@@ -1417,8 +1423,21 @@ failed:
      * owner token for cleanup, but do not activate this rejected binding. */
     candidate->registered = FALSE;
     candidate->last_registration_reply = 0.0;
+    /* During discovery try other paths to the preserved binding. Once active,
+     * keep the existing endpoint failover policy: returning to the old path
+     * would renew its lease indefinitely and prevent recovery on the new one. */
+    if (candidate->service->active == NULL) {
+      /* A rejected bootstrap path is not a usable preferred endpoint. */
+      candidate->preferred_endpoint_valid = FALSE;
+      candidate_select_available_endpoint(candidate);
+      probe_schedule(candidate, 0.01);
+    }
     candidate_set_state(candidate, NHRP_HA_CANDIDATE_REGISTERING);
     registration_schedule(candidate, HA_REGISTRATION_RETRY);
+    if (candidate->service->active == NULL && candidate->bootstrap_anchor &&
+        candidate->service->hub_list_generation != 0 &&
+        coordinator_callback != NULL)
+      coordinator_callback(candidate->service->interface);
     return;
   }
   if (candidate->last_registration_reply == 0.0 ||
