@@ -146,6 +146,7 @@ int opennhrp_ha_process_reconfigure(void) {
   size_t target_count =
       nhrp_ha_hub_health_targets(health_targets, ARRAY_SIZE(health_targets));
   size_t used = strlen(command);
+  size_t socket_length;
   size_t i;
   int fd;
 
@@ -178,12 +179,12 @@ int opennhrp_ha_process_reconfigure(void) {
     return FALSE;
   memset(&address, 0, sizeof(address));
   address.sun_family = AF_UNIX;
-  if (strlen(nhrp_ha_control_socket) >= sizeof(address.sun_path)) {
+  socket_length = strlen(nhrp_ha_control_socket);
+  if (socket_length >= sizeof(address.sun_path)) {
     close(fd);
     return FALSE;
   }
-  snprintf(address.sun_path, sizeof(address.sun_path), "%s",
-           nhrp_ha_control_socket);
+  memcpy(address.sun_path, nhrp_ha_control_socket, socket_length + 1);
   if (connect(fd, (struct sockaddr *)&address, sizeof(address)) != 0 ||
       write(fd, command, used) != (ssize_t)used || shutdown(fd, SHUT_WR) != 0 ||
       read(fd, response, sizeof(response) - 1) <= 0) {
