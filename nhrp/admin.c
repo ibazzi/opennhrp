@@ -202,7 +202,7 @@ failed:
 
 void admin_ha_notify(struct nhrp_interface *iface) {
   struct admin_remote *remote, *next;
-  char buffer[16384];
+  char buffer[NHRP_HA_STATUS_BUFFER_SIZE];
   size_t length;
 
   list_for_each_entry_safe(remote, next, &ha_monitors, monitor_list_entry) {
@@ -840,7 +840,7 @@ static int admin_ha_parse_common(void *ctx, const char *cmd,
 
 static void admin_ha_show(void *ctx, const char *cmd) {
   char interface_name[16] = "";
-  char buffer[16384];
+  char buffer[NHRP_HA_STATUS_BUFFER_SIZE];
   int json = FALSE;
   size_t length;
 
@@ -854,7 +854,7 @@ static void admin_ha_show(void *ctx, const char *cmd) {
 
 static void admin_ha_monitor(void *ctx, const char *cmd) {
   struct admin_remote *remote = ctx;
-  char buffer[16384];
+  char buffer[NHRP_HA_STATUS_BUFFER_SIZE];
   int json = TRUE;
   size_t length;
 

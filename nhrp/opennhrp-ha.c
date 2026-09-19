@@ -15,7 +15,7 @@
 #include "nhrp_ha.h"
 #include "opennhrp-ha-managed-hub.h"
 
-#define BUFFER_SIZE 32768
+#define BUFFER_SIZE NHRP_HA_STATUS_BUFFER_SIZE
 #define SCORE_SWITCH_MARGIN 10
 #define SCORE_SWITCH_HOLD 15.0
 #define SCORE_FAILBACK_HOLD 120.0
@@ -23,6 +23,7 @@
 
 struct candidate_view {
   char member[64];
+  char selected_address[64];
   char state[32];
   char leader[64];
   int priority;
@@ -49,7 +50,17 @@ struct decision_state {
   char protocol[64];
   char active_member[64];
   int selection_manual;
+  uint64_t active_term;
+  char active_address[64];
   char superior_member[64];
+  char superior_address[64];
+  uint64_t superior_term;
+  double superior_hold;
+  const char *decision_reason;
+  char decision_target[64];
+  char logged_reason[32];
+  char logged_active[64];
+  char logged_target[64];
   double superior_since;
   double cooldown_until;
   int degraded;
@@ -57,6 +68,7 @@ struct decision_state {
 };
 
 static struct decision_state *decision_states;
+static int debug;
 
 static double monotonic_seconds(void) {
   struct timespec now;
@@ -205,6 +217,14 @@ static int parse_service(const char *line, struct service_view *view) {
                      sizeof(candidate->state)) ||
         !json_unsigned(position, "priority", &priority))
       return 0;
+    /* Optional for old monitor snapshots; never read into the next candidate. */
+    {
+      const char *address = strstr(position, "\"selected_address\":");
+      if (address != NULL && address < end &&
+          !json_string(position, "selected_address", candidate->selected_address,
+                       sizeof(candidate->selected_address)))
+        return 0;
+    }
     candidate->priority = priority > INT_MAX ? INT_MAX : (int)priority;
     candidate->ready = strstr(position, "\"ready\":true") != NULL &&
                        strstr(position, "\"ready\":true") < end;
@@ -306,6 +326,19 @@ static struct decision_state *decision_state_find(const char *protocol) {
 static void decision_reset_superior(struct decision_state *state) {
   state->superior_member[0] = 0;
   state->superior_since = 0.0;
+  state->superior_hold = 0.0;
+}
+
+static double migration_hold(const struct service_view *view,
+                             const struct candidate_view *active,
+                             const struct candidate_view *target) {
+  if (target == NULL || target == active || !target->ready ||
+      !candidate_usable(view, target) || target->term != active->term ||
+      target->score <= active->score)
+    return 0.0;
+  if (target->score - active->score >= SCORE_SWITCH_MARGIN)
+    return SCORE_SWITCH_HOLD;
+  return target->priority > active->priority ? SCORE_FAILBACK_HOLD : 0.0;
 }
 
 static struct candidate_view *select_migration(struct service_view *view,
@@ -316,28 +349,41 @@ static struct candidate_view *select_migration(struct service_view *view,
       view->active_member[0] != 0 ? find_candidate(view, view->active_member)
                                   : NULL;
   struct candidate_view *best = best_ready_candidate(view);
-  double hold = SCORE_SWITCH_HOLD;
+  double hold;
+  struct candidate_view *pending;
 
   *reason = NULL;
+  state->decision_reason = "no-eligible-target";
+  snprintf(state->decision_target, sizeof(state->decision_target), "%s",
+           best != NULL ? best->member : "");
   if (state->selection_manual != view->selection_manual) {
     state->selection_manual = view->selection_manual;
     state->cooldown_until = 0.0;
     decision_reset_superior(state);
   }
-  if (strcmp(state->active_member, view->active_member) != 0) {
+  if (strcmp(state->active_member, view->active_member) != 0 ||
+      (active != NULL && (state->active_term != active->term ||
+       strcmp(state->active_address, active->selected_address) != 0))) {
     snprintf(state->active_member, sizeof(state->active_member), "%s",
              view->active_member);
+    state->active_term = active != NULL ? active->term : 0;
+    snprintf(state->active_address, sizeof(state->active_address), "%s",
+             active != NULL ? active->selected_address : "");
     decision_reset_superior(state);
   }
   if (active == NULL) {
     decision_reset_superior(state);
-    if (best != NULL && initial_candidate_pending(view, best))
+    if (best != NULL && initial_candidate_pending(view, best)) {
+      state->decision_reason = "initial-wait";
       return NULL;
+    }
     if (best != NULL)
-      *reason = "initial";
+      state->decision_reason = *reason = "initial";
     return best;
   }
   if (best == NULL || active->term > best->term) {
+    if (best != NULL)
+      state->decision_reason = "term-blocked";
     decision_reset_superior(state);
     return NULL;
   }
@@ -346,46 +392,108 @@ static struct candidate_view *select_migration(struct service_view *view,
         best->leader[0] != 0 ? find_candidate(view, best->leader) : NULL;
 
     decision_reset_superior(state);
+    state->decision_reason = "term-blocked";
     if (leader == NULL || !leader->ready || leader->term != best->term ||
         (view->auth_required && !leader->authenticated))
       return NULL;
-    *reason = "stale-term";
+    snprintf(state->decision_target, sizeof(state->decision_target), "%s",
+             leader->member);
+    state->decision_reason = *reason = "stale-term";
     return leader;
   }
   if (view->selection_manual && active->score != 0) {
     struct candidate_view *manual = find_candidate(view, view->manual_member);
 
     decision_reset_superior(state);
+    state->decision_reason = "manual-selection";
+    snprintf(state->decision_target, sizeof(state->decision_target), "%s",
+             view->manual_member);
     if (best->leader[0] == 0 || strcmp(best->leader, view->manual_leader) != 0)
       return NULL;
     if (!candidate_usable(view, manual) || manual->term != best->term ||
         strcmp(manual->leader, view->manual_leader) != 0 || manual == active)
       return NULL;
-    *reason = "manual";
+    state->decision_reason = *reason = "manual";
     return manual;
   }
-  if (best == active || now < state->cooldown_until ||
-      best->score <= active->score) {
+  if (now < state->cooldown_until) {
+    state->decision_reason = "cooldown";
     decision_reset_superior(state);
     return NULL;
   }
-  if (best->score < active->score + SCORE_SWITCH_MARGIN) {
-    if (best->priority <= active->priority) {
-      decision_reset_superior(state);
+  pending = find_candidate(view, state->superior_member);
+  if (migration_hold(view, active, pending) != 0.0) {
+    best = pending;
+  } else {
+    size_t i;
+    decision_reset_superior(state);
+    /* Rank only candidates that can actually satisfy a migration condition. */
+    pending = NULL;
+    for (i = 0; i < view->candidate_count; i++) {
+      struct candidate_view *candidate = &view->candidates[i];
+      if (migration_hold(view, active, candidate) == 0.0)
+        continue;
+      if (pending == NULL || candidate->score > pending->score ||
+          (candidate->score == pending->score &&
+           (candidate->priority > pending->priority ||
+            (candidate->priority == pending->priority &&
+             strcmp(candidate->member, pending->member) < 0))))
+        pending = candidate;
+    }
+    if (pending == NULL) {
+      state->decision_reason = best == active ? "current-best" : "margin-small";
       return NULL;
     }
-    hold = SCORE_FAILBACK_HOLD;
+    best = pending;
   }
-  if (strcmp(state->superior_member, best->member) != 0) {
+  hold = migration_hold(view, active, best);
+  snprintf(state->decision_target, sizeof(state->decision_target), "%s",
+           best->member);
+  state->decision_reason = hold == SCORE_FAILBACK_HOLD ? "failback-wait"
+                                                       : "quality-wait";
+  if (strcmp(state->superior_member, best->member) != 0 ||
+      strcmp(state->superior_address, best->selected_address) != 0 ||
+      state->superior_term != best->term || state->superior_hold != hold) {
     snprintf(state->superior_member, sizeof(state->superior_member), "%s",
              best->member);
+    snprintf(state->superior_address, sizeof(state->superior_address), "%s",
+             best->selected_address);
+    state->superior_term = best->term;
+    state->superior_hold = hold;
     state->superior_since = now;
     return NULL;
   }
   if (now - state->superior_since < hold)
     return NULL;
-  *reason = hold == SCORE_FAILBACK_HOLD ? "failback" : "quality";
+  state->decision_reason = *reason =
+      hold == SCORE_FAILBACK_HOLD ? "failback" : "quality";
   return best;
+}
+
+static void log_decision(FILE *output, struct service_view *view,
+                         struct decision_state *state, double now) {
+  struct candidate_view *active = find_candidate(view, view->active_member);
+  struct candidate_view *target = find_candidate(view, state->decision_target);
+
+  if (!debug || state->decision_reason == NULL ||
+      (strcmp(state->logged_reason, state->decision_reason) == 0 &&
+       strcmp(state->logged_active, view->active_member) == 0 &&
+       strcmp(state->logged_target, state->decision_target) == 0))
+    return;
+  snprintf(state->logged_reason, sizeof(state->logged_reason), "%s",
+           state->decision_reason);
+  snprintf(state->logged_active, sizeof(state->logged_active), "%s",
+           view->active_member);
+  snprintf(state->logged_target, sizeof(state->logged_target), "%s",
+           state->decision_target);
+  fprintf(output, "opennhrp-ha: DEBUG decision protocol=%s active=%s target=%s "
+          "score=%u/%u reason=%s held=%.3f cooldown=%.3f\n",
+          view->protocol, active != NULL ? active->member : "none",
+          target != NULL ? target->member : "none",
+          active != NULL ? active->score : 0, target != NULL ? target->score : 0,
+          state->decision_reason,
+          state->superior_member[0] ? now - state->superior_since : 0.0,
+          state->cooldown_until > now ? state->cooldown_until - now : 0.0);
 }
 
 static int activate(const char *socket_path, const char *interface_name,
@@ -461,6 +569,7 @@ static void process_event(const char *socket_path, const char *interface_name,
                ? find_candidate(&view, view.active_member)
                : NULL;
   target = select_migration(&view, state, now, &reason);
+  log_decision(stderr, &view, state, now);
   if (target != NULL) {
     if (activate(socket_path, interface_name, &view, active, target, reason) !=
         0)
@@ -474,7 +583,7 @@ static void process_event(const char *socket_path, const char *interface_name,
   if (best_ready_candidate(&view) == NULL) {
     size_t i;
 
-    if (view.auth_required) {
+    if (view.auth_required && debug && !state->degraded) {
       for (i = 0; i < view.candidate_count; i++)
         fprintf(stderr,
                 "opennhrp-ha: candidate %s ready=%d authenticated=%d "
@@ -542,7 +651,7 @@ static int monitor_once(const char *socket_path, const char *interface_name) {
 
 static int usage(const char *program) {
   fprintf(stderr,
-          "usage: %s [-a admin-socket] -i interface\n"
+          "usage: %s [-v] [-a admin-socket] -i interface\n"
           "       %s hub [--state-dir DIR] [-a admin-socket]\n"
           "       %s -h\n",
           program, program, program);
@@ -557,13 +666,16 @@ int main(int argc, char **argv) {
   if (argc > 1 && strcmp(argv[1], "hub") == 0)
     return opennhrp_ha_managed_hub_main(argc - 1, argv + 1);
 
-  while ((option = getopt(argc, argv, "a:i:h")) != -1) {
+  while ((option = getopt(argc, argv, "a:i:vh")) != -1) {
     switch (option) {
     case 'a':
       socket_path = optarg;
       break;
     case 'i':
       interface_name = optarg;
+      break;
+    case 'v':
+      debug = 1;
       break;
     case 'h':
     default:

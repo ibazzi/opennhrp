@@ -133,13 +133,34 @@ Leader 会在认证成功后把 Hub TCP 实际源地址作为 observed endpoint�
 先保持隔离，连接 active 成员并学习当前 term/Leader 后才重新投影注册。
 
 每个 Spoke 独立探测各候选 Hub，并按各自当前选中 endpoint 的链路质量评分。
-丢包使用 `α=1/8` 的 EWMA，分数固定为：
+质量统计只保留当前选中 endpoint 的已完成探测。`loss_pct` 是近期探测失败率，
+包含超时和无效回复，不等于纯物理丢包率：使用 30 个一秒桶，保留当前秒及前
+29 秒，以总失败数除以总完成数；空桶不补样本，读取时也淘汰过期桶。
+30 秒窗口降低单次失败的影响，也会让持续退化的评分变化更平缓。
+
+评分用 RTT 独立按时间平滑：`α = 1 - exp(-Δt / 2秒)`，
+`R = R + α * (sample - R)`。首个样本或超过 30 秒无有效回复后重新初始化。
+原有 `SRTT = 0.875 * SRTT + 0.125 * sample`、RTTVAR、RTO 和探测调度
+继续用于故障检测；主用、备用的超时标准仍不同。切换主备角色不清空质量历史，
+端点变化及质量重置会清空。窗口无样本或最近有效 RTT 超过 30 秒时总分为 0。
+延时评分采用
+[RFC 9616 第 4 节](https://www.rfc-editor.org/rfc/rfc9616.html#section-4)
+的有界代价映射，使用其推荐的 10ms、120ms 区间，映射为高分优先的 0～30 分：
 
 ```text
-60 * max(0, 1 - loss_pct / 30)
-+ 30 * max(0, 1 - srtt_ms / 300)
+latency_score = 30                         (quality_rtt_ms <= 10)
+              30 * (120 - quality_rtt_ms) / 110   (10 < quality_rtt_ms < 120)
+              0                          (quality_rtt_ms >= 120)
+
+score = 60 * max(0, 1 - loss_pct / 30)
++ latency_score
 + 10 * min(priority, 100) / 100
 ```
+
+总分最后统一四舍五入。10ms 以下及 120ms 以上分别属于同一延时档位；
+不维护历史固有延时基线，不额外惩罚相对涨幅。继续使用 OpenNHRP 探测，
+不引入 Babel 报文或路由通告。总分权重及以下迁移门槛属于本项目策略，
+不是 RFC 9616 规定的参数。
 
 不可服务、选中 endpoint 不可达或认证失败的候选得 0 分；当前 Hub 的注册
 实际失效时同样得 0 分。备用 Hub 无需预先注册即可参与评分，只有实际迁移时
@@ -149,10 +170,27 @@ Hub 的可服务状态。注册回复不覆盖探测得到的可服务状态。
 
 相同最高 term 内，目标高出当前 Hub 至少 10 分并持续 15 秒后迁移；迁移后冷却
 30 秒。当前 Hub 为 0 分、Hub 明确不可服务、其他 Hub 恢复可用均遵守这些规则。
-优势不再满足时重新计时。较高优先级候选以不足 10 分的优势回切需要持续 120 秒。
+等待期间固定仍合格的目标，不因另一备用短暂领先而重置；目标失去资格或优势时
+重新选择并计时。当前成员、当前或目标端点、相关任期变化也重新计时。
+较高优先级候选以不足 10 分的优势回切需要持续 120 秒；质量迁移与优先级回切
+互转时重新计时，不借用另一类别的等待时间。
 无合格目标时保留当前选择并继续探测。任期保护、带 owner 版本证据的接管和
 显式手动切换独立保留；手动选择的 Hub 不可用时，也通过评分规则选择备用。
 实际迁移负责目标注册和旧 owner 清理，同一 Hub 的 endpoint 更换仍需相应注册。
+
+JSON 和文本状态同时提供评分 RTT、窗口完成数与失败数、最近有效回复年龄、
+测量有效性和未舍入的分项分数：`quality_rtt_ms`、`quality_samples`、
+`quality_failures`、`last_quality_reply_age_ms`、`quality_valid`、`loss_score`、
+`latency_score`、`priority_score`。`srtt_ms` 仍用于超时估计；没有 RTT 或回复时间
+时对应新字段输出 `null`。无窗口样本时 `loss_pct` 输出 100，须结合
+`quality_valid=false` 区分测量不足。旧 RTT 可显示但失效后不计延时分；即使分项
+分数较高，可用性和认证限制仍可将最终 `score` 置零。
+
+启用核心 `-v` 会同时启用 Spoke 协调器 `-v`。DEBUG 决策日志仅在原因、当前成员
+或目标变化时记录，包含成员、分数、原因、等待时间和剩余冷却时间。
+原因包括 `no-eligible-target`、`current-best`、`margin-small`、`quality-wait`、
+`failback-wait`、`cooldown`、`manual-selection` 和 `term-blocked`；
+实际迁移成功、失败仍保留现有日志。不新增协调器状态同步接口。
 
 ## 5. 两 Hub Witness
 

@@ -11,6 +11,170 @@ int opennhrp_ha_managed_hub_main(int argc, char **argv) {
 #include "../nhrp/opennhrp-ha.c"
 #undef main
 
+static void test_latency_score(void) {
+  static const struct {
+    double rtt;
+    unsigned int score;
+  } cases[] = {
+      {-1.0, 100}, {0.0, 100}, {5.0, 100}, {9.9, 100}, {10.0, 100},
+      {10.1, 100}, {12.0, 99}, {30.0, 95}, {60.0, 86}, {65.0, 85},
+      {80.0, 81}, {118.0, 71}, {119.9, 70}, {120.0, 70},
+      {120.1, 70}, {300.0, 70},
+  };
+  unsigned int previous = 100;
+  size_t i;
+
+  for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    assert(nhrp_ha_quality_score(0.0, cases[i].rtt, 100) == cases[i].score);
+  for (i = 0; i <= 3000; i++) {
+    unsigned int score = nhrp_ha_quality_score(0.0, i / 10.0, 100);
+    assert(score >= 70 && score <= previous);
+    previous = score;
+  }
+  assert(nhrp_ha_quality_score(0.15, 65.0, 50) == 50);
+  /* Round the combined score, not the latency and priority separately. */
+  assert(nhrp_ha_quality_score(0.0, 30.0, 95) == 94);
+}
+
+static void test_latency_migration(void) {
+  struct service_view view = {0};
+  struct decision_state decision = {0};
+  const char *reason;
+  size_t i;
+
+  view.candidate_count = 2;
+  strcpy(view.active_member, "hub-a");
+  strcpy(view.candidates[0].member, "hub-a");
+  strcpy(view.candidates[1].member, "hub-b");
+  for (i = 0; i < 2; i++) {
+    view.candidates[i].ready = 1;
+    view.candidates[i].priority = 100;
+  }
+  view.candidates[1].score = nhrp_ha_quality_score(0.0, 30.0, 100);
+  view.candidates[0].score = nhrp_ha_quality_score(0.0, 60.0, 100);
+  assert(select_migration(&view, &decision, 1.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 200.0, &reason) == NULL);
+  assert(decision.superior_member[0] == 0);
+
+  view.candidates[0].score = nhrp_ha_quality_score(0.0, 80.0, 100);
+  assert(select_migration(&view, &decision, 201.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 215.9, &reason) == NULL);
+  /* A short spike or an interrupted advantage must restart the hold. */
+  view.candidates[0].score = nhrp_ha_quality_score(0.0, 60.0, 100);
+  assert(select_migration(&view, &decision, 216.0, &reason) == NULL);
+  assert(decision.superior_member[0] == 0);
+  view.candidates[0].score = nhrp_ha_quality_score(0.0, 80.0, 100);
+  assert(select_migration(&view, &decision, 217.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 231.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 232.0, &reason) ==
+         &view.candidates[1]);
+  assert(strcmp(reason, "quality") == 0);
+
+  strcpy(view.active_member, "hub-b");
+  decision.cooldown_until = 262.0;
+  view.candidates[0].score = nhrp_ha_quality_score(0.0, 10.0, 100);
+  view.candidates[1].score = nhrp_ha_quality_score(0.0, 80.0, 100);
+  assert(select_migration(&view, &decision, 261.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 262.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 276.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 277.0, &reason) ==
+         &view.candidates[0]);
+}
+
+static void test_sticky_target(void) {
+  struct service_view view = {0};
+  struct decision_state decision = {0};
+  const char *reason;
+  FILE *log = tmpfile();
+  long size;
+  int i;
+
+  assert(log != NULL);
+  view.candidate_count = 3;
+  view.auth_required = 1;
+  strcpy(view.active_member, "a");
+  for (i = 0; i < 3; i++) {
+    view.candidates[i].member[0] = 'a' + i;
+    view.candidates[i].ready = 1;
+    view.candidates[i].authenticated = 1;
+    view.candidates[i].priority = 100;
+    view.candidates[i].term = 1;
+    strcpy(view.candidates[i].selected_address, "192.0.2.1");
+  }
+  view.candidates[0].score = 70;
+  for (i = 1; i <= 15; i++) {
+    view.candidates[1].score = 91 - (i / 5) % 2;
+    view.candidates[2].score = 90 + (i / 5) % 2;
+    assert(select_migration(&view, &decision, i, &reason) == NULL);
+    assert(strcmp(decision.superior_member, "b") == 0);
+    assert(decision.superior_since == 1.0);
+    debug = 1;
+    log_decision(log, &view, &decision, i);
+  }
+  size = ftell(log);
+  assert(size > 0);
+  log_decision(log, &view, &decision, 15.5);
+  assert(ftell(log) == size);
+  assert(select_migration(&view, &decision, 16.0, &reason) == &view.candidates[1]);
+  assert(strcmp(reason, "quality") == 0);
+  log_decision(log, &view, &decision, 16.0);
+  assert(ftell(log) > size);
+  size = ftell(log);
+  debug = 0;
+  decision.decision_reason = "cooldown";
+  log_decision(log, &view, &decision, 17.0);
+  assert(ftell(log) == size);
+  fclose(log);
+
+  /* Authentication loss drops the pinned target, then the endpoint resets it. */
+  view.candidates[1].authenticated = 0;
+  assert(select_migration(&view, &decision, 20.0, &reason) == NULL);
+  assert(strcmp(decision.superior_member, "c") == 0);
+  strcpy(view.candidates[2].selected_address, "192.0.2.2");
+  assert(select_migration(&view, &decision, 34.0, &reason) == NULL);
+  assert(decision.superior_since == 34.0);
+  assert(select_migration(&view, &decision, 48.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 49.0, &reason) == &view.candidates[2]);
+  view.candidates[2].ready = 0;
+  assert(select_migration(&view, &decision, 50.0, &reason) == NULL);
+  assert(decision.superior_member[0] == 0);
+  view.candidates[2].ready = 1;
+  assert(select_migration(&view, &decision, 51.0, &reason) == NULL);
+  view.candidates[0].term = view.candidates[2].term = 2;
+  assert(select_migration(&view, &decision, 60.0, &reason) == NULL);
+  assert(decision.superior_since == 60.0);
+  strcpy(view.candidates[0].selected_address, "192.0.2.3");
+  assert(select_migration(&view, &decision, 70.0, &reason) == NULL);
+  assert(decision.superior_since == 70.0);
+
+  /* Quality/failback transitions never borrow elapsed time from each other. */
+  view.candidates[0].priority = 90;
+  view.candidates[2].score = 75;
+  assert(select_migration(&view, &decision, 80.0, &reason) == NULL);
+  assert(decision.superior_since == 80.0);
+  assert(decision.superior_hold == SCORE_FAILBACK_HOLD);
+  view.candidates[2].score = 90;
+  assert(select_migration(&view, &decision, 190.0, &reason) == NULL);
+  assert(decision.superior_since == 190.0);
+  assert(decision.superior_hold == SCORE_SWITCH_HOLD);
+  assert(select_migration(&view, &decision, 204.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 205.0, &reason) == &view.candidates[2]);
+  view.candidates[2].score = 75;
+  assert(select_migration(&view, &decision, 206.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 325.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 326.0, &reason) == &view.candidates[2]);
+  assert(strcmp(reason, "failback") == 0);
+
+  /* A better-scored but ineligible challenger must not hide a valid failback. */
+  decision_reset_superior(&decision);
+  view.candidates[1].authenticated = 1;
+  view.candidates[1].term = 2;
+  view.candidates[1].priority = 90;
+  view.candidates[1].score = 79;
+  assert(select_migration(&view, &decision, 400.0, &reason) == NULL);
+  assert(strcmp(decision.superior_member, "c") == 0);
+}
+
 int main(void) {
   static const char event[] =
       "{\"event_sequence\":9,\"interface\":\"gre-ha\","
@@ -22,7 +186,7 @@ int main(void) {
       "\"ready\":false,\"active\":true,\"score\":0},"
       "{\"member\":\"hub-backup1\",\"nbma\":\"49.234.145.47\","
       "\"priority\":90,\"state\":\"ready\",\"registered\":true,"
-      "\"ready\":true,\"active\":false,\"score\":85}]}";
+      "\"ready\":true,\"active\":false,\"score\":85,\"selected_address\":\"192.0.2.2\"}]}";
   struct service_view view;
   struct candidate_view *candidate;
   struct decision_state decision = {0};
@@ -111,6 +275,8 @@ int main(void) {
   assert(view.generation == 3);
   assert(!view.switching);
   assert(view.candidate_count == 2);
+  assert(view.candidates[0].selected_address[0] == 0);
+  assert(strcmp(view.candidates[1].selected_address, "192.0.2.2") == 0);
   candidate = find_candidate(&view, "hub-primary");
   assert(candidate != NULL);
   assert(strcmp(candidate->state, "offline") == 0);
@@ -148,12 +314,11 @@ int main(void) {
 
   assert(nhrp_ha_quality_score(0.0, 0.0, 100) == 100);
   assert(nhrp_ha_quality_score(0.30, 300.0, 100) == 10);
-  assert(nhrp_ha_quality_score(0.15, 150.0, 50) == 50);
+  assert(nhrp_ha_quality_score(0.15, 150.0, 50) == 35);
   assert(nhrp_ha_quality_score(0.0, 0.0, 200) == 100);
-  assert(nhrp_ha_loss_ewma(0.0, 0, 0) == 0.0);
-  assert(nhrp_ha_loss_ewma(0.0, 0, 1) == 1.0);
-  assert(nhrp_ha_loss_ewma(1.0, 1, 0) == 0.875);
-  assert(nhrp_ha_loss_ewma(0.0, 1, 1) == 0.125);
+  test_latency_score();
+  test_latency_migration();
+  test_sticky_target();
 
   assert(parse_service(quality_event, &view));
   candidate = find_candidate(&view, "hub-primary");

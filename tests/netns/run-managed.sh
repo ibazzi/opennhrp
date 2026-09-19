@@ -939,13 +939,31 @@ active_candidate_ready() {
 
 degrade_spoke_primary() {
 	ip netns exec "$spoke_ns" tc qdisc replace dev u-spoke root \
-		handle 1: prio bands 3
+		handle 1: prio bands 4
 	ip netns exec "$spoke_ns" tc qdisc replace dev u-spoke parent 1:3 \
-		handle 30: netem delay 180ms loss 1%
+		handle 30: netem delay "${1:-180ms}" loss "${2:-1%}"
 	ip netns exec "$spoke_ns" tc filter replace dev u-spoke protocol ip \
 		parent 1: prio 1 u32 match ip dst "$hub1_underlay/32" flowid 1:3
 	ip netns exec "$spoke_ns" tc filter replace dev u-spoke protocol ip \
 		parent 1: prio 2 u32 match ip dst "$hub1_private_nbma/32" flowid 1:3
+}
+
+delay_spoke_backups() {
+	local operation=$1 first=$2 second=$3
+	ip netns exec "$spoke_ns" tc qdisc "$operation" dev u-spoke parent 1:2 \
+		handle 20: netem delay "$first"
+	ip netns exec "$spoke_ns" tc qdisc "$operation" dev u-spoke parent 1:4 \
+		handle 40: netem delay "$second"
+	if [[ $operation == add ]]; then
+		ip netns exec "$spoke_ns" tc filter add dev u-spoke protocol ip \
+			parent 1: prio 3 u32 match ip dst "$hub2_underlay/32" flowid 1:2
+		ip netns exec "$spoke_ns" tc filter add dev u-spoke protocol ip \
+			parent 1: prio 4 u32 match ip dst "$hub2_private_nbma/32" flowid 1:2
+		ip netns exec "$spoke_ns" tc filter add dev u-spoke protocol ip \
+			parent 1: prio 5 u32 match ip dst "$hub3_underlay/32" flowid 1:4
+		ip netns exec "$spoke_ns" tc filter add dev u-spoke protocol ip \
+			parent 1: prio 6 u32 match ip dst "$hub3_configured_nbma/32" flowid 1:4
+	fi
 }
 
 restore_spoke_primary() {
@@ -1043,6 +1061,11 @@ spoke_state=$(spoke_ha_show)
 grep -q '"member":"hub-primary"[^}]*"registered":true[^}]*"ready":true' <<<"$spoke_state"
 grep -q '"active_member":"hub-primary"' <<<"$spoke_state"
 
+# Start quality scenarios with a full clean measurement window, independent
+# of the preceding outage/restart tests.
+set_spoke_mode manual hub-primary
+sleep 31
+set_spoke_mode auto
 log "validating per-Spoke latency/loss scoring and migration hysteresis"
 degrade_spoke_primary
 sleep 3
@@ -1054,30 +1077,85 @@ grep -q '"active_member":"hub-primary"' <<<"$(private_spoke_ha_show)"
 restore_spoke_primary
 sleep 5
 
-ip netns exec "$spoke_ns" iptables -I OUTPUT -d "$hub1_underlay" \
-	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
-ip netns exec "$spoke_ns" iptables -I OUTPUT -d "$hub1_private_nbma" \
-	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
-for _ in {1..500}; do
+log "validating RFC 9616 delay-only migration and stability across probe rates"
+quality_log_offset=$(wc -c <"$runtime_dir/spoke.log")
+degrade_spoke_primary 80ms 0%
+delay_spoke_backups add 1ms 25ms
+for attempt in {1..1000}; do
+	if ((attempt % 100 == 0)); then
+		if (((attempt / 100) % 2)); then
+			delay_spoke_backups change 25ms 1ms
+		else
+			delay_spoke_backups change 1ms 25ms
+		fi
+	fi
 	spoke_state=$(spoke_ha_show)
-	if grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"; then
+	printf '%s\n' "$spoke_state" >>"$runtime_dir/spoke.competing.jsonl"
+	if grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state"; then
 		break
 	fi
 	sleep 0.05
 done
-grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
+grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state"
+quality_member=$(grep -o '"active_member":"[^"]*' <<<"$spoke_state" | cut -d'"' -f4)
+quality_role=hub2
+[[ $quality_member == hub-backup2 ]] && quality_role=hub3
 grep -q '"active_member":"hub-primary"' <<<"$(private_spoke_ha_show)"
 grep -q '"leader":"hub-primary"' <<<"$(hub_cluster hub1)"
+wait_single_spoke_owner "$quality_role" "$quality_member"
+delay_spoke_backups change 1ms 1ms
+# Observe beyond the 30-second cooldown, including the new standby probe rate.
+for _ in {1..35}; do
+	spoke_state=$(spoke_ha_show)
+	printf '%s\n' "$spoke_state" >>"$runtime_dir/spoke.latency-stable.jsonl"
+	grep -q '"active_member":"'"$quality_member"'"' <<<"$spoke_state"
+	grep -q '"switching":false' <<<"$spoke_state"
+	sleep 1
+done
+python3 - "$runtime_dir/spoke.latency-stable.jsonl" "$runtime_dir/spoke.competing.jsonl" "$runtime_dir/spoke.log" "$quality_log_offset" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1]) as stream:
+    state = json.loads(list(stream)[-1])
+with open(sys.argv[2]) as stream:
+    competing = [json.loads(line) for line in stream if line.startswith("{")]
+winners = set()
+for snapshot in competing:
+    backups = [c for c in snapshot["candidates"] if c["member"].startswith("hub-backup")]
+    winners.add(max(backups, key=lambda c: (c["score"], c["priority"]))["member"])
+assert winners == {"hub-backup1", "hub-backup2"}, winners
+with open(sys.argv[3]) as stream:
+    stream.seek(int(sys.argv[4]))
+    decisions = stream.read()
+waiting = re.findall(r"active=hub-primary target=(hub-backup[12]).*reason=quality-wait", decisions)
+assert waiting and len(set(waiting)) == 1, decisions
+assert competing[-1]["active_member"] == waiting[0], decisions
+assert f"migrated hub-primary -> {waiting[0]} reason=quality" in decisions, decisions
+primary = next(c for c in state["candidates"] if c["member"] == "hub-primary")
+assert 70 <= primary["quality_rtt_ms"] <= 110, primary
+assert primary["loss_pct"] < 1, primary
+for candidate in state["candidates"]:
+    if not candidate["ready"]:
+        continue
+    assert candidate["quality_valid"] and candidate["quality_samples"] > 0, candidate
+    assert candidate["last_quality_reply_age_ms"] < 3000, candidate
+    latency = 30 * max(0, min(1, (120 - candidate["quality_rtt_ms"]) / 110))
+    expected = int(60 * max(0, 1 - candidate["loss_pct"] / 30)
+                   + latency + min(candidate["priority"], 100) / 10 + 0.5)
+    # JSON rounds RTT/loss to three decimals; allow a rounding-boundary point.
+    assert abs(candidate["score"] - expected) <= 1, candidate
+    assert abs(candidate["latency_score"] - latency) < 0.01, candidate
+    assert abs(candidate["loss_pct"] - 100 * candidate["quality_failures"] /
+               candidate["quality_samples"]) < 0.001, candidate
+print("Competing backups retained target; delay-only migration stable beyond cooldown")
+PY
 restore_spoke_primary
-ip netns exec "$spoke_ns" iptables -D OUTPUT -d "$hub1_private_nbma" \
-	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
-ip netns exec "$spoke_ns" iptables -D OUTPUT -d "$hub1_underlay" \
-	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
-wait_single_spoke_owner hub2 hub-backup1
 # Let the active Follower refresh once before switching back.  Its exact
 # registration token must remain releasable even if its owner version advances.
 sleep 22
-grep -q '"active_member":"hub-backup1"' <<<"$(spoke_ha_show)"
+grep -q '"active_member":"'"$quality_member"'"' <<<"$(spoke_ha_show)"
 activate_spoke_member hub-primary
 for _ in {1..300}; do
 	spoke_state=$(spoke_ha_show)

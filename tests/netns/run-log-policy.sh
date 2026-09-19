@@ -228,7 +228,9 @@ elif [[ $mode == ha-default ]]; then
 		"Received HA Resolution Probe") -eq 0 ]]
 	[[ $(count_log "$runtime_dir/spoke.log" \
 		"HA candidate hub-primary") -eq $state_lines ]]
+	[[ $(count_log "$runtime_dir/spoke.log" "DEBUG decision") -eq 0 ]]
 else
+	wait_log "$runtime_dir/spoke.log" "DEBUG decision"
 	wait_log "$runtime_dir/hub.log" "Received HA Registration Request"
 	wait_log "$runtime_dir/hub.log" "Sending HA Registration Reply"
 	wait_log "$runtime_dir/hub.log" "Received HA Resolution Probe"

@@ -32,6 +32,8 @@
 #define HA_STANDBY_PROBE_INTERVAL 0.50
 #define HA_ACTIVE_MIN_RTO 0.25
 #define HA_STANDBY_MIN_RTO 0.75
+#define HA_QUALITY_WINDOW 30
+#define HA_QUALITY_RTT_TAU 2.0
 #define HA_SELECTION_MAGIC "NHSL"
 #define HA_SELECTION_VERSION 1
 
@@ -46,6 +48,21 @@ enum nhrp_ha_candidate_state {
 };
 
 struct nhrp_ha_service;
+
+struct nhrp_ha_quality_bucket {
+  uint64_t second;
+  unsigned int samples;
+  unsigned int failures;
+};
+
+struct nhrp_ha_quality {
+  struct nhrp_ha_quality_bucket buckets[HA_QUALITY_WINDOW];
+  unsigned int samples;
+  unsigned int failures;
+  int has_rtt;
+  double rtt;
+  double last_reply;
+};
 
 struct nhrp_ha_candidate {
   struct list_head list_entry;
@@ -90,8 +107,7 @@ struct nhrp_ha_candidate {
   double srtt;
   double rttvar;
   double rto;
-  double loss_ewma;
-  unsigned int quality_samples;
+  struct nhrp_ha_quality quality;
   unsigned int consecutive_misses;
   int auth_valid;
   uint8_t auth_key_id[NHRP_HA_AUTH_KEY_ID_SIZE];
@@ -825,8 +841,7 @@ static void candidate_reset_quality(struct nhrp_ha_candidate *candidate) {
   candidate->rttvar = 0.0;
   candidate->rto = candidate->service->active == candidate ? HA_ACTIVE_MIN_RTO
                                                            : HA_STANDBY_MIN_RTO;
-  candidate->loss_ewma = 0.0;
-  candidate->quality_samples = 0;
+  memset(&candidate->quality, 0, sizeof(candidate->quality));
 }
 
 static void candidate_set_single_endpoint(struct nhrp_ha_candidate *candidate,
@@ -1718,13 +1733,54 @@ static void candidate_record_rtt(struct nhrp_ha_candidate *candidate,
     candidate->rto = 2.0;
 }
 
-static void candidate_record_loss(struct nhrp_ha_candidate *candidate,
-                                  int missed) {
+static void quality_expire(struct nhrp_ha_quality *quality, double now) {
+  uint64_t second = (uint64_t)now;
+  size_t i;
+
+  quality->samples = quality->failures = 0;
+  for (i = 0; i < HA_QUALITY_WINDOW; i++) {
+    struct nhrp_ha_quality_bucket *bucket = &quality->buckets[i];
+    if (bucket->second > second || second - bucket->second >= HA_QUALITY_WINDOW)
+      memset(bucket, 0, sizeof(*bucket));
+    quality->samples += bucket->samples;
+    quality->failures += bucket->failures;
+  }
+}
+
+static void quality_record(struct nhrp_ha_quality *quality, double now,
+                           int missed, double sample) {
+  uint64_t second;
+  struct nhrp_ha_quality_bucket *bucket;
+
+  if (!isfinite(now) || now < 0.0 ||
+      (!missed && (!isfinite(sample) || sample < 0.0)))
+    return;
+  quality_expire(quality, now);
+  second = (uint64_t)now;
+  bucket = &quality->buckets[second % HA_QUALITY_WINDOW];
+  bucket->second = second;
+  bucket->samples++;
+  bucket->failures += !!missed;
+  quality->samples++;
+  quality->failures += !!missed;
+  if (!missed) {
+    double elapsed = now - quality->last_reply;
+    if (!quality->has_rtt || elapsed > HA_QUALITY_WINDOW || elapsed < 0.0)
+      quality->rtt = sample;
+    else
+      quality->rtt += -expm1(-elapsed / HA_QUALITY_RTT_TAU) *
+                      (sample - quality->rtt);
+    quality->has_rtt = TRUE;
+    quality->last_reply = now;
+  }
+}
+
+static void candidate_record_quality(struct nhrp_ha_candidate *candidate,
+                                     int missed, double sample) {
   ev_tstamp now = ev_now();
 
-  candidate->loss_ewma = nhrp_ha_loss_ewma(
-      candidate->loss_ewma, candidate->quality_samples != 0, missed);
-  candidate->quality_samples++;
+  quality_record(&candidate->quality, monotonic_nanoseconds() / 1e9,
+                 missed, sample);
   if (candidate->service->last_quality_event == 0.0 ||
       now - candidate->service->last_quality_event >= 1.0) {
     candidate->service->last_quality_event = now;
@@ -1798,6 +1854,14 @@ static void candidate_probe_missed(struct nhrp_ha_candidate *candidate) {
   }
 }
 
+static int probe_request_current(const struct nhrp_ha_probe_request *request) {
+  const struct nhrp_ha_candidate *candidate = request->candidate;
+  return request->endpoint_generation == candidate->endpoint_generation &&
+         request->sequence == candidate->probe_sequence &&
+         request->generation == candidate->probe_generation &&
+         request->nonce == candidate->probe_nonce && candidate->probe_pending;
+}
+
 static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   struct nhrp_ha_probe_request *request = ctx;
   struct nhrp_ha_candidate *candidate = request->candidate;
@@ -1816,14 +1880,14 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   uint64_t takeover_term;
   uint64_t takeover_index;
   uint64_t previous_commit;
+  double sample = ev_now() - request->sent;
 
-  if (request->endpoint_generation != candidate->endpoint_generation ||
-      request->sequence != candidate->probe_sequence ||
-      request->generation != candidate->probe_generation ||
-      request->nonce != candidate->probe_nonce || !candidate->probe_pending) {
+  if (!probe_request_current(request)) {
     free(request);
     return;
   }
+  if (!isfinite(sample) || sample < 0.0)
+    goto missed;
   if (request->endpoint_index >= candidate->endpoint_count || reply == NULL ||
       reply->hdr.type != NHRP_PACKET_RESOLUTION_REPLY ||
       nhrp_address_cmp(&reply->src_linklayer_address,
@@ -1914,8 +1978,8 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
     return;
   }
   candidate->serviceable = serviceable;
-  candidate_record_rtt(candidate, ev_now() - request->sent);
-  candidate_record_loss(candidate, FALSE);
+  candidate_record_rtt(candidate, sample);
+  candidate_record_quality(candidate, FALSE, sample);
   candidate->consecutive_misses = 0;
   free(request);
   if (active != NULL && candidate != active && candidate->registered &&
@@ -1999,7 +2063,7 @@ missed:
     return;
   }
   free(request);
-  candidate_record_loss(candidate, TRUE);
+  candidate_record_quality(candidate, TRUE, 0.0);
   candidate_probe_missed(candidate);
   probe_schedule(candidate, candidate->service->active == candidate
                                 ? HA_ACTIVE_PROBE_INTERVAL
@@ -3519,6 +3583,42 @@ static int candidate_quality_eligible(const struct nhrp_ha_candidate *candidate)
          (profile == NULL || !profile->auth_required || candidate->auth_valid);
 }
 
+struct candidate_quality_view {
+  struct nhrp_ha_quality_score parts;
+  double loss_pct;
+  int valid;
+  unsigned int score;
+  char rtt_ms[48];
+  char reply_age_ms[48];
+};
+
+static struct candidate_quality_view
+candidate_quality_view(struct nhrp_ha_candidate *candidate, double now) {
+  struct nhrp_ha_quality *quality = &candidate->quality;
+  struct candidate_quality_view view = {0};
+  double loss;
+
+  quality_expire(quality, now);
+  loss = quality->samples ? (double)quality->failures / quality->samples : 1.0;
+  view.loss_pct = loss * 100.0;
+  view.valid = quality->samples != 0 && quality->has_rtt &&
+               now >= quality->last_reply &&
+               now - quality->last_reply <= HA_QUALITY_WINDOW;
+  view.parts = nhrp_ha_quality_parts(loss,
+      view.valid ? quality->rtt * 1000.0 : NHRP_HA_RTT_MAX_MS,
+      candidate->priority);
+  view.score = view.valid && candidate_quality_eligible(candidate)
+                   ? view.parts.total : 0;
+  strcpy(view.rtt_ms, "null");
+  strcpy(view.reply_age_ms, "null");
+  if (quality->has_rtt) {
+    snprintf(view.rtt_ms, sizeof(view.rtt_ms), "%.3f", quality->rtt * 1000.0);
+    snprintf(view.reply_age_ms, sizeof(view.reply_age_ms), "%.3f",
+             fmax(0.0, now - quality->last_reply) * 1000.0);
+  }
+  return view;
+}
+
 size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
                       int json) {
   struct nhrp_ha_service *service;
@@ -3622,8 +3722,8 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
         char candidate_key_id[NHRP_HA_AUTH_KEY_ID_SIZE * 2 + 1] = {0};
         char local_nbma[64] = {0};
         const char *local_origin = NULL;
-        int quality_eligible;
-        unsigned int score;
+        struct candidate_quality_view quality =
+            candidate_quality_view(candidate, monotonic_nanoseconds() / 1e9);
         const struct nhrp_address *local =
             candidate_local_nbma(candidate, &local_origin);
 
@@ -3631,12 +3731,6 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
           nhrp_ha_auth_key_id_format(candidate->auth_key_id, candidate_key_id);
         if (local != NULL)
           nhrp_address_format(local, sizeof(local_nbma), local_nbma);
-        quality_eligible = candidate_quality_eligible(candidate);
-        score = quality_eligible
-                    ? nhrp_ha_quality_score(candidate->loss_ewma,
-                                            candidate->srtt * 1000.0,
-                                            candidate->priority)
-                    : 0;
         for (endpoint = 0; endpoint < candidate->endpoint_count; endpoint++) {
           char address[64];
 
@@ -3663,6 +3757,10 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             "\"auth_key_id\":%s%s%s,\"term\":%llu,"
             "\"commit_index\":%llu,\"leader\":%s%s%s,"
             "\"srtt_ms\":%.3f,\"rto_ms\":%.3f,"
+            "\"quality_rtt_ms\":%s,\"quality_samples\":%u,"
+            "\"quality_failures\":%u,\"last_quality_reply_age_ms\":%s,"
+            "\"quality_valid\":%s,\"loss_score\":%.3f,"
+            "\"latency_score\":%.3f,\"priority_score\":%.3f,"
             "\"loss_pct\":%.3f,\"score\":%u}",
             first ? "" : ",", candidate->member_id, nbma, endpoints,
             endpoint_reachable, nbma, candidate->priority,
@@ -3676,7 +3774,8 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
                 : "dynamic",
             candidate_state_name(candidate->state),
             candidate->registered ? "true" : "false",
-            candidate->state == NHRP_HA_CANDIDATE_READY && quality_eligible
+            candidate->state == NHRP_HA_CANDIDATE_READY &&
+                    candidate_quality_eligible(candidate)
                 ? "true" : "false",
             service->active == candidate ? "true" : "false",
             candidate->auth_valid ? "true" : "false",
@@ -3689,7 +3788,11 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             candidate->auth_leader[0] != 0 ? candidate->auth_leader : "null",
             candidate->auth_leader[0] != 0 ? "\"" : "",
             candidate->srtt * 1000.0, candidate->rto * 1000.0,
-            candidate->loss_ewma * 100.0, score);
+            quality.rtt_ms, candidate->quality.samples,
+            candidate->quality.failures, quality.reply_age_ms,
+            quality.valid ? "true" : "false", quality.parts.loss,
+            quality.parts.latency, quality.parts.priority,
+            quality.loss_pct, quality.score);
         first = FALSE;
       }
       offset = append(buffer, size, offset, "]}\n");
@@ -3733,8 +3836,8 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
         char candidate_key_id[NHRP_HA_AUTH_KEY_ID_SIZE * 2 + 1] = {0};
         char local_nbma[64] = {0};
         const char *local_origin = NULL;
-        int quality_eligible;
-        unsigned int score;
+        struct candidate_quality_view quality =
+            candidate_quality_view(candidate, monotonic_nanoseconds() / 1e9);
         const struct nhrp_address *local =
             candidate_local_nbma(candidate, &local_origin);
 
@@ -3743,12 +3846,6 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
           nhrp_address_format(local, sizeof(local_nbma), local_nbma);
         if (candidate->auth_valid)
           nhrp_ha_auth_key_id_format(candidate->auth_key_id, candidate_key_id);
-        quality_eligible = candidate_quality_eligible(candidate);
-        score = quality_eligible
-                    ? nhrp_ha_quality_score(candidate->loss_ewma,
-                                            candidate->srtt * 1000.0,
-                                            candidate->priority)
-                    : 0;
         for (endpoint = 0; endpoint < candidate->endpoint_count; endpoint++) {
           char address[64];
 
@@ -3764,7 +3861,10 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             "local-nbma-origin %s "
             "priority %d origin %s state %s%s "
             "authenticated %s key-id %s term %llu commit-index %llu "
-            "leader %s srtt-ms %.3f loss-pct %.3f score %u\n",
+            "leader %s srtt-ms %.3f quality-rtt-ms %s quality-samples %u "
+            "quality-failures %u last-quality-reply-age-ms %s quality-valid %s "
+            "loss-score %.3f latency-score %.3f priority-score %.3f "
+            "loss-pct %.3f score %u\n",
             candidate->member_id, nbma, endpoints,
             local != NULL ? local_nbma : "none",
             local_origin != NULL ? local_origin : "none", candidate->priority,
@@ -3779,7 +3879,11 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             (unsigned long long)candidate->auth_term,
             (unsigned long long)candidate->auth_commit_index,
             candidate->auth_leader[0] != 0 ? candidate->auth_leader : "none",
-            candidate->srtt * 1000.0, candidate->loss_ewma * 100.0, score);
+            candidate->srtt * 1000.0, quality.rtt_ms, candidate->quality.samples,
+            candidate->quality.failures, quality.reply_age_ms,
+            quality.valid ? "true" : "false", quality.parts.loss,
+            quality.parts.latency, quality.parts.priority,
+            quality.loss_pct, quality.score);
       }
       offset = append(buffer, size, offset, "\n");
     }

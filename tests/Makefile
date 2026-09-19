@@ -58,8 +58,8 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 # Include production internals to exercise queue and cursor lifetimes directly.
-$(BUILD_DIR)/test_admin: test_admin.c ../nhrp/admin.c ../nhrp/core/nhrp_peer.c ../nhrp/core/nhrp_peer.h ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c
+$(BUILD_DIR)/test_admin: test_admin.c ../nhrp/admin.c ../nhrp/ha/nhrp_ha.h ../nhrp/core/nhrp_peer.c ../nhrp/core/nhrp_peer.h ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c
 	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ test_admin.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c -lm -lcares
 
-$(BUILD_DIR)/test_ha_candidate: test_ha_candidate.c ../nhrp/ha/nhrp_ha.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c ../nhrp/ha/nhrp_ha_auth.c
+$(BUILD_DIR)/test_ha_candidate: test_ha_candidate.c ../nhrp/ha/nhrp_ha.c ../nhrp/ha/nhrp_ha.h ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c ../nhrp/ha/nhrp_ha_auth.c
 	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ test_ha_candidate.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c ../nhrp/ha/nhrp_ha_auth.c -lm -lcares -lcrypto

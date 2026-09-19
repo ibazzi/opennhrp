@@ -130,7 +130,8 @@ static void ha_child_exec(const struct nhrp_ha_child *child) {
     execvp(nhrp_ha_program, arguments);
   } else {
     execlp(nhrp_ha_program, nhrp_ha_program, "-a", ha_admin_socket, "-i",
-           child->interface->name, (char *)NULL);
+           child->interface->name, nhrp_verbose ? "-v" : (char *)NULL,
+           (char *)NULL);
   }
   _exit(127);
 }

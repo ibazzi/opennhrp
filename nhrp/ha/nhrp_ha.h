@@ -12,19 +12,23 @@
 #define NHRP_EXTENSION_HA 0x3801
 #define NHRP_HA_WIRE_VERSION 2
 #define NHRP_HA_MEMBER_ID_MAX 63
+/* Space for the full managed candidate set, including quality diagnostics. */
+#define NHRP_HA_STATUS_BUFFER_SIZE 65536
 
-static inline double nhrp_ha_loss_ewma(double current, int initialized,
-                                       int missed) {
-  if (!initialized)
-    return missed ? 1.0 : 0.0;
-  return current * 0.875 + (missed ? 0.125 : 0.0);
-}
+/* RFC 9616 section 4.2 default RTT bounds, in milliseconds. */
+#define NHRP_HA_RTT_MIN_MS 10.0
+#define NHRP_HA_RTT_MAX_MS 120.0
 
-static inline unsigned int nhrp_ha_quality_score(double loss_ratio,
-                                                 double rtt_ms, int priority) {
-  double loss_score;
-  double latency_score;
-  double priority_score;
+struct nhrp_ha_quality_score {
+  double loss;
+  double latency;
+  double priority;
+  unsigned int total;
+};
+
+static inline struct nhrp_ha_quality_score
+nhrp_ha_quality_parts(double loss_ratio, double rtt_ms, int priority) {
+  struct nhrp_ha_quality_score score;
   double total;
 
   if (loss_ratio < 0.0)
@@ -35,11 +39,23 @@ static inline unsigned int nhrp_ha_quality_score(double loss_ratio,
     priority = 0;
   if (priority > 100)
     priority = 100;
-  loss_score = loss_ratio >= 0.30 ? 0.0 : 60.0 * (1.0 - loss_ratio / 0.30);
-  latency_score = rtt_ms >= 300.0 ? 0.0 : 30.0 * (1.0 - rtt_ms / 300.0);
-  priority_score = priority / 10.0;
-  total = loss_score + latency_score + priority_score;
-  return total >= 100.0 ? 100U : (unsigned int)(total + 0.5);
+  score.loss = loss_ratio >= 0.30 ? 0.0 : 60.0 * (1.0 - loss_ratio / 0.30);
+  if (rtt_ms <= NHRP_HA_RTT_MIN_MS)
+    score.latency = 30.0;
+  else if (rtt_ms >= NHRP_HA_RTT_MAX_MS)
+    score.latency = 0.0;
+  else
+    score.latency = 30.0 * (NHRP_HA_RTT_MAX_MS - rtt_ms) /
+                    (NHRP_HA_RTT_MAX_MS - NHRP_HA_RTT_MIN_MS);
+  score.priority = priority / 10.0;
+  total = score.loss + score.latency + score.priority;
+  score.total = total >= 100.0 ? 100U : (unsigned int)(total + 0.5);
+  return score;
+}
+
+static inline unsigned int nhrp_ha_quality_score(double loss_ratio,
+                                                 double rtt_ms, int priority) {
+  return nhrp_ha_quality_parts(loss_ratio, rtt_ms, priority).total;
 }
 
 enum nhrp_ha_message_type {
