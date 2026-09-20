@@ -21,22 +21,24 @@ static void test_quality_window(void) {
   assert(quality.samples == 60 && quality.failures == 1);
   quality_expire(&quality, 129.999);
   assert(quality.samples == 60);
-  quality_expire(&quality, 130.0);
+  quality_expire(&quality, 159.999);
+  assert(quality.samples == 60);
+  quality_expire(&quality, 160.0);
   assert(quality.samples == 58 && quality.failures == 1);
-  quality_expire(&quality, 140.0);
+  quality_expire(&quality, 170.0);
   assert(quality.samples == 38 && quality.failures == 0);
-  quality_expire(&quality, 159.0);
+  quality_expire(&quality, 189.0);
   assert(quality.samples == 0);
-  quality_record(&quality, 160.0, FALSE, 0.08);
+  quality_record(&quality, 190.0, FALSE, 0.08);
   assert(quality.rtt == 0.08 && quality.samples == 1);
-  for (i = 1; i <= 30; i++)
-    quality_record(&quality, 160.0 + i, TRUE, 0.0);
-  assert(quality.samples == 30 && quality.failures == 30);
+  for (i = 1; i <= 60; i++)
+    quality_record(&quality, 190.0 + i, TRUE, 0.0);
+  assert(quality.samples == 60 && quality.failures == 60);
 
   invalid = quality;
-  quality_record(&quality, 191.0, FALSE, NAN);
-  quality_record(&quality, 191.0, FALSE, INFINITY);
-  quality_record(&quality, 191.0, FALSE, -1.0);
+  quality_record(&quality, 251.0, FALSE, NAN);
+  quality_record(&quality, 251.0, FALSE, INFINITY);
+  quality_record(&quality, 251.0, FALSE, -1.0);
   quality_record(&quality, NAN, FALSE, 0.01);
   assert(memcmp(&quality, &invalid, sizeof(quality)) == 0);
 
@@ -192,20 +194,20 @@ int main(void) {
     assert(strstr(output, "\"quality_valid\":false"));
     quality_record(&candidate.quality, now, FALSE, 0.03);
     quality = candidate_quality_view(&candidate, now);
-    assert(quality.valid && quality.score == 95);
+    assert(quality.valid && quality.score == 100);
     nhrp_ha_render(output, sizeof(output), NULL, TRUE);
     assert(strstr(output, "\"quality_rtt_ms\":30.000"));
     assert(strstr(output, "\"quality_samples\":1,\"quality_failures\":0"));
-    assert(strstr(output, "\"loss_score\":60.000,\"latency_score\":24.545"));
+    assert(strstr(output, "\"loss_score\":70.000,\"latency_score\":19.841"));
     assert(strstr(output, "\"priority_score\":10.000"));
-    assert(strstr(output, "\"score\":95"));
+    assert(strstr(output, "\"score\":100"));
     nhrp_ha_render(output, sizeof(output), NULL, FALSE);
     assert(strstr(output, "quality-rtt-ms 30.000 quality-samples 1"));
-    assert(strstr(output, "loss-score 60.000 latency-score 24.545"));
-    assert(strstr(output, "score 95\n"));
+    assert(strstr(output, "loss-score 70.000 latency-score 19.841"));
+    assert(strstr(output, "score 100\n"));
     candidate.serviceable = FALSE;
     quality = candidate_quality_view(&candidate, now);
-    assert(quality.valid && quality.score == 0 && quality.parts.total == 95);
+    assert(quality.valid && quality.score == 0 && quality.parts.total == 100);
     candidate.serviceable = TRUE;
     quality = candidate_quality_view(&candidate, now + 31.0);
     assert(!quality.valid && quality.score == 0);

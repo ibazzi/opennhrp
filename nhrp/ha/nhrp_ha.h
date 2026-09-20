@@ -15,9 +15,8 @@
 /* Space for the full managed candidate set, including quality diagnostics. */
 #define NHRP_HA_STATUS_BUFFER_SIZE 65536
 
-/* RFC 9616 section 4.2 default RTT bounds, in milliseconds. */
-#define NHRP_HA_RTT_MIN_MS 10.0
-#define NHRP_HA_RTT_MAX_MS 120.0
+#define NHRP_HA_RTT_HALF_SCORE_MS 150.0
+#define NHRP_HA_LOSS_ZERO_RATIO 0.20
 
 struct nhrp_ha_quality_score {
   double loss;
@@ -29,6 +28,7 @@ struct nhrp_ha_quality_score {
 static inline struct nhrp_ha_quality_score
 nhrp_ha_quality_parts(double loss_ratio, double rtt_ms, int priority) {
   struct nhrp_ha_quality_score score;
+  double normalized_rtt;
   double total;
 
   if (loss_ratio < 0.0)
@@ -39,14 +39,12 @@ nhrp_ha_quality_parts(double loss_ratio, double rtt_ms, int priority) {
     priority = 0;
   if (priority > 100)
     priority = 100;
-  score.loss = loss_ratio >= 0.30 ? 0.0 : 60.0 * (1.0 - loss_ratio / 0.30);
-  if (rtt_ms <= NHRP_HA_RTT_MIN_MS)
-    score.latency = 30.0;
-  else if (rtt_ms >= NHRP_HA_RTT_MAX_MS)
-    score.latency = 0.0;
-  else
-    score.latency = 30.0 * (NHRP_HA_RTT_MAX_MS - rtt_ms) /
-                    (NHRP_HA_RTT_MAX_MS - NHRP_HA_RTT_MIN_MS);
+  score.loss = loss_ratio >= NHRP_HA_LOSS_ZERO_RATIO
+                   ? 0.0
+                   : 70.0 * (1.0 - loss_ratio / NHRP_HA_LOSS_ZERO_RATIO);
+  normalized_rtt = rtt_ms / NHRP_HA_RTT_HALF_SCORE_MS;
+  score.latency =
+      20.0 / (1.0 + normalized_rtt * normalized_rtt * normalized_rtt);
   score.priority = priority / 10.0;
   total = score.loss + score.latency + score.priority;
   score.total = total >= 100.0 ? 100U : (unsigned int)(total + 0.5);

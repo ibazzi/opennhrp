@@ -32,7 +32,8 @@
 #define HA_STANDBY_PROBE_INTERVAL 0.50
 #define HA_ACTIVE_MIN_RTO 0.25
 #define HA_STANDBY_MIN_RTO 0.75
-#define HA_QUALITY_WINDOW 30
+#define HA_QUALITY_LOSS_WINDOW 60
+#define HA_QUALITY_RTT_STALE 30.0
 #define HA_QUALITY_RTT_TAU 2.0
 #define HA_SELECTION_MAGIC "NHSL"
 #define HA_SELECTION_VERSION 1
@@ -56,7 +57,7 @@ struct nhrp_ha_quality_bucket {
 };
 
 struct nhrp_ha_quality {
-  struct nhrp_ha_quality_bucket buckets[HA_QUALITY_WINDOW];
+  struct nhrp_ha_quality_bucket buckets[HA_QUALITY_LOSS_WINDOW];
   unsigned int samples;
   unsigned int failures;
   int has_rtt;
@@ -1757,9 +1758,10 @@ static void quality_expire(struct nhrp_ha_quality *quality, double now) {
   size_t i;
 
   quality->samples = quality->failures = 0;
-  for (i = 0; i < HA_QUALITY_WINDOW; i++) {
+  for (i = 0; i < HA_QUALITY_LOSS_WINDOW; i++) {
     struct nhrp_ha_quality_bucket *bucket = &quality->buckets[i];
-    if (bucket->second > second || second - bucket->second >= HA_QUALITY_WINDOW)
+    if (bucket->second > second ||
+        second - bucket->second >= HA_QUALITY_LOSS_WINDOW)
       memset(bucket, 0, sizeof(*bucket));
     quality->samples += bucket->samples;
     quality->failures += bucket->failures;
@@ -1776,7 +1778,7 @@ static void quality_record(struct nhrp_ha_quality *quality, double now,
     return;
   quality_expire(quality, now);
   second = (uint64_t)now;
-  bucket = &quality->buckets[second % HA_QUALITY_WINDOW];
+  bucket = &quality->buckets[second % HA_QUALITY_LOSS_WINDOW];
   bucket->second = second;
   bucket->samples++;
   bucket->failures += !!missed;
@@ -1784,7 +1786,7 @@ static void quality_record(struct nhrp_ha_quality *quality, double now,
   quality->failures += !!missed;
   if (!missed) {
     double elapsed = now - quality->last_reply;
-    if (!quality->has_rtt || elapsed > HA_QUALITY_WINDOW || elapsed < 0.0)
+    if (!quality->has_rtt || elapsed > HA_QUALITY_RTT_STALE || elapsed < 0.0)
       quality->rtt = sample;
     else
       quality->rtt += -expm1(-elapsed / HA_QUALITY_RTT_TAU) *
@@ -3627,10 +3629,9 @@ candidate_quality_view(struct nhrp_ha_candidate *candidate, double now) {
   view.loss_pct = loss * 100.0;
   view.valid = quality->samples != 0 && quality->has_rtt &&
                now >= quality->last_reply &&
-               now - quality->last_reply <= HA_QUALITY_WINDOW;
-  view.parts = nhrp_ha_quality_parts(loss,
-      view.valid ? quality->rtt * 1000.0 : NHRP_HA_RTT_MAX_MS,
-      candidate->priority);
+               now - quality->last_reply <= HA_QUALITY_RTT_STALE;
+  view.parts = nhrp_ha_quality_parts(
+      loss, view.valid ? quality->rtt * 1000.0 : HUGE_VAL, candidate->priority);
   view.score = view.valid && candidate_quality_eligible(candidate)
                    ? view.parts.total : 0;
   strcpy(view.rtt_ms, "null");

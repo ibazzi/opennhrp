@@ -16,10 +16,9 @@ static void test_latency_score(void) {
     double rtt;
     unsigned int score;
   } cases[] = {
-      {-1.0, 100}, {0.0, 100}, {5.0, 100}, {9.9, 100}, {10.0, 100},
-      {10.1, 100}, {12.0, 99}, {30.0, 95}, {60.0, 86}, {65.0, 85},
-      {80.0, 81}, {118.0, 71}, {119.9, 70}, {120.0, 70},
-      {120.1, 70}, {300.0, 70},
+      {-1.0, 100}, {0.0, 100},  {5.0, 100},   {9.9, 100},  {10.0, 100},
+      {10.1, 100}, {30.0, 100}, {60.0, 99},   {100.0, 95}, {150.0, 90},
+      {200.0, 86}, {300.0, 82}, {1000.0, 80},
   };
   unsigned int previous = 100;
   size_t i;
@@ -28,12 +27,12 @@ static void test_latency_score(void) {
     assert(nhrp_ha_quality_score(0.0, cases[i].rtt, 100) == cases[i].score);
   for (i = 0; i <= 3000; i++) {
     unsigned int score = nhrp_ha_quality_score(0.0, i / 10.0, 100);
-    assert(score >= 70 && score <= previous);
+    assert(score >= 80 && score <= previous);
     previous = score;
   }
-  assert(nhrp_ha_quality_score(0.15, 65.0, 50) == 50);
+  assert(nhrp_ha_quality_score(0.15, 150.0, 50) == 33);
   /* Round the combined score, not the latency and priority separately. */
-  assert(nhrp_ha_quality_score(0.0, 30.0, 95) == 94);
+  assert(nhrp_ha_quality_score(0.0, 150.0, 95) == 90);
 }
 
 static void test_latency_migration(void) {
@@ -51,19 +50,19 @@ static void test_latency_migration(void) {
     view.candidates[i].priority = 100;
   }
   view.candidates[1].score = nhrp_ha_quality_score(0.0, 30.0, 100);
-  view.candidates[0].score = nhrp_ha_quality_score(0.0, 60.0, 100);
+  view.candidates[0].score = nhrp_ha_quality_score(0.0, 100.0, 100);
   assert(select_migration(&view, &decision, 1.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 200.0, &reason) == NULL);
   assert(decision.superior_member[0] == 0);
 
-  view.candidates[0].score = nhrp_ha_quality_score(0.0, 80.0, 100);
+  view.candidates[0].score = nhrp_ha_quality_score(0.0, 200.0, 100);
   assert(select_migration(&view, &decision, 201.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 215.9, &reason) == NULL);
   /* A short spike or an interrupted advantage must restart the hold. */
-  view.candidates[0].score = nhrp_ha_quality_score(0.0, 60.0, 100);
+  view.candidates[0].score = nhrp_ha_quality_score(0.0, 100.0, 100);
   assert(select_migration(&view, &decision, 216.0, &reason) == NULL);
   assert(decision.superior_member[0] == 0);
-  view.candidates[0].score = nhrp_ha_quality_score(0.0, 80.0, 100);
+  view.candidates[0].score = nhrp_ha_quality_score(0.0, 200.0, 100);
   assert(select_migration(&view, &decision, 217.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 231.9, &reason) == NULL);
   assert(select_migration(&view, &decision, 232.0, &reason) ==
@@ -72,8 +71,8 @@ static void test_latency_migration(void) {
 
   strcpy(view.active_member, "hub-b");
   decision.cooldown_until = 262.0;
-  view.candidates[0].score = nhrp_ha_quality_score(0.0, 10.0, 100);
-  view.candidates[1].score = nhrp_ha_quality_score(0.0, 80.0, 100);
+  view.candidates[0].score = nhrp_ha_quality_score(0.0, 30.0, 100);
+  view.candidates[1].score = nhrp_ha_quality_score(0.0, 200.0, 100);
   assert(select_migration(&view, &decision, 261.9, &reason) == NULL);
   assert(select_migration(&view, &decision, 262.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 276.9, &reason) == NULL);
@@ -313,8 +312,8 @@ int main(void) {
   assert(candidate_usable(&view, candidate));
 
   assert(nhrp_ha_quality_score(0.0, 0.0, 100) == 100);
-  assert(nhrp_ha_quality_score(0.30, 300.0, 100) == 10);
-  assert(nhrp_ha_quality_score(0.15, 150.0, 50) == 35);
+  assert(nhrp_ha_quality_score(0.20, 300.0, 100) == 12);
+  assert(nhrp_ha_quality_score(0.15, 150.0, 50) == 33);
   assert(nhrp_ha_quality_score(0.0, 0.0, 200) == 100);
   test_latency_score();
   test_latency_migration();

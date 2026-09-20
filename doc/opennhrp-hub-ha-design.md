@@ -141,51 +141,148 @@ Spoke 从私网 bootstrap 重启时，Hub 可能仍保留经公网 NAT 建立的
 其他设备的不同 NBMA / NAT 原始地址仍受唯一地址保护；不会自动删除旧 owner，
 也不会将拒绝回复当成成功。如果没有可恢复原绑定的端点，仍保持注册失败。
 
-每个 Spoke 独立探测各候选 Hub，并按各自当前选中 endpoint 的链路质量评分。
-质量统计只保留当前选中 endpoint 的已完成探测。`loss_pct` 是近期探测失败率，
-包含超时和无效回复，不等于纯物理丢包率：使用 30 个一秒桶，保留当前秒及前
-29 秒，以总失败数除以总完成数；空桶不补样本，读取时也淘汰过期桶。
-30 秒窗口降低单次失败的影响，也会让持续退化的评分变化更平缓。
+### 4.1 测量与评分
 
-评分用 RTT 独立按时间平滑：`α = 1 - exp(-Δt / 2秒)`，
-`R = R + α * (sample - R)`。首个样本或超过 30 秒无有效回复后重新初始化。
-原有 `SRTT = 0.875 * SRTT + 0.125 * sample`、RTTVAR、RTO 和探测调度
-继续用于故障检测；主用、备用的超时标准仍不同。切换主备角色不清空质量历史，
-端点变化及质量重置会清空。窗口无样本或最近有效 RTT 超过 30 秒时总分为 0。
-延时评分采用
-[RFC 9616 第 4 节](https://www.rfc-editor.org/rfc/rfc9616.html#section-4)
-的有界代价映射，使用其推荐的 10ms、120ms 区间，映射为高分优先的 0～30 分：
+每个 Spoke 独立探测各候选 Hub，并按各自当前选中 endpoint 的链路质量评分；
+Hub 和 Manager 不替 Spoke 做路径选择。质量统计只保留当前选中 endpoint 的已完成
+探测，endpoint 变化会清空历史。
+
+`loss_pct` 是最近 60 秒的滚动累计失败率，包含超时和无效回复，不等于纯物理
+丢包率。实现使用 60 个一秒桶，保留当前秒及前 59 秒：
 
 ```text
-latency_score = 30                         (quality_rtt_ms <= 10)
-              30 * (120 - quality_rtt_ms) / 110   (10 < quality_rtt_ms < 120)
-              0                          (quality_rtt_ms >= 120)
+loss_pct = 100 * sum(failures) / sum(completed_probes)
+```
 
-score = 60 * max(0, 1 - loss_pct / 30)
+空桶不补样本，第 61 秒淘汰最老的一秒。60 秒窗口降低偶发失败的影响；连续失败
+另由探测状态机快速判定。
+
+评分 RTT 独立按时间平滑：`α = 1 - exp(-Δt / 2秒)`，
+`R = R + α * (sample - R)`。首个样本或超过 30 秒无有效回复后重新初始化。
+原有 `SRTT = 0.875 * SRTT + 0.125 * sample`、RTTVAR、RTO 和探测调度
+只用于故障检测；主用、备用的探测频率和最小 RTO 不同。切换主备角色不清空
+质量历史。窗口无样本或最近有效 RTT 超过 30 秒时测量无效，最终得分为 0。
+
+延时分使用 150ms 为半分点的三次 Hill 曲线，范围为 0～20 分。低延时之间仍有
+小幅差异，中高延时的惩罚加速增长：
+
+```text
+normalized_rtt = quality_rtt_ms / 150
+latency_score = 20 / (1 + normalized_rtt ^ 3)
+
+score = 70 * max(0, 1 - loss_pct / 20)
 + latency_score
 + 10 * min(priority, 100) / 100
 ```
 
-总分最后统一四舍五入。10ms 以下及 120ms 以上分别属于同一延时档位；
+总分最后统一四舍五入。150ms 的延时分为 10；失败率达到 20% 时失败率分为 0。
 不维护历史固有延时基线，不额外惩罚相对涨幅。继续使用 OpenNHRP 探测，
 不引入 Babel 报文或路由通告。总分权重及以下迁移门槛属于本项目策略，
 不是 RFC 9616 规定的参数。
 
-不可服务、选中 endpoint 不可达或认证失败的候选得 0 分；当前 Hub 的注册
-实际失效时同样得 0 分。备用 Hub 无需预先注册即可参与评分，只有实际迁移时
-才注册。探测连续三次失败且达到超时条件后，
-将选中 endpoint 标记为不可达，保留当前注册；有效探测回复恢复可达性，并更新
-Hub 的可服务状态。注册回复不覆盖探测得到的可服务状态。
+当前固定参数如下，不提供运行时配置项：
 
-相同最高 term 内，目标高出当前 Hub 至少 10 分并持续 15 秒后迁移；迁移后冷却
-30 秒。当前 Hub 为 0 分、Hub 明确不可服务、其他 Hub 恢复可用均遵守这些规则。
-等待期间固定仍合格的目标，不因另一备用短暂领先而重置；目标失去资格或优势时
-重新选择并计时。当前成员、当前或目标端点、相关任期变化也重新计时。
-较高优先级候选以不足 10 分的优势回切需要持续 120 秒；质量迁移与优先级回切
-互转时重新计时，不借用另一类别的等待时间。
-无合格目标时保留当前选择并继续探测。任期保护、带 owner 版本证据的接管和
-显式手动切换独立保留；手动选择的 Hub 不可用时，也通过评分规则选择备用。
-实际迁移负责目标注册和旧 owner 清理，同一 Hub 的 endpoint 更换仍需相应注册。
+| 参数 | 数值 |
+|---|---:|
+| 失败率滚动窗口 | 60 秒 |
+| RTT 平滑时间常数 | 2 秒 |
+| RTT 测量失效时间 | 30 秒 |
+| 失败率 / 延时 / 优先级权重 | 70 / 20 / 10 |
+| 失败率零分点 | 20% |
+| RTT 半分点 / Hill 指数 | 150ms / 3 |
+| 质量迁移分差 / 保持时间 | 10 分 / 15 秒 |
+| 迁移后冷却 | 30 秒 |
+| 小分差优先级回迁保持时间 | 120 秒 |
+| endpoint 不可达连续失败数 | 3 次，并满足 RTO 截止时间 |
+
+### 4.2 候选资格与持续失败
+
+候选只有同时满足以下条件才有有效得分：
+
+- Hub 报告 `serviceable=true`；
+- 当前选中 endpoint 可达；
+- 状态为 `ready`，或它是当前 active Hub 且状态为 `suspect`；
+- 需要认证时，候选认证有效；
+- 如果候选是当前 active Hub，它的注册仍有效；备用 Hub 无需预先注册，实际迁移时
+  才注册。
+
+不可服务、endpoint 不可达、认证失败或测量无效均使最终得分为 0。注册回复不能
+覆盖探测得到的可服务状态。
+
+持续失败走独立的快速状态路径：第一次连续失败把候选标记为 `suspect`；成功回复
+会清零连续失败计数；连续三次失败且超过自适应 RTO 截止时间后，选中 endpoint
+被标记为不可达，最终得分为 0。当前 active Hub 的注册暂时保留，由协调器按正常
+迁移规则选择新 owner；备用候选一旦 `suspect` 就不能成为迁移目标。
+
+### 4.3 候选排序与决策
+
+每个 protocol service 保存独立决策状态。可用候选按以下键从高到低排序：
+
+```text
+term -> score -> priority -> member ID 字典序较小者
+```
+
+迁移决策按以下顺序执行：
+
+```text
+没有 active Hub：
+    等待 term/priority/member 排序先序更高但仍在初始化的候选完成探测
+    然后立即启用当前最佳 ready 候选
+
+候选最高 term < active term：
+    不迁移
+
+候选最高 term > active term：
+    只迁移到该 term 中声明的 ready/authenticated Leader
+    原因记为 stale-term，不等待评分滞回或冷却
+
+手动模式且当前 active 得分非 0：
+    仅在当前认证 Leader 与保存的 manual_leader 一致时迁移到手动目标
+    手动目标暂不可用时保持当前 Hub，不改选其他质量候选
+
+手动模式且当前 active 得分为 0：
+    暂时跳过手动约束，按自动评分选择可用 Hub 兜底
+
+仍在迁移后 30 秒冷却期：
+    不进行普通质量迁移
+
+目标得分 - active 得分 >= 10：
+    优势连续保持 15 秒后迁移，原因记为 quality
+
+0 < 目标优势 < 10 且目标 priority 更高：
+    优势连续保持 120 秒后回迁，原因记为 failback
+
+其他情况：
+    保持当前 Hub
+```
+
+15 秒和 120 秒等待期间会固定第一个仍合格的目标，不因另一备用 Hub 短暂得到更高
+分而重置。目标失去资格或优势、目标 endpoint/term 变化、当前成员或当前 endpoint/
+term 变化、选择模式变化时，等待重新计时。15 秒质量迁移与 120 秒优先级回迁之间
+切换时也不复用已等待时间；选择模式变化还会清除迁移冷却。
+
+没有合格候选时保留现有内核 neighbor 并继续探测。当前 Hub 得分为 0 或明确不可
+服务也不会绕过 15 秒质量滞回；只有没有 active、较高 term 和有效手动选择走各自
+的专用分支。
+
+### 4.4 迁移事务
+
+协调器从 monitor 事件读取 `generation`，发送带 `expect-generation` 的
+`ha activate`，防止基于旧快照提交迁移。核心按以下顺序执行：
+
+1. 重新检查目标存在、未禁用且没有其他迁移正在进行；
+2. 目标尚未 ready 时立即探测，尚未注册时先完成 HA Registration；
+3. 异步写入目标 neighbor，并等待 netlink ACK；
+4. ACK 成功后再次检查目标仍为 `ready` 且质量资格有效；
+5. 提交新的 HA peer、`active_member` 和 owner term/index，并递增 generation；
+6. 向旧 Hub 发送带 registration ID 和 owner 版本的 release，撤销旧有效 owner；
+7. 旧 Hub 的复制 shadow 按原生命周期保留，随后继续探测并协调内核状态。
+
+目标失效、generation 不匹配、注册失败或 netlink 提交失败都会终止本次迁移，且不
+启动 30 秒冷却。只有从一个 active Hub 成功迁移到另一个 Hub 后才开始冷却。
+同一 Hub 的 endpoint 更换仍要完成对应注册，不能只替换 neighbor 地址。
+
+### 4.5 状态与日志
 
 JSON 和文本状态同时提供评分 RTT、窗口完成数与失败数、最近有效回复年龄、
 测量有效性和未舍入的分项分数：`quality_rtt_ms`、`quality_samples`、
@@ -197,8 +294,9 @@ JSON 和文本状态同时提供评分 RTT、窗口完成数与失败数、最�
 
 启用核心 `-v` 会同时启用 Spoke 协调器 `-v`。DEBUG 决策日志仅在原因、当前成员
 或目标变化时记录，包含成员、分数、原因、等待时间和剩余冷却时间。
-原因包括 `no-eligible-target`、`current-best`、`margin-small`、`quality-wait`、
-`failback-wait`、`cooldown`、`manual-selection` 和 `term-blocked`；
+原因包括 `no-eligible-target`、`initial-wait`、`initial`、`current-best`、
+`margin-small`、`quality-wait`、`quality`、`failback-wait`、`failback`、
+`cooldown`、`manual-selection`、`manual`、`term-blocked` 和 `stale-term`；
 实际迁移成功、失败仍保留现有日志。不新增协调器状态同步接口。
 
 ## 5. 两 Hub Witness

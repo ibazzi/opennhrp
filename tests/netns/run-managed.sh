@@ -1077,16 +1077,16 @@ grep -q '"active_member":"hub-primary"' <<<"$(private_spoke_ha_show)"
 restore_spoke_primary
 sleep 5
 
-log "validating RFC 9616 delay-only migration and stability across probe rates"
+log "validating Hill-curve delay migration and stability across probe rates"
 quality_log_offset=$(wc -c <"$runtime_dir/spoke.log")
-degrade_spoke_primary 80ms 0%
-delay_spoke_backups add 1ms 25ms
+degrade_spoke_primary 200ms 0%
+delay_spoke_backups add 20ms 70ms
 for attempt in {1..1000}; do
 	if ((attempt % 100 == 0)); then
 		if (((attempt / 100) % 2)); then
-			delay_spoke_backups change 25ms 1ms
+			delay_spoke_backups change 70ms 20ms
 		else
-			delay_spoke_backups change 1ms 25ms
+			delay_spoke_backups change 20ms 70ms
 		fi
 	fi
 	spoke_state=$(spoke_ha_show)
@@ -1103,7 +1103,7 @@ quality_role=hub2
 grep -q '"active_member":"hub-primary"' <<<"$(private_spoke_ha_show)"
 grep -q '"leader":"hub-primary"' <<<"$(hub_cluster hub1)"
 wait_single_spoke_owner "$quality_role" "$quality_member"
-delay_spoke_backups change 1ms 1ms
+delay_spoke_backups change 20ms 20ms
 # Observe beyond the 30-second cooldown, including the new standby probe rate.
 for _ in {1..35}; do
 	spoke_state=$(spoke_ha_show)
@@ -1134,15 +1134,16 @@ assert waiting and len(set(waiting)) == 1, decisions
 assert competing[-1]["active_member"] == waiting[0], decisions
 assert f"migrated hub-primary -> {waiting[0]} reason=quality" in decisions, decisions
 primary = next(c for c in state["candidates"] if c["member"] == "hub-primary")
-assert 70 <= primary["quality_rtt_ms"] <= 110, primary
+assert 170 <= primary["quality_rtt_ms"] <= 230, primary
 assert primary["loss_pct"] < 1, primary
 for candidate in state["candidates"]:
     if not candidate["ready"]:
         continue
     assert candidate["quality_valid"] and candidate["quality_samples"] > 0, candidate
     assert candidate["last_quality_reply_age_ms"] < 3000, candidate
-    latency = 30 * max(0, min(1, (120 - candidate["quality_rtt_ms"]) / 110))
-    expected = int(60 * max(0, 1 - candidate["loss_pct"] / 30)
+    normalized_rtt = candidate["quality_rtt_ms"] / 150
+    latency = 20 / (1 + normalized_rtt ** 3)
+    expected = int(70 * max(0, 1 - candidate["loss_pct"] / 20)
                    + latency + min(candidate["priority"], 100) / 10 + 0.5)
     # JSON rounds RTT/loss to three decimals; allow a rounding-boundary point.
     assert abs(candidate["score"] - expected) <= 1, candidate
