@@ -80,6 +80,15 @@ static void test_probe_identity(struct nhrp_ha_candidate *candidate) {
   assert(!probe_request_current(&request));
 }
 
+static void test_equal_owner_version_recovery(void) {
+  struct nhrp_ha_service service = {.owner_term = 169, .owner_index = 268};
+
+  assert(owner_version_at_least(&service, 170, 1));
+  assert(owner_version_at_least(&service, 169, 268));
+  assert(!owner_version_at_least(&service, 169, 267));
+  assert(!owner_version_at_least(&service, 168, UINT64_MAX));
+}
+
 static void test_full_candidate_status(struct nhrp_ha_service *service) {
   struct nhrp_ha_candidate candidates[NHRP_HA_MANAGED_MAX_MEMBERS - 1] = {0};
   char *buffer = malloc(NHRP_HA_STATUS_BUFFER_SIZE);
@@ -130,6 +139,7 @@ int main(void) {
 
   test_quality_window();
   test_probe_identity(&candidate);
+  test_equal_owner_version_recovery();
   ev_default_loop(0);
   service.active = &candidate;
   list_init(&service.candidates);

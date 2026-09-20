@@ -1881,6 +1881,12 @@ static int probe_request_current(const struct nhrp_ha_probe_request *request) {
          request->nonce == candidate->probe_nonce && candidate->probe_pending;
 }
 
+static int owner_version_at_least(const struct nhrp_ha_service *service,
+                                  uint64_t term, uint64_t index) {
+  return term > service->owner_term ||
+         (term == service->owner_term && index >= service->owner_index);
+}
+
 static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   struct nhrp_ha_probe_request *request = ctx;
   struct nhrp_ha_candidate *candidate = request->candidate;
@@ -1938,9 +1944,8 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
       candidate->auth_valid &&
       strcmp(candidate->auth_leader, candidate->member_id) == 0 &&
       !candidate->service->switching && active != NULL && active != candidate &&
-      (takeover_term > candidate->service->owner_term ||
-       (takeover_term == candidate->service->owner_term &&
-        takeover_index > candidate->service->owner_index));
+      owner_version_at_least(candidate->service, takeover_term,
+                             takeover_index);
   if (request->selected_endpoint)
     candidate->cleanup_owner = candidate != active && takeover &&
                                !prefer_takeover &&
