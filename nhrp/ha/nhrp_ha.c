@@ -1419,28 +1419,6 @@ static void registration_reply(void *ctx, struct nhrp_packet *reply) {
   return;
 
 failed:
-  if (code == NHRP_CODE_UNIQUE_ADDRESS_REGISTERED) {
-    /* An explicit rejection is not a lost renewal reply. Keep the old
-     * owner token for cleanup, but do not activate this rejected binding. */
-    candidate->registered = FALSE;
-    candidate->last_registration_reply = 0.0;
-    /* During discovery try other paths to the preserved binding. Once active,
-     * keep the existing endpoint failover policy: returning to the old path
-     * would renew its lease indefinitely and prevent recovery on the new one. */
-    if (candidate->service->active == NULL) {
-      /* A rejected bootstrap path is not a usable preferred endpoint. */
-      candidate->preferred_endpoint_valid = FALSE;
-      candidate_select_available_endpoint(candidate);
-      probe_schedule(candidate, 0.01);
-    }
-    candidate_set_state(candidate, NHRP_HA_CANDIDATE_REGISTERING);
-    registration_schedule(candidate, HA_REGISTRATION_RETRY);
-    if (candidate->service->active == NULL && candidate->bootstrap_anchor &&
-        candidate->service->hub_list_generation != 0 &&
-        coordinator_callback != NULL)
-      coordinator_callback(candidate->service->interface);
-    return;
-  }
   if (candidate->last_registration_reply == 0.0 ||
       ev_now() - candidate->last_registration_reply > 60.0) {
     candidate->registered = FALSE;
@@ -1991,10 +1969,8 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
       candidate->nbma = candidate->endpoints[request->endpoint_index];
       candidate->endpoint_generation++;
       candidate_reset_quality(candidate);
-      candidate->registered = FALSE;
-      candidate->last_registration_reply = 0.0;
-      candidate_set_state(candidate, NHRP_HA_CANDIDATE_REGISTERING);
       service_changed(candidate->service);
+      reconcile_schedule(candidate->service, 0.01);
       registration_schedule(candidate, 0.01);
     }
     free(request);
@@ -4027,10 +4003,7 @@ static void reconcile_timer_cb(struct ev_timer *timer, int revents) {
   const struct nhrp_address *local;
 
   (void)revents;
-  if (service->active == NULL || !service->active->registered ||
-      !service->active->registered_endpoint_valid ||
-      nhrp_address_cmp(&service->active->nbma,
-                       &service->active->registered_endpoint) != 0)
+  if (service->active == NULL)
     return;
   if (service->switching || service->reconciling) {
     reconcile_schedule(service, 0.1);

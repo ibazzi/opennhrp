@@ -16,7 +16,7 @@
 #include "nhrp_peer.h"
 
 #define NHRP_PEER_CACHE_FILE "peer-cache.state"
-#define NHRP_PEER_CACHE_HEADER "OPENNHRP-PEER-CACHE 2\n"
+#define NHRP_PEER_CACHE_HEADER "OPENNHRP-PEER-CACHE 1\n"
 #define NHRP_PEER_CACHE_LINE_MAX 256
 
 struct nhrp_peer_cache_record {
@@ -27,7 +27,6 @@ struct nhrp_peer_cache_record {
   struct nhrp_address next_hop_address;
   struct nhrp_address next_hop_nat_oa;
   uint16_t mtu;
-  unsigned int flags;
   int64_t expires_at;
 };
 
@@ -70,7 +69,7 @@ static int nhrp_peer_cache_write(void *ctx, struct nhrp_peer *peer) {
   if ((ev_tstamp)seconds < remaining)
     seconds++;
 
-  if (fprintf(save->file, "%s %s %s/%u %s %s %u %" PRId64 " %u\n",
+  if (fprintf(save->file, "%s %s %s/%u %s %s %u %" PRId64 "\n",
               nhrp_peer_type[peer->type], peer->interface->name,
               nhrp_address_format(&peer->protocol_address, sizeof(protocol),
                                   protocol),
@@ -81,8 +80,7 @@ static int nhrp_peer_cache_write(void *ctx, struct nhrp_peer *peer) {
                   ? "-"
                   : nhrp_address_format(&peer->next_hop_nat_oa, sizeof(nat_oa),
                                         nat_oa),
-              peer->mtu, (int64_t)save->wall_now + seconds,
-              peer->flags & NHRP_PEER_FLAG_UNIQUE) < 0) {
+              peer->mtu, (int64_t)save->wall_now + seconds) < 0) {
     save->failed = TRUE;
     return 1;
   }
@@ -184,17 +182,15 @@ static int nhrp_peer_cache_parse_protocol(char *text,
 static int nhrp_peer_cache_parse_record(char *line,
                                         struct nhrp_peer_cache_record *record) {
   char type[16], interface[16], protocol[32], next_hop[32], nat_oa[32];
-  char mtu_text[16], expiry_text[32], flags_text[16], extra;
+  char mtu_text[16], expiry_text[32], extra;
   char canonical[NHRP_PEER_CACHE_LINE_MAX];
   char protocol_fmt[64], next_hop_fmt[64], nat_oa_fmt[64];
-  uint64_t mtu, expiry, flags;
+  uint64_t mtu, expiry;
   int length;
 
   memset(record, 0, sizeof(*record));
-  if (sscanf(line, "%15s %15s %31s %31s %31s %15s %31s %15s %c", type,
-             interface, protocol, next_hop, nat_oa, mtu_text, expiry_text,
-             flags_text, &extra) != 8 ||
-      !nhrp_peer_cache_parse_uint(flags_text, NHRP_PEER_FLAG_UNIQUE, &flags) ||
+  if (sscanf(line, "%15s %15s %31s %31s %31s %15s %31s %c", type, interface,
+             protocol, next_hop, nat_oa, mtu_text, expiry_text, &extra) != 7 ||
       !nhrp_peer_cache_parse_uint(mtu_text, UINT16_MAX, &mtu) ||
       !nhrp_peer_cache_parse_uint(expiry_text, INT64_MAX, &expiry) ||
       !nhrp_peer_cache_parse_protocol(protocol, &record->protocol_address,
@@ -220,11 +216,10 @@ static int nhrp_peer_cache_parse_record(char *line,
 
   snprintf(record->interface, sizeof(record->interface), "%s", interface);
   record->mtu = mtu;
-  record->flags = flags;
   record->expires_at = expiry;
   length =
       snprintf(canonical, sizeof(canonical),
-               "%s %s %s/%u %s %s %u %" PRId64 " %u\n", type, record->interface,
+               "%s %s %s/%u %s %s %u %" PRId64 "\n", type, record->interface,
                nhrp_address_format(&record->protocol_address,
                                    sizeof(protocol_fmt), protocol_fmt),
                record->prefix_length,
@@ -234,7 +229,7 @@ static int nhrp_peer_cache_parse_record(char *line,
                    ? "-"
                    : nhrp_address_format(&record->next_hop_nat_oa,
                                          sizeof(nat_oa_fmt), nat_oa_fmt),
-               record->mtu, record->expires_at, record->flags);
+               record->mtu, record->expires_at);
   return length > 0 && length < (int)sizeof(canonical) &&
          strcmp(line, canonical) == 0;
 }
@@ -269,7 +264,6 @@ static int nhrp_peer_cache_restore(struct nhrp_peer_cache_record *record,
 
   peer = nhrp_peer_alloc(iface);
   peer->type = record->type;
-  peer->flags |= record->flags;
   peer->afnum = nhrp_afnum_from_pf(record->next_hop_address.type);
   peer->protocol_type = nhrp_protocol_from_pf(record->protocol_address.type);
   peer->protocol_address = record->protocol_address;
@@ -333,11 +327,8 @@ int nhrp_peer_cache_load(const char *directory) {
   fd = -1;
   line_length = getline(&line, &line_size, file);
   if (line_length != (ssize_t)strlen(NHRP_PEER_CACHE_HEADER) ||
-      memcmp(line, NHRP_PEER_CACHE_HEADER, line_length) != 0) {
-    nhrp_error("Unsupported peer cache header; version 2 required to preserve "
-               "unique bindings, relearning peers");
+      memcmp(line, NHRP_PEER_CACHE_HEADER, line_length) != 0)
     goto consume;
-  }
   while ((line_length = getline(&line, &line_size, file)) >= 0) {
     if (line_length <= 0 || line_length >= NHRP_PEER_CACHE_LINE_MAX ||
         line[line_length - 1] != '\n' || strlen(line) != (size_t)line_length ||

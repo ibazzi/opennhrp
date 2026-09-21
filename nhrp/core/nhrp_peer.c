@@ -791,6 +791,52 @@ static void nhrp_peer_restart_cb(struct ev_timer *w, int revents) {
   }
 }
 
+static void nhrp_peer_send_protocol_purge(struct nhrp_peer *peer) {
+  char tmp[64];
+  struct nhrp_packet *packet;
+  struct nhrp_cie *cie;
+  struct nhrp_payload *payload;
+  int sent = FALSE;
+
+  packet = nhrp_packet_alloc();
+  if (packet == NULL)
+    goto error;
+  packet->hdr = (struct nhrp_packet_header){
+      .afnum = peer->afnum,
+      .protocol_type = peer->protocol_type,
+      .version = NHRP_VERSION_RFC2332,
+      .type = NHRP_PACKET_PURGE_REQUEST,
+      .hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT,
+      .flags = NHRP_FLAG_PURGE_NO_REPLY,
+  };
+  if (peer->flags & NHRP_PEER_FLAG_CISCO)
+    packet->hdr.u.request_id =
+        nhrp_address_hash(&peer->interface->protocol_address);
+  packet->dst_protocol_address = peer->protocol_address;
+  cie = nhrp_cie_alloc();
+  if (cie == NULL)
+    goto error_free_packet;
+  *cie = (struct nhrp_cie){
+      .hdr.code = NHRP_CODE_SUCCESS,
+      .hdr.prefix_length = 0xff,
+  };
+  cie->protocol_address = peer->interface->protocol_address;
+  payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
+  nhrp_payload_add_cie(payload, cie);
+  nhrp_info("Sending Purge Request (of protocol address) to %s",
+            nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp));
+  packet->dst_peer = nhrp_peer_get(peer);
+  packet->dst_iface = peer->interface;
+  sent = nhrp_packet_send(packet);
+error_free_packet:
+  nhrp_packet_put(packet);
+error:
+  if (sent)
+    nhrp_peer_schedule(peer, 2, nhrp_peer_send_register_cb);
+  else
+    nhrp_peer_restart_error(peer);
+}
+
 static int nhrp_add_local_route_cie(void *ctx, struct nhrp_peer *route) {
   struct nhrp_packet *packet = (struct nhrp_packet *)ctx;
   struct nhrp_payload *payload;
@@ -915,14 +961,12 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
   case NHRP_CODE_SUCCESS:
     peer->registration_failed = FALSE;
     break;
+  case NHRP_CODE_UNIQUE_ADDRESS_REGISTERED:
+    peer->registration_failed = TRUE;
+    nhrp_peer_send_protocol_purge(peer);
+    goto ret;
   default:
     peer->registration_failed = TRUE;
-    /* A rejected private bootstrap can still advertise the public endpoint
-     * holding our NAT binding. Discovery validates the HA reply independently;
-     * it must not make this rejected registration usable. */
-    if (ec == NHRP_CODE_UNIQUE_ADDRESS_REGISTERED &&
-        nhrp_ha_handle_registration_discovery(peer, reply))
-      goto ret;
     nhrp_peer_schedule(peer, NHRP_RETRY_REGISTER_TIME,
                        nhrp_peer_send_register_cb);
     goto ret;
@@ -1195,10 +1239,6 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 
   if (nhrp_address_cmp(&peer->protocol_address, &cie->protocol_address) == 0) {
     /* Destination is within NBMA network; update cache */
-    peer->flags = (peer->flags & ~NHRP_PEER_FLAG_UNIQUE) |
-                  ((reply->hdr.flags & NHRP_FLAG_RESOLUTION_UNIQUE)
-                       ? NHRP_PEER_FLAG_UNIQUE
-                       : 0);
     peer->mtu = ntohs(cie->hdr.mtu);
     peer->prefix_length = cie->hdr.prefix_length;
     peer->next_hop_address = natcie->nbma_address;
@@ -1233,8 +1273,6 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
   if (np == NULL) {
     np = nhrp_peer_alloc(iface);
     np->type = NHRP_PEER_TYPE_CACHED;
-    if (reply->hdr.flags & NHRP_FLAG_RESOLUTION_UNIQUE)
-      np->flags |= NHRP_PEER_FLAG_UNIQUE;
     np->afnum = reply->hdr.afnum;
     np->protocol_type = reply->hdr.protocol_type;
     np->protocol_address = cie->protocol_address;
@@ -1251,8 +1289,6 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
   /* Off NBMA destination; a shortcut route */
   np = nhrp_peer_alloc(iface);
   np->type = NHRP_PEER_TYPE_SHORTCUT_ROUTE;
-  if (reply->hdr.flags & NHRP_FLAG_RESOLUTION_UNIQUE)
-    np->flags |= NHRP_PEER_FLAG_UNIQUE;
   np->afnum = reply->hdr.afnum;
   np->protocol_type = reply->hdr.protocol_type;
   np->protocol_address = peer->protocol_address;

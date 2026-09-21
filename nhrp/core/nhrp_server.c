@@ -280,30 +280,6 @@ static void nhrp_server_finish_reg(struct nhrp_pending_request *pr) {
   nhrp_server_finish_request(pr);
 }
 
-static int unique_conflict(void *ctx, struct nhrp_peer *old) {
-  struct nhrp_peer *peer = ctx;
-
-  return (old->flags & NHRP_PEER_FLAG_UNIQUE) &&
-         !(old->flags & NHRP_PEER_FLAG_REPLACED) &&
-         old->expire_time > ev_now() &&
-         (nhrp_address_cmp(&peer->next_hop_address, &old->next_hop_address) ||
-          nhrp_address_cmp(&peer->next_hop_nat_oa, &old->next_hop_nat_oa));
-}
-
-static int registration_unique_conflict(struct nhrp_peer *peer) {
-  struct nhrp_peer_selector sel = {
-      .flags = NHRP_PEER_FIND_EXACT,
-      .type_mask = BIT(NHRP_PEER_TYPE_DYNAMIC),
-      .interface = peer->interface,
-      .protocol_address = peer->protocol_address,
-      .prefix_length = peer->prefix_length,
-  };
-
-  return (peer->flags & NHRP_PEER_FLAG_UNIQUE) &&
-         (nhrp_peer_foreach(unique_conflict, peer, &sel) ||
-          nhrp_ha_hub_unique_conflict(peer));
-}
-
 static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e,
                                           int revents) {
   struct nhrp_peer *peer;
@@ -320,14 +296,6 @@ static void nhrp_server_finish_cie_reg_cb(union nhrp_peer_event e,
 
   peer->request = NULL;
   nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp);
-  if (cie->hdr.code == NHRP_CODE_UNIQUE_ADDRESS_REGISTERED ||
-      (revents != 0 && nhrp_peer_event_ok(e, revents) &&
-       registration_unique_conflict(peer))) {
-    pr->num_error++;
-    cie->hdr.code = NHRP_CODE_UNIQUE_ADDRESS_REGISTERED;
-    peer->flags |= NHRP_PEER_FLAG_REPLACED;
-    goto registration_complete;
-  }
   if (revents != 0 && nhrp_peer_event_ok(e, revents)) {
     int project = nhrp_ha_hub_capture_direct(peer);
 
@@ -406,8 +374,6 @@ static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr) {
   }
 
   peer->type = NHRP_PEER_TYPE_DYNAMIC;
-  if (packet->hdr.flags & NHRP_FLAG_REGISTRATION_UNIQUE)
-    peer->flags |= NHRP_PEER_FLAG_UNIQUE;
   peer->afnum = packet->hdr.afnum;
   peer->protocol_type = packet->hdr.protocol_type;
   peer->expire_time = pr->now + ntohs(cie->hdr.holding_time);
@@ -449,10 +415,7 @@ static void nhrp_server_start_cie_reg(struct nhrp_pending_request *pr) {
   peer->request = pr;
 
   /* Check that there is no conflicting peers */
-  if (registration_unique_conflict(peer)) {
-    cie->hdr.code = NHRP_CODE_UNIQUE_ADDRESS_REGISTERED;
-    nhrp_server_finish_cie_reg_cb(&peer->child, 0);
-  } else if (nhrp_peer_foreach(find_one, peer, &sel) != 0) {
+  if (nhrp_peer_foreach(find_one, peer, &sel) != 0) {
     cie->hdr.code = NHRP_CODE_ADMINISTRATIVELY_PROHIBITED;
     peer->flags |= NHRP_PEER_FLAG_REPLACED;
     nhrp_server_finish_cie_reg_cb(&peer->child, 0);
@@ -479,15 +442,6 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet) {
         "Received Registration Request from proto src %s to %s",
         nhrp_address_format(&packet->src_protocol_address, sizeof(tmp), tmp),
         nhrp_address_format(&packet->dst_protocol_address, sizeof(tmp2), tmp2));
-
-  payload = nhrp_packet_payload(packet, NHRP_PAYLOAD_TYPE_CIE_LIST);
-  cie = nhrp_payload_get_cie(payload, 1);
-  if (cie == NULL || ((packet->hdr.flags & NHRP_FLAG_REGISTRATION_UNIQUE) &&
-                      (cie->hdr.prefix_length != 0xff ||
-                       cie->cie_list_entry.next != &payload->u.cie_list))) {
-    nhrp_error("Invalid unique registration CIE count or prefix");
-    return nhrp_packet_send_error(packet, NHRP_ERROR_PROTOCOL_ERROR, 0);
-  }
 
   if (!nhrp_ha_prepare_registration_reply(packet)) {
     nhrp_debug("Registration request has invalid HA member data");

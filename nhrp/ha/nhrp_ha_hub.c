@@ -191,22 +191,6 @@ hub_entry_value(struct nhrp_ha_hub_entry *entry) {
   return NULL;
 }
 
-int nhrp_ha_hub_unique_conflict(struct nhrp_peer *peer) {
-  struct nhrp_ha_hub_state *state = hub_state_find(peer->interface, FALSE);
-  struct nhrp_ha_hub_entry *entry;
-  const struct nhrp_ha_hub_value *value;
-
-  if (state == NULL || !(peer->flags & NHRP_PEER_FLAG_UNIQUE))
-    return FALSE;
-  entry = hub_entry_find(state, &peer->protocol_address, peer->prefix_length);
-  if (entry == NULL)
-    return FALSE;
-  value = hub_entry_value(entry);
-  return value != NULL && (value->binding.flags & NHRP_PEER_FLAG_UNIQUE) &&
-         (nhrp_address_cmp(&peer->next_hop_address, &value->binding.nbma) ||
-          nhrp_address_cmp(&peer->next_hop_nat_oa, &value->binding.nat_oa));
-}
-
 static void binding_from_peer(struct nhrp_ha_hub_binding *binding,
                               const struct nhrp_peer *peer) {
   int holding = peer->expire_time > ev_now() ? peer->expire_time - ev_now() : 1;

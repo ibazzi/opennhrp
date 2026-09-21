@@ -112,9 +112,7 @@ shortcut routes. Static mappings, dynamic NHS mappings, local mappings,
 negative or incomplete entries, HA active mappings, and HA candidate or owner
 selection state are not stored. The snapshot is consumed after startup
 validation; missing, expired, incompatible, or invalid records do not prevent
-the daemon from starting. Format version 2 stores each binding's unique flag.
-Version 1 snapshots are discarded because they do not preserve that flag;
-registrations and shortcuts must be learned again after the first upgrade.
+the daemon from starting.
 .RE
 
 .SH BUGS

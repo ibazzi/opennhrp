@@ -1,8 +1,8 @@
 # OpenNHRP TODO 与当前代码对齐评估
 
-核对日期：2026-09-18。源码基线：`9c8933e`，包含本次第 1、9 项实现的工作区修改。
+核对日期：2026-09-21。管理接口改进已实现；Unique Bit 完整处理已撤回。
 
-本文保留功能事项的逐项源码评估。项目总体情况见 [项目现状](../README.md)。第 1、9 项已实现，验证记录见文末；其他事项仍为源码评估，第 2 项通用停机 Purge 未实现。
+本文保留功能事项的逐项源码评估。项目总体情况见 [项目现状](../README.md)。第 9 项已实现；其他事项仍为源码评估，第 2 项通用停机 Purge 未实现。
 
 ## 统计与代码布局
 
@@ -25,7 +25,7 @@ TODO 共 **26 个条目**（按 `- ` 开头计数，不是 26 行），其中 ma
 
 | # | TODO 事项 | 当前代码证据与结论 | 优先级 / 后续路径 |
 | --- | --- | --- | --- |
-| 1 | 正确处理唯一性标志位（Unique Bit） | **已实现。** [nhrp_server.c](../nhrp/core/nhrp_server.c) 在入口校验 U=1 的单 CIE/0xff 约束，注册前及异步授权完成后检查唯一绑定冲突，返回 Code 14 并保留原绑定。同绑定续租允许，过期绑定不阻止注册；比较有效 NBMA 和 NAT 原始地址，HA 查询覆盖有效副本。解析结果及 v2 重启快照保存唯一性标志；客户端收到冲突后重试，不发送 Purge 抢占旧绑定；HA 端点回切等待该端点注册成功，Code 14 不沿用旧注册成功状态。 | **高 / 已实现。** NBMA 变化需等待旧唯一租约过期或清除；不合规 Unique 报文被拒绝。v1 快照丢弃并重新学习。非唯一注册保持单绑定替换行为，不提供多绑定或身份认证。 |
+| 1 | 正确处理唯一性标志位（Unique Bit） | **未实现。** Hub 不再因同一协议地址的 NBMA/NAT-OA 变化返回 Code 14，新的动态注册按既有替换路径更新绑定。 | **待重新设计。** 后续实现必须把稳定 Spoke 身份与可变化的 NBMA/NAT-OA 分开，不能再次把地址变化误判为抢注。 |
 | 2 | 优雅停机时发送清除请求（Purge Request） | **通用停机 Purge 未实现；已有重启恢复路径。** [opennhrp.c](../nhrp/opennhrp.c) 退出事件循环后停止 HA 子进程、保存 peer 快照并清理资源；[nhrp_peer_cache.c](../nhrp/core/nhrp_peer_cache.c) 保存可恢复的普通 dynamic/cached/shortcut-route，排除 HA dynamic 状态。已有注册相关 Purge 不等于停机遍历通知。 | **中 / 中复杂度。** 先确定永久退出与平滑重启的通知语义，避免无条件 Purge 抵消快照恢复。远端失效时间依赖 holding time、探测及 HA 状态，不能统一断言需要等待数十分钟至数小时。 |
 | 3 | NHS 根据已注册租约直接回复解析请求 | **未实现通用动态 lease 直答。** [nhrp_packet.c](../nhrp/core/nhrp_packet.c) 接收分发仅在目标匹配 `LOCAL_ADDR` 时进入本地处理，其他 Resolution Request 走转发；[nhrp_server.c](../nhrp/core/nhrp_server.c) 的本地回复使用本机 NBMA，并非直接返回目标动态 lease。 | **中 / 中复杂度。** 需要同时调整接收分发与回复构造，检查 lease 有效性、NAT、HA 有效 owner 和协议允许的应答条件，不能只改 handler。 |
 | 4 | 移除 REPLACED 标志，改用续租状态机并完善 MTU 回调 | **仍未完成。** [nhrp_peer.h](../nhrp/core/nhrp_peer.h) 保留 `NHRP_PEER_FLAG_REPLACED`，server 替换注册及 peer 释放仍依赖它抑制下线脚本。已有部分原地更新不能代表整个生命周期改为 renew。 | **中 / 高复杂度。** 先覆盖 NBMA/MTU 更新、脚本次数、内核邻居及 HA 投影生命周期，再决定局部简化范围。 |
@@ -68,17 +68,17 @@ TODO 共 **26 个条目**（按 `- ` 开头计数，不是 26 行），其中 ma
 
 ## 建议执行顺序与验证边界
 
-1. **维护已实现项**：保留 Unique、HA 副本及重启快照回归，以及 admin 短写、慢读、可恢复枚举与生命周期检查。
+1. **维护已实现项**：保留 HA 副本回归，以及 admin 短写、慢读、可恢复枚举与生命周期检查。
 2. **先复现再调整行为**：/16 与 /24 委托、Core 启动 negative cache、BGP 下一跳变更、NHS lease 直答各自需要最小拓扑；停机 Purge 先与重启快照语义对齐。不要把这些事项直接视为低风险快速修复。
 3. **按证据决定扩展**：协议地址索引、PACKET_MMAP、组播卸载以规模测试为依据；ECMP、IPv6、Zserv 和降权依据实际部署需求单独规划。目录重组不要求继续拆文件。
 
 本次验证：
 
 - `make -j4 test`：构建及单元测试通过，包含新增 [test_admin.c](../tests/test_admin.c) 的短写、EINTR/EAGAIN、游标删除/插入、枚举预算、异步回复、monitor 超限立即断开和断连检查；该测试的 ASan/UBSan 检查通过。
-- [test-legacy-spoke.py](../tests/netns/test-legacy-spoke.py)：隔离网络中验证 Unique 冲突、合法续租、非法前缀/多 CIE、NAT、租约到期、并发授权及未投影 HA 副本；核对保留的内核邻居并执行 GRE ping，同时确认真实客户端被拒绝后不会 Purge 旧绑定。
-- [test-peer-cache.py](../tests/netns/test-peer-cache.py)：v2 快照及唯一性标志恢复、失效/非法/v1 快照处理和恢复后的 GRE 转发通过。
+- [test-legacy-spoke.py](../tests/netns/test-legacy-spoke.py)：隔离网络中验证 legacy/HA/Vendor 注册、续租、同步、角色切换、邻居与 GRE 转发。
+- [test-peer-cache.py](../tests/netns/test-peer-cache.py)：v1 快照保存、恢复、失效/非法记录处理和恢复后的 GRE 转发。
 - [test-admin.py](../tests/netns/test-admin.py)：4000 条路由的慢读输出完整性、其他控制请求响应、枚举期间删除/插入、分段命令、写半关闭、monitor、断连及超时通过。路由注入按批次等待处理，避免将 Netlink 队列容量混入管理接口测试。
-- [run-managed.sh](../tests/netns/run-managed.sh)：完整回归通过，包括质量迁移、Follower 接管、端点切换、健康降级、GRE 接口下线与恢复、认证回切、多数派隔离、成员退出和集群销毁。核对 Hub/Spoke 内核邻居、唯一有效 owner 与 GRE 转发。端点切换会同时改变私网 Spoke 的 NBMA；同成员端点用例隔离备选 Hub，使用 60 秒租约，等待实际注册及远端绑定生效，用例结束后清理临时公网地址。若另一个 Hub 持续续租旧 NBMA，不同 NBMA 的回切会继续被唯一性约束阻止。
+- [run-managed.sh](../tests/netns/run-managed.sh)：覆盖质量迁移、Follower 接管、端点切换、健康降级、GRE 接口恢复、认证回切、多数派隔离、成员退出和集群销毁。
 
 `make check-format`、`git diff --check` 及文档编号/链接检查通过。最终完整 HA 回归日志为 `/tmp/opennhrp-todo-managed-final6.log`，隔离测试产物保留在 `/tmp/opennhrp-ha-managed-netns.VeKZEH`。
 
