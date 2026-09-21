@@ -1060,10 +1060,10 @@ spoke_state=$(spoke_ha_show)
 grep -q '"member":"hub-primary"[^}]*"registered":true[^}]*"ready":true' <<<"$spoke_state"
 grep -q '"active_member":"hub-primary"' <<<"$spoke_state"
 
-# Start quality scenarios with a full clean measurement window, independent
-# of the preceding outage/restart tests.
+# Start quality scenarios with a full clean 60-second measurement window,
+# independent of the preceding outage/restart tests.
 set_spoke_mode manual hub-primary
-sleep 31
+sleep 61
 set_spoke_mode auto
 log "validating per-Spoke latency/loss scoring and migration hysteresis"
 degrade_spoke_primary
@@ -1123,7 +1123,7 @@ with open(sys.argv[2]) as stream:
 winners = set()
 for snapshot in competing:
     backups = [c for c in snapshot["candidates"] if c["member"].startswith("hub-backup")]
-    winners.add(max(backups, key=lambda c: (c["score"], c["priority"]))["member"])
+    winners.add(max(backups, key=lambda c: (c["raw_score"], c["priority"]))["member"])
 assert winners == {"hub-backup1", "hub-backup2"}, winners
 with open(sys.argv[3]) as stream:
     stream.seek(int(sys.argv[4]))
@@ -1138,14 +1138,15 @@ assert primary["loss_pct"] < 1, primary
 for candidate in state["candidates"]:
     if not candidate["ready"]:
         continue
-    assert candidate["quality_valid"] and candidate["quality_samples"] > 0, candidate
+    assert candidate["quality_valid"] and candidate["quality_samples"] >= 3, candidate
     assert candidate["last_quality_reply_age_ms"] < 3000, candidate
     normalized_rtt = candidate["quality_rtt_ms"] / 150
     latency = 20 / (1 + normalized_rtt ** 3)
-    expected = int(70 * max(0, 1 - candidate["loss_pct"] / 20)
-                   + latency + min(candidate["priority"], 100) / 10 + 0.5)
-    # JSON rounds RTT/loss to three decimals; allow a rounding-boundary point.
-    assert abs(candidate["score"] - expected) <= 1, candidate
+    raw_expected = (70 * max(0, 1 - candidate["loss_pct"] / 20)
+                    + latency + min(candidate["priority"], 100) / 10)
+    # JSON rounds RTT/loss diagnostics to three decimals.
+    assert abs(candidate["raw_score"] - raw_expected) < 0.01, candidate
+    assert candidate["score"] == int(candidate["raw_score"] + 0.5), candidate
     assert abs(candidate["latency_score"] - latency) < 0.01, candidate
     assert abs(candidate["loss_pct"] - 100 * candidate["quality_failures"] /
                candidate["quality_samples"]) < 0.001, candidate
@@ -1172,6 +1173,7 @@ wait_single_spoke_owner hub1 hub-primary
 log "validating one Spoke fails over to a healthy Follower without moving the Leader"
 wait_core_role hub1 leader
 wait_core_role hub2 follower
+hard_failure_log_offset=$(wc -c <"$runtime_dir/spoke.log")
 ip netns exec "$spoke_ns" iptables -I OUTPUT -d "$hub1_underlay" \
 	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
 ip netns exec "$spoke_ns" iptables -I OUTPUT -d "$hub1_private_nbma" \
@@ -1184,6 +1186,8 @@ for _ in {1..1000}; do
 	sleep 0.05
 done
 grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
+tail -c +"$((hard_failure_log_offset + 1))" "$runtime_dir/spoke.log" |
+	grep -q 'migrated hub-primary -> hub-backup1 reason=hard-failure'
 grep -q '"leader":"hub-primary"' <<<"$(hub_cluster hub1)"
 wait_core_role hub1 leader
 wait_core_role hub2 follower

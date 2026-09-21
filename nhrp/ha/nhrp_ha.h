@@ -22,6 +22,7 @@ struct nhrp_ha_quality_score {
   double loss;
   double latency;
   double priority;
+  double raw_total;
   unsigned int total;
 };
 
@@ -47,7 +48,8 @@ nhrp_ha_quality_parts(double loss_ratio, double rtt_ms, int priority) {
       20.0 / (1.0 + normalized_rtt * normalized_rtt * normalized_rtt);
   score.priority = priority / 10.0;
   total = score.loss + score.latency + score.priority;
-  score.total = total >= 100.0 ? 100U : (unsigned int)(total + 0.5);
+  score.raw_total = total >= 100.0 ? 100.0 : total;
+  score.total = (unsigned int)(score.raw_total + 0.5);
   return score;
 }
 

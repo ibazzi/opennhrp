@@ -161,12 +161,13 @@ loss_pct = 100 * sum(failures) / sum(completed_probes)
 normalized_rtt = quality_rtt_ms / 150
 latency_score = 20 / (1 + normalized_rtt ^ 3)
 
-score = 70 * max(0, 1 - loss_pct / 20)
-+ latency_score
-+ 10 * min(priority, 100) / 100
+network_score = 70 * max(0, 1 - loss_pct / 20) + latency_score
+raw_score = network_score + 10 * min(priority, 100) / 100
+score = round(raw_score)
 ```
 
-总分最后统一四舍五入。150ms 的延时分为 10；失败率达到 20% 时失败率分为 0。
+迁移决策和候选排序使用未舍入的 `raw_score`，整数 `score` 仅用于兼容展示。
+150ms 的延时分为 10；失败率达到 20% 时失败率分为 0。
 不维护历史固有延时基线，不额外惩罚相对涨幅。继续使用 OpenNHRP 探测，
 不引入 Babel 报文或路由通告。总分权重及以下迁移门槛属于本项目策略，
 不是 RFC 9616 规定的参数。
@@ -178,6 +179,7 @@ score = 70 * max(0, 1 - loss_pct / 20)
 | 失败率滚动窗口 | 60 秒 |
 | RTT 平滑时间常数 | 2 秒 |
 | RTT 测量失效时间 | 30 秒 |
+| 最低有效样本数 | 3 个 completed probes |
 | 失败率 / 延时 / 优先级权重 | 70 / 20 / 10 |
 | 失败率零分点 | 20% |
 | RTT 半分点 / Hill 指数 | 150ms / 3 |
@@ -185,6 +187,7 @@ score = 70 * max(0, 1 - loss_pct / 20)
 | 迁移后冷却 | 30 秒 |
 | 小分差优先级回迁保持时间 | 120 秒 |
 | endpoint 不可达连续失败数 | 3 次，并满足 RTO 截止时间 |
+| endpoint DOWN 附加确认时间 | 3 秒 |
 
 ### 4.2 候选资格与持续失败
 
@@ -194,6 +197,7 @@ score = 70 * max(0, 1 - loss_pct / 20)
 - 当前选中 endpoint 可达；
 - 状态为 `ready`，或它是当前 active Hub 且状态为 `suspect`；
 - 需要认证时，候选认证有效；
+- 最近 60 秒窗口至少有 3 个完成的探测样本；
 - 如果候选是当前 active Hub，它的注册仍有效；备用 Hub 无需预先注册，实际迁移时
   才注册。
 
@@ -202,15 +206,16 @@ score = 70 * max(0, 1 - loss_pct / 20)
 
 持续失败走独立的快速状态路径：第一次连续失败把候选标记为 `suspect`；成功回复
 会清零连续失败计数；连续三次失败且超过自适应 RTO 截止时间后，选中 endpoint
-被标记为不可达，最终得分为 0。当前 active Hub 的注册暂时保留，由协调器按正常
-迁移规则选择新 owner；备用候选一旦 `suspect` 就不能成为迁移目标。
+被标记为确认不可达，状态接口输出 `selected_endpoint_down=true`，最终得分为 0。
+当前 active Hub 的注册暂时保留；若它在 3 秒附加确认期间仍不可达且存在健康目标，
+协调器执行 hard-failure 迁移。备用候选一旦 `suspect` 就不能成为迁移目标。
 
 ### 4.3 候选排序与决策
 
 每个 protocol service 保存独立决策状态。可用候选按以下键从高到低排序：
 
 ```text
-term -> score -> priority -> member ID 字典序较小者
+term -> raw_score -> priority -> member ID 字典序较小者
 ```
 
 迁移决策按以下顺序执行：
@@ -234,13 +239,18 @@ term -> score -> priority -> member ID 字典序较小者
 手动模式且当前 active 得分为 0：
     暂时跳过手动约束，按自动评分选择可用 Hub 兜底
 
-仍在迁移后 30 秒冷却期：
-    不进行普通质量迁移
+active selected_endpoint_down=true：
+    固定第一个仍合格的目标并确认 3 秒
+    确认期结束后以 hard-failure 迁移，绕过已有冷却
 
-目标得分 - active 得分 >= 10：
+仍在迁移后 30 秒冷却期：
+    不进行普通质量迁移或优先级回迁
+
+目标 network_score - active network_score >= 10
+且目标 raw_score > active raw_score：
     优势连续保持 15 秒后迁移，原因记为 quality
 
-0 < 目标优势 < 10 且目标 priority 更高：
+网络质量优势不足 10、目标 raw_score 更高且目标 priority 更高：
     优势连续保持 120 秒后回迁，原因记为 failback
 
 其他情况：
@@ -252,9 +262,9 @@ term -> score -> priority -> member ID 字典序较小者
 term 变化、选择模式变化时，等待重新计时。15 秒质量迁移与 120 秒优先级回迁之间
 切换时也不复用已等待时间；选择模式变化还会清除迁移冷却。
 
-没有合格候选时保留现有内核 neighbor 并继续探测。当前 Hub 得分为 0 或明确不可
-服务也不会绕过 15 秒质量滞回；只有没有 active、较高 term 和有效手动选择走各自
-的专用分支。
+没有合格候选时保留现有内核 neighbor 并继续探测。仅确认的 active endpoint DOWN
+绕过质量滞回和已有冷却；不可服务、认证/注册失败或测量无效造成的零分仍使用
+15 秒质量滞回。hard-failure 成功后与其他迁移一样启动新的 30 秒冷却。
 
 ### 4.4 迁移事务
 
@@ -276,9 +286,10 @@ term 变化、选择模式变化时，等待重新计时。15 秒质量迁移与
 ### 4.5 状态与日志
 
 JSON 和文本状态同时提供评分 RTT、窗口完成数与失败数、最近有效回复年龄、
-测量有效性和未舍入的分项分数：`quality_rtt_ms`、`quality_samples`、
+测量有效性、未舍入总分和 endpoint 故障状态：`quality_rtt_ms`、`quality_samples`、
 `quality_failures`、`last_quality_reply_age_ms`、`quality_valid`、`loss_score`、
-`latency_score`、`priority_score`。`srtt_ms` 仍用于超时估计；没有 RTT 或回复时间
+`latency_score`、`priority_score`、`raw_score`、`selected_endpoint_down`。
+`srtt_ms` 仍用于超时估计；没有 RTT 或回复时间
 时对应新字段输出 `null`。无窗口样本时 `loss_pct` 输出 100，须结合
 `quality_valid=false` 区分测量不足。旧 RTT 可显示但失效后不计延时分；即使分项
 分数较高，可用性和认证限制仍可将最终 `score` 置零。
@@ -287,7 +298,8 @@ JSON 和文本状态同时提供评分 RTT、窗口完成数与失败数、最�
 或目标变化时记录，包含成员、分数、原因、等待时间和剩余冷却时间。
 原因包括 `no-eligible-target`、`initial-wait`、`initial`、`current-best`、
 `margin-small`、`quality-wait`、`quality`、`failback-wait`、`failback`、
-`cooldown`、`manual-selection`、`manual`、`term-blocked` 和 `stale-term`；
+`hard-failure-wait`、`hard-failure`、`cooldown`、`manual-selection`、`manual`、
+`term-blocked` 和 `stale-term`；
 实际迁移成功、失败仍保留现有日志。不新增协调器状态同步接口。
 
 ## 5. 两 Hub Witness

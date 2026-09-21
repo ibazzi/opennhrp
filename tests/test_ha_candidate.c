@@ -111,6 +111,8 @@ static void test_full_candidate_status(struct nhrp_ha_service *service) {
     candidate->state = NHRP_HA_CANDIDATE_READY;
     candidate->endpoint_ready[0] = TRUE;
     quality_record(&candidate->quality, now, FALSE, 0.03);
+    quality_record(&candidate->quality, now, FALSE, 0.03);
+    quality_record(&candidate->quality, now, FALSE, 0.03);
     list_add(&candidate->list_entry, &service->candidates);
   }
   length = nhrp_ha_render(buffer, NHRP_HA_STATUS_BUFFER_SIZE, NULL, TRUE);
@@ -161,7 +163,12 @@ int main(void) {
   }
   assert(candidate.state == NHRP_HA_CANDIDATE_SUSPECT);
   assert(!candidate.endpoint_ready[0]);
+  assert(candidate.selected_endpoint_down);
   assert(!candidate_quality_eligible(&candidate));
+  nhrp_ha_render(output, sizeof(output), NULL, TRUE);
+  assert(strstr(output, "\"selected_endpoint_down\":true"));
+  candidate_reset_quality(&candidate);
+  assert(!candidate.selected_endpoint_down);
 
   /* A fresh response must also say serviceable, even after a renewal. */
   candidate.endpoint_ready[0] = TRUE;
@@ -172,10 +179,11 @@ int main(void) {
   assert(strstr(output, "\"registered\":true,\"ready\":false"));
   assert(strstr(output, "\"score\":0"));
   nhrp_ha_render(output, sizeof(output), NULL, FALSE);
-  assert(strstr(output, "score 0\n"));
+  assert(strstr(output, "raw-score 0.000000 score 0"));
   candidate_probe_missed(&candidate);
   assert(!candidate_quality_eligible(&candidate));
   candidate.endpoint_ready[0] = TRUE;
+  candidate_reset_quality(&candidate);
   candidate.serviceable = TRUE;
   candidate.consecutive_misses = 0;
   candidate.state = NHRP_HA_CANDIDATE_READY;
@@ -194,17 +202,25 @@ int main(void) {
     assert(strstr(output, "\"quality_valid\":false"));
     quality_record(&candidate.quality, now, FALSE, 0.03);
     quality = candidate_quality_view(&candidate, now);
+    assert(!quality.valid && quality.score == 0);
+    quality_record(&candidate.quality, now, FALSE, 0.03);
+    quality = candidate_quality_view(&candidate, now);
+    assert(!quality.valid && quality.score == 0);
+    quality_record(&candidate.quality, now, FALSE, 0.03);
+    quality = candidate_quality_view(&candidate, now);
     assert(quality.valid && quality.score == 100);
+    assert(fabs(quality.raw_score - 99.8412698413) < 0.000001);
     nhrp_ha_render(output, sizeof(output), NULL, TRUE);
     assert(strstr(output, "\"quality_rtt_ms\":30.000"));
-    assert(strstr(output, "\"quality_samples\":1,\"quality_failures\":0"));
+    assert(strstr(output, "\"quality_samples\":3,\"quality_failures\":0"));
     assert(strstr(output, "\"loss_score\":70.000,\"latency_score\":19.841"));
     assert(strstr(output, "\"priority_score\":10.000"));
+    assert(strstr(output, "\"raw_score\":99.841270"));
     assert(strstr(output, "\"score\":100"));
     nhrp_ha_render(output, sizeof(output), NULL, FALSE);
-    assert(strstr(output, "quality-rtt-ms 30.000 quality-samples 1"));
+    assert(strstr(output, "quality-rtt-ms 30.000 quality-samples 3"));
     assert(strstr(output, "loss-score 70.000 latency-score 19.841"));
-    assert(strstr(output, "score 100\n"));
+    assert(strstr(output, "raw-score 99.841270 score 100"));
     candidate.serviceable = FALSE;
     quality = candidate_quality_view(&candidate, now);
     assert(quality.valid && quality.score == 0 && quality.parts.total == 100);

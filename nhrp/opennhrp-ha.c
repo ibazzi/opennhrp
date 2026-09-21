@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,7 @@
 #define SCORE_SWITCH_HOLD 15.0
 #define SCORE_FAILBACK_HOLD 120.0
 #define SCORE_SWITCH_COOLDOWN 30.0
+#define HARD_FAILURE_HOLD 3.0
 
 struct candidate_view {
   char member[64];
@@ -29,6 +31,8 @@ struct candidate_view {
   int priority;
   int ready;
   int authenticated;
+  int selected_endpoint_down;
+  double raw_score;
   unsigned int score;
   uint64_t term;
 };
@@ -173,6 +177,24 @@ static int json_u64(const char *start, const char *key, uint64_t *value) {
   return 1;
 }
 
+static int json_double(const char *start, const char *key, double *value) {
+  char pattern[96];
+  char *end;
+  const char *position;
+  double parsed;
+
+  snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+  position = strstr(start, pattern);
+  if (position == NULL)
+    return 0;
+  position += strlen(pattern);
+  parsed = strtod(position, &end);
+  if (end == position || !isfinite(parsed) || parsed < 0.0 || parsed > 100.0)
+    return 0;
+  *value = parsed;
+  return 1;
+}
+
 static int parse_service(const char *line, struct service_view *view) {
   const char *active;
   const char *position;
@@ -233,6 +255,23 @@ static int parse_service(const char *line, struct service_view *view) {
         strstr(position, "\"authenticated\":true") < end;
     if (!json_unsigned(position, "score", &candidate->score))
       return 0;
+    {
+      const char *raw_score = strstr(position, "\"raw_score\":");
+      const char *endpoint_down =
+          strstr(position, "\"selected_endpoint_down\":");
+
+      candidate->raw_score = candidate->score;
+      if (raw_score != NULL && raw_score < end &&
+          !json_double(position, "raw_score", &candidate->raw_score))
+        return 0;
+      if (endpoint_down != NULL && endpoint_down < end) {
+        endpoint_down += strlen("\"selected_endpoint_down\":");
+        if (strncmp(endpoint_down, "true", 4) == 0)
+          candidate->selected_endpoint_down = 1;
+        else if (strncmp(endpoint_down, "false", 5) != 0)
+          return 0;
+      }
+    }
     if (!json_u64(position, "term", &candidate->term))
       candidate->term = 0;
     json_string(position, "leader", candidate->leader,
@@ -259,14 +298,14 @@ static struct candidate_view *best_ready_candidate(struct service_view *view) {
   size_t i;
 
   for (i = 0; i < view->candidate_count; i++) {
-    if (!view->candidates[i].ready || view->candidates[i].score == 0)
+    if (!view->candidates[i].ready || view->candidates[i].raw_score <= 0.0)
       continue;
     if (view->auth_required && !view->candidates[i].authenticated)
       continue;
     if (best == NULL || view->candidates[i].term > best->term ||
         (view->candidates[i].term == best->term &&
-         (view->candidates[i].score > best->score ||
-          (view->candidates[i].score == best->score &&
+         (view->candidates[i].raw_score > best->raw_score ||
+          (view->candidates[i].raw_score == best->raw_score &&
            (view->candidates[i].priority > best->priority ||
             (view->candidates[i].priority == best->priority &&
              strcmp(view->candidates[i].member, best->member) < 0))))))
@@ -291,7 +330,7 @@ static int initial_candidate_pending(const struct service_view *view,
   for (i = 0; i < view->candidate_count; i++) {
     const struct candidate_view *candidate = &view->candidates[i];
 
-    if (candidate == best || candidate->ready ||
+    if (candidate == best || (candidate->ready && candidate->raw_score > 0.0) ||
         strcmp(candidate->state, "offline") == 0 ||
         strcmp(candidate->state, "disabled") == 0)
       continue;
@@ -303,7 +342,7 @@ static int initial_candidate_pending(const struct service_view *view,
 
 static int candidate_usable(const struct service_view *view,
                             const struct candidate_view *candidate) {
-  return candidate != NULL && candidate->score != 0 &&
+  return candidate != NULL && candidate->raw_score > 0.0 &&
          (candidate->ready || strcmp(candidate->state, "suspect") == 0) &&
          (!view->auth_required || candidate->authenticated);
 }
@@ -332,11 +371,25 @@ static void decision_reset_superior(struct decision_state *state) {
 static double migration_hold(const struct service_view *view,
                              const struct candidate_view *active,
                              const struct candidate_view *target) {
+  double active_quality;
+  double target_quality;
+
   if (target == NULL || target == active || !target->ready ||
-      !candidate_usable(view, target) || target->term != active->term ||
-      target->score <= active->score)
+      !candidate_usable(view, target) || target->term != active->term)
     return 0.0;
-  if (target->score - active->score >= SCORE_SWITCH_MARGIN)
+  if (active->selected_endpoint_down)
+    return HARD_FAILURE_HOLD;
+  if (target->raw_score <= active->raw_score)
+    return 0.0;
+  active_quality = active->raw_score -
+                   (active->priority > 100 ? 10.0 : active->priority / 10.0);
+  target_quality = target->raw_score -
+                   (target->priority > 100 ? 10.0 : target->priority / 10.0);
+  if (active_quality < 0.0)
+    active_quality = 0.0;
+  if (target_quality < 0.0)
+    target_quality = 0.0;
+  if (target_quality - active_quality >= SCORE_SWITCH_MARGIN)
     return SCORE_SWITCH_HOLD;
   return target->priority > active->priority ? SCORE_FAILBACK_HOLD : 0.0;
 }
@@ -401,7 +454,7 @@ static struct candidate_view *select_migration(struct service_view *view,
     state->decision_reason = *reason = "stale-term";
     return leader;
   }
-  if (view->selection_manual && active->score != 0) {
+  if (view->selection_manual && active->raw_score > 0.0) {
     struct candidate_view *manual = find_candidate(view, view->manual_member);
 
     decision_reset_superior(state);
@@ -416,7 +469,7 @@ static struct candidate_view *select_migration(struct service_view *view,
     state->decision_reason = *reason = "manual";
     return manual;
   }
-  if (now < state->cooldown_until) {
+  if (now < state->cooldown_until && !active->selected_endpoint_down) {
     state->decision_reason = "cooldown";
     decision_reset_superior(state);
     return NULL;
@@ -433,8 +486,8 @@ static struct candidate_view *select_migration(struct service_view *view,
       struct candidate_view *candidate = &view->candidates[i];
       if (migration_hold(view, active, candidate) == 0.0)
         continue;
-      if (pending == NULL || candidate->score > pending->score ||
-          (candidate->score == pending->score &&
+      if (pending == NULL || candidate->raw_score > pending->raw_score ||
+          (candidate->raw_score == pending->raw_score &&
            (candidate->priority > pending->priority ||
             (candidate->priority == pending->priority &&
              strcmp(candidate->member, pending->member) < 0))))
@@ -449,8 +502,10 @@ static struct candidate_view *select_migration(struct service_view *view,
   hold = migration_hold(view, active, best);
   snprintf(state->decision_target, sizeof(state->decision_target), "%s",
            best->member);
-  state->decision_reason = hold == SCORE_FAILBACK_HOLD ? "failback-wait"
-                                                       : "quality-wait";
+  state->decision_reason = hold == HARD_FAILURE_HOLD
+                               ? "hard-failure-wait"
+                               : hold == SCORE_FAILBACK_HOLD ? "failback-wait"
+                                                             : "quality-wait";
   if (strcmp(state->superior_member, best->member) != 0 ||
       strcmp(state->superior_address, best->selected_address) != 0 ||
       state->superior_term != best->term || state->superior_hold != hold) {
@@ -465,8 +520,11 @@ static struct candidate_view *select_migration(struct service_view *view,
   }
   if (now - state->superior_since < hold)
     return NULL;
-  state->decision_reason = *reason =
-      hold == SCORE_FAILBACK_HOLD ? "failback" : "quality";
+  state->decision_reason = *reason = hold == HARD_FAILURE_HOLD
+                                        ? "hard-failure"
+                                        : hold == SCORE_FAILBACK_HOLD
+                                              ? "failback"
+                                              : "quality";
   return best;
 }
 
@@ -487,9 +545,12 @@ static void log_decision(FILE *output, struct service_view *view,
   snprintf(state->logged_target, sizeof(state->logged_target), "%s",
            state->decision_target);
   fprintf(output, "opennhrp-ha: DEBUG decision protocol=%s active=%s target=%s "
-          "score=%u/%u reason=%s held=%.3f cooldown=%.3f\n",
+          "raw-score=%.3f/%.3f score=%u/%u reason=%s held=%.3f "
+          "cooldown=%.3f\n",
           view->protocol, active != NULL ? active->member : "none",
           target != NULL ? target->member : "none",
+          active != NULL ? active->raw_score : 0.0,
+          target != NULL ? target->raw_score : 0.0,
           active != NULL ? active->score : 0, target != NULL ? target->score : 0,
           state->decision_reason,
           state->superior_member[0] ? now - state->superior_since : 0.0,

@@ -35,6 +35,7 @@
 #define HA_QUALITY_LOSS_WINDOW 60
 #define HA_QUALITY_RTT_STALE 30.0
 #define HA_QUALITY_RTT_TAU 2.0
+#define HA_QUALITY_MIN_SAMPLES 3
 #define HA_SELECTION_MAGIC "NHSL"
 #define HA_SELECTION_VERSION 1
 
@@ -77,6 +78,7 @@ struct nhrp_ha_candidate {
   int preferred_endpoint_valid;
   uint8_t endpoint_ready[NHRP_HA_MANAGED_MAX_ENDPOINTS];
   uint8_t endpoint_misses[NHRP_HA_MANAGED_MAX_ENDPOINTS];
+  int selected_endpoint_down;
   size_t endpoint_probe_cursor;
   uint32_t probe_round;
   struct nhrp_address bootstrap_local_nbma;
@@ -843,6 +845,7 @@ static void candidate_reset_quality(struct nhrp_ha_candidate *candidate) {
   candidate->rto = candidate->service->active == candidate ? HA_ACTIVE_MIN_RTO
                                                            : HA_STANDBY_MIN_RTO;
   memset(&candidate->quality, 0, sizeof(candidate->quality));
+  candidate->selected_endpoint_down = FALSE;
 }
 
 static void candidate_set_single_endpoint(struct nhrp_ha_candidate *candidate,
@@ -1812,6 +1815,7 @@ static void candidate_probe_missed(struct nhrp_ha_candidate *candidate) {
   if (candidate->endpoint_misses[failed_endpoint] < UINT8_MAX)
     candidate->endpoint_misses[failed_endpoint]++;
   candidate->endpoint_ready[failed_endpoint] = FALSE;
+  candidate->selected_endpoint_down = TRUE;
   if (candidate != service->active) {
     for (endpoint = 0; endpoint < candidate->endpoint_count; endpoint++) {
       if (candidate->endpoint_misses[endpoint] < 3) {
@@ -1938,6 +1942,8 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   candidate->probe_pending = FALSE;
   candidate->endpoint_ready[request->endpoint_index] = TRUE;
   candidate->endpoint_misses[request->endpoint_index] = 0;
+  if (request->selected_endpoint)
+    candidate->selected_endpoint_down = FALSE;
   candidate->last_probe_reply = ev_now();
   if (prefer_takeover) {
     candidate->service->switching = TRUE;
@@ -3588,6 +3594,7 @@ static int candidate_quality_eligible(const struct nhrp_ha_candidate *candidate)
 struct candidate_quality_view {
   struct nhrp_ha_quality_score parts;
   double loss_pct;
+  double raw_score;
   int valid;
   unsigned int score;
   char rtt_ms[48];
@@ -3603,13 +3610,15 @@ candidate_quality_view(struct nhrp_ha_candidate *candidate, double now) {
   quality_expire(quality, now);
   loss = quality->samples ? (double)quality->failures / quality->samples : 1.0;
   view.loss_pct = loss * 100.0;
-  view.valid = quality->samples != 0 && quality->has_rtt &&
+  view.valid = quality->samples >= HA_QUALITY_MIN_SAMPLES && quality->has_rtt &&
                now >= quality->last_reply &&
                now - quality->last_reply <= HA_QUALITY_RTT_STALE;
   view.parts = nhrp_ha_quality_parts(
       loss, view.valid ? quality->rtt * 1000.0 : HUGE_VAL, candidate->priority);
-  view.score = view.valid && candidate_quality_eligible(candidate)
-                   ? view.parts.total : 0;
+  if (view.valid && candidate_quality_eligible(candidate)) {
+    view.raw_score = view.parts.raw_total;
+    view.score = view.parts.total;
+  }
   strcpy(view.rtt_ms, "null");
   strcpy(view.reply_age_ms, "null");
   if (quality->has_rtt) {
@@ -3762,7 +3771,8 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             "\"quality_failures\":%u,\"last_quality_reply_age_ms\":%s,"
             "\"quality_valid\":%s,\"loss_score\":%.3f,"
             "\"latency_score\":%.3f,\"priority_score\":%.3f,"
-            "\"loss_pct\":%.3f,\"score\":%u}",
+            "\"loss_pct\":%.3f,\"raw_score\":%.6f,\"score\":%u,"
+            "\"selected_endpoint_down\":%s}",
             first ? "" : ",", candidate->member_id, nbma, endpoints,
             endpoint_reachable, nbma, candidate->priority,
             local != NULL ? "\"" : "", local != NULL ? local_nbma : "null",
@@ -3793,7 +3803,8 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             candidate->quality.failures, quality.reply_age_ms,
             quality.valid ? "true" : "false", quality.parts.loss,
             quality.parts.latency, quality.parts.priority,
-            quality.loss_pct, quality.score);
+            quality.loss_pct, quality.raw_score, quality.score,
+            candidate->selected_endpoint_down ? "true" : "false");
         first = FALSE;
       }
       offset = append(buffer, size, offset, "]}\n");
@@ -3865,7 +3876,7 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             "leader %s srtt-ms %.3f quality-rtt-ms %s quality-samples %u "
             "quality-failures %u last-quality-reply-age-ms %s quality-valid %s "
             "loss-score %.3f latency-score %.3f priority-score %.3f "
-            "loss-pct %.3f score %u\n",
+            "loss-pct %.3f raw-score %.6f score %u selected-endpoint-down %s\n",
             candidate->member_id, nbma, endpoints,
             local != NULL ? local_nbma : "none",
             local_origin != NULL ? local_origin : "none", candidate->priority,
@@ -3884,7 +3895,8 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             candidate->quality.failures, quality.reply_age_ms,
             quality.valid ? "true" : "false", quality.parts.loss,
             quality.parts.latency, quality.parts.priority,
-            quality.loss_pct, quality.score);
+            quality.loss_pct, quality.raw_score, quality.score,
+            candidate->selected_endpoint_down ? "yes" : "no");
       }
       offset = append(buffer, size, offset, "\n");
     }

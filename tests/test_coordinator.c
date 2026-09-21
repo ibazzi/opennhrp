@@ -11,6 +11,22 @@ int opennhrp_ha_managed_hub_main(int argc, char **argv) {
 #include "../nhrp/opennhrp-ha.c"
 #undef main
 
+static void set_candidate_score(struct candidate_view *candidate,
+                                double raw_score) {
+  candidate->raw_score = raw_score;
+  candidate->score = (unsigned int)(raw_score + 0.5);
+}
+
+static void set_quality_score(struct candidate_view *candidate, double loss,
+                              double rtt, int priority) {
+  struct nhrp_ha_quality_score score =
+      nhrp_ha_quality_parts(loss, rtt, priority);
+
+  candidate->priority = priority;
+  candidate->raw_score = score.raw_total;
+  candidate->score = score.total;
+}
+
 static void test_latency_score(void) {
   static const struct {
     double rtt;
@@ -49,20 +65,20 @@ static void test_latency_migration(void) {
     view.candidates[i].ready = 1;
     view.candidates[i].priority = 100;
   }
-  view.candidates[1].score = nhrp_ha_quality_score(0.0, 30.0, 100);
-  view.candidates[0].score = nhrp_ha_quality_score(0.0, 100.0, 100);
+  set_quality_score(&view.candidates[1], 0.0, 30.0, 100);
+  set_quality_score(&view.candidates[0], 0.0, 100.0, 100);
   assert(select_migration(&view, &decision, 1.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 200.0, &reason) == NULL);
   assert(decision.superior_member[0] == 0);
 
-  view.candidates[0].score = nhrp_ha_quality_score(0.0, 200.0, 100);
+  set_quality_score(&view.candidates[0], 0.0, 200.0, 100);
   assert(select_migration(&view, &decision, 201.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 215.9, &reason) == NULL);
   /* A short spike or an interrupted advantage must restart the hold. */
-  view.candidates[0].score = nhrp_ha_quality_score(0.0, 100.0, 100);
+  set_quality_score(&view.candidates[0], 0.0, 100.0, 100);
   assert(select_migration(&view, &decision, 216.0, &reason) == NULL);
   assert(decision.superior_member[0] == 0);
-  view.candidates[0].score = nhrp_ha_quality_score(0.0, 200.0, 100);
+  set_quality_score(&view.candidates[0], 0.0, 200.0, 100);
   assert(select_migration(&view, &decision, 217.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 231.9, &reason) == NULL);
   assert(select_migration(&view, &decision, 232.0, &reason) ==
@@ -71,8 +87,8 @@ static void test_latency_migration(void) {
 
   strcpy(view.active_member, "hub-b");
   decision.cooldown_until = 262.0;
-  view.candidates[0].score = nhrp_ha_quality_score(0.0, 30.0, 100);
-  view.candidates[1].score = nhrp_ha_quality_score(0.0, 200.0, 100);
+  set_quality_score(&view.candidates[0], 0.0, 30.0, 100);
+  set_quality_score(&view.candidates[1], 0.0, 200.0, 100);
   assert(select_migration(&view, &decision, 261.9, &reason) == NULL);
   assert(select_migration(&view, &decision, 262.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 276.9, &reason) == NULL);
@@ -100,10 +116,10 @@ static void test_sticky_target(void) {
     view.candidates[i].term = 1;
     strcpy(view.candidates[i].selected_address, "192.0.2.1");
   }
-  view.candidates[0].score = 70;
+  set_candidate_score(&view.candidates[0], 70.0);
   for (i = 1; i <= 15; i++) {
-    view.candidates[1].score = 91 - (i / 5) % 2;
-    view.candidates[2].score = 90 + (i / 5) % 2;
+    set_candidate_score(&view.candidates[1], 91 - (i / 5) % 2);
+    set_candidate_score(&view.candidates[2], 90 + (i / 5) % 2);
     assert(select_migration(&view, &decision, i, &reason) == NULL);
     assert(strcmp(decision.superior_member, "b") == 0);
     assert(decision.superior_since == 1.0);
@@ -148,17 +164,17 @@ static void test_sticky_target(void) {
 
   /* Quality/failback transitions never borrow elapsed time from each other. */
   view.candidates[0].priority = 90;
-  view.candidates[2].score = 75;
+  set_candidate_score(&view.candidates[2], 75.0);
   assert(select_migration(&view, &decision, 80.0, &reason) == NULL);
   assert(decision.superior_since == 80.0);
   assert(decision.superior_hold == SCORE_FAILBACK_HOLD);
-  view.candidates[2].score = 90;
+  set_candidate_score(&view.candidates[2], 90.0);
   assert(select_migration(&view, &decision, 190.0, &reason) == NULL);
   assert(decision.superior_since == 190.0);
   assert(decision.superior_hold == SCORE_SWITCH_HOLD);
   assert(select_migration(&view, &decision, 204.9, &reason) == NULL);
   assert(select_migration(&view, &decision, 205.0, &reason) == &view.candidates[2]);
-  view.candidates[2].score = 75;
+  set_candidate_score(&view.candidates[2], 75.0);
   assert(select_migration(&view, &decision, 206.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 325.9, &reason) == NULL);
   assert(select_migration(&view, &decision, 326.0, &reason) == &view.candidates[2]);
@@ -169,9 +185,111 @@ static void test_sticky_target(void) {
   view.candidates[1].authenticated = 1;
   view.candidates[1].term = 2;
   view.candidates[1].priority = 90;
-  view.candidates[1].score = 79;
+  set_candidate_score(&view.candidates[1], 79.0);
   assert(select_migration(&view, &decision, 400.0, &reason) == NULL);
   assert(strcmp(decision.superior_member, "c") == 0);
+}
+
+static void test_migration_boundaries(void) {
+  static const char extended_event[] =
+      "{\"protocol\":\"10.20.0.1\",\"generation\":1,"
+      "\"switching\":false,\"auth_mode\":\"disabled\","
+      "\"active_member\":\"hub-a\",\"candidates\":["
+      "{\"member\":\"hub-a\",\"priority\":0,\"state\":\"suspect\","
+      "\"ready\":false,\"score\":0,\"raw_score\":0.000000,"
+      "\"selected_endpoint_down\":true},"
+      "{\"member\":\"hub-b\",\"priority\":100,\"state\":\"ready\","
+      "\"ready\":true,\"score\":80,\"raw_score\":79.625000,"
+      "\"selected_endpoint_down\":false}]}";
+  struct service_view view = {0};
+  struct decision_state decision = {0};
+  struct candidate_view *target;
+  const char *reason;
+
+  assert(parse_service(extended_event, &view));
+  assert(view.candidates[0].selected_endpoint_down);
+  assert(view.candidates[1].raw_score == 79.625);
+
+  /* READY without enough quality samples must not win initial selection. */
+  view.active_member[0] = 0;
+  view.candidates[0].ready = 1;
+  view.candidates[0].priority = 100;
+  view.candidates[0].selected_endpoint_down = 0;
+  assert(select_migration(&view, &decision, 0.0, &reason) == NULL);
+  assert(strcmp(decision.decision_reason, "initial-wait") == 0);
+
+  memset(&view, 0, sizeof(view));
+  memset(&decision, 0, sizeof(decision));
+  view.candidate_count = 2;
+  strcpy(view.active_member, "hub-a");
+  strcpy(view.candidates[0].member, "hub-a");
+  strcpy(view.candidates[1].member, "hub-b");
+  strcpy(view.candidates[0].selected_address, "192.0.2.1");
+  strcpy(view.candidates[1].selected_address, "192.0.2.2");
+  view.candidates[0].ready = view.candidates[1].ready = 1;
+  view.candidates[0].term = view.candidates[1].term = 1;
+
+  /* Rounded scores differ by ten, but raw network quality differs by 9.51. */
+  set_candidate_score(&view.candidates[0], 50.0);
+  set_candidate_score(&view.candidates[1], 59.51);
+  assert(view.candidates[1].score - view.candidates[0].score == 10);
+  assert(select_migration(&view, &decision, 1.0, &reason) == NULL);
+  assert(decision.superior_member[0] == 0);
+
+  /* A pure ten-point priority advantage always uses slow failback. */
+  memset(&decision, 0, sizeof(decision));
+  view.candidates[0].priority = 0;
+  view.candidates[1].priority = 100;
+  set_candidate_score(&view.candidates[0], 50.0);
+  set_candidate_score(&view.candidates[1], 60.0);
+  assert(select_migration(&view, &decision, 10.0, &reason) == NULL);
+  assert(decision.superior_hold == SCORE_FAILBACK_HOLD);
+  assert(select_migration(&view, &decision, 129.9, &reason) == NULL);
+  target = select_migration(&view, &decision, 130.0, &reason);
+  assert(target == &view.candidates[1] && strcmp(reason, "failback") == 0);
+
+  /* A ten-point network advantage still uses the 15-second quality hold. */
+  memset(&decision, 0, sizeof(decision));
+  view.candidates[0].priority = view.candidates[1].priority = 0;
+  set_candidate_score(&view.candidates[0], 50.0);
+  set_candidate_score(&view.candidates[1], 60.0);
+  assert(select_migration(&view, &decision, 200.0, &reason) == NULL);
+  assert(decision.superior_hold == SCORE_SWITCH_HOLD);
+  assert(select_migration(&view, &decision, 214.9, &reason) == NULL);
+  target = select_migration(&view, &decision, 215.0, &reason);
+  assert(target == &view.candidates[1] && strcmp(reason, "quality") == 0);
+
+  /* Confirmed endpoint failure ignores score and an existing cooldown. */
+  memset(&decision, 0, sizeof(decision));
+  view.candidates[0].ready = 0;
+  view.candidates[0].selected_endpoint_down = 1;
+  set_candidate_score(&view.candidates[0], 50.0);
+  set_candidate_score(&view.candidates[1], 40.0);
+  decision.cooldown_until = 1000.0;
+  assert(select_migration(&view, &decision, 300.0, &reason) == NULL);
+  assert(strcmp(decision.decision_reason, "hard-failure-wait") == 0);
+  assert(decision.superior_hold == HARD_FAILURE_HOLD);
+  assert(select_migration(&view, &decision, 302.9, &reason) == NULL);
+  target = select_migration(&view, &decision, 303.0, &reason);
+  assert(target == &view.candidates[1] &&
+         strcmp(reason, "hard-failure") == 0);
+
+  /* Recovery and target endpoint changes both restart hard-failure timing. */
+  decision_reset_superior(&decision);
+  view.candidates[0].selected_endpoint_down = 1;
+  assert(select_migration(&view, &decision, 400.0, &reason) == NULL);
+  view.candidates[0].selected_endpoint_down = 0;
+  assert(select_migration(&view, &decision, 402.0, &reason) == NULL);
+  assert(decision.superior_member[0] == 0);
+  view.candidates[0].selected_endpoint_down = 1;
+  assert(select_migration(&view, &decision, 403.0, &reason) == NULL);
+  strcpy(view.candidates[1].selected_address, "192.0.2.3");
+  assert(select_migration(&view, &decision, 405.9, &reason) == NULL);
+  assert(decision.superior_since == 405.9);
+  assert(select_migration(&view, &decision, 408.8, &reason) == NULL);
+  target = select_migration(&view, &decision, 408.9, &reason);
+  assert(target == &view.candidates[1] &&
+         strcmp(reason, "hard-failure") == 0);
 }
 
 int main(void) {
@@ -280,6 +398,8 @@ int main(void) {
   assert(candidate != NULL);
   assert(strcmp(candidate->state, "offline") == 0);
   assert(candidate->score == 0);
+  assert(candidate->raw_score == candidate->score);
+  assert(!candidate->selected_endpoint_down);
   candidate = best_ready_candidate(&view);
   assert(candidate != NULL);
   assert(strcmp(candidate->member, "hub-backup1") == 0);
@@ -318,6 +438,7 @@ int main(void) {
   test_latency_score();
   test_latency_migration();
   test_sticky_target();
+  test_migration_boundaries();
 
   assert(parse_service(quality_event, &view));
   candidate = find_candidate(&view, "hub-primary");
@@ -327,11 +448,11 @@ int main(void) {
   assert(best_ready_candidate(&view) == NULL);
   view.candidates[1].authenticated = 1;
   view.candidates[0].ready = 1;
-  view.candidates[0].score = 60;
+  set_candidate_score(&view.candidates[0], 60.0);
   view.candidates[0].priority = 90;
   assert(strcmp(best_ready_candidate(&view)->member, "hub-backup1") == 0);
   view.candidates[0].ready = 0;
-  view.candidates[0].score = 50;
+  set_candidate_score(&view.candidates[0], 50.0);
   view.candidates[0].priority = 100;
   assert(select_migration(&view, &decision, 100.0, &reason) == NULL);
   assert(strcmp(decision.superior_member, "hub-backup1") == 0);
@@ -339,10 +460,10 @@ int main(void) {
   candidate = select_migration(&view, &decision, 115.0, &reason);
   assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
   assert(strcmp(reason, "quality") == 0);
-  view.candidates[1].score = 59;
+  set_candidate_score(&view.candidates[1], 58.9);
   assert(select_migration(&view, &decision, 116.0, &reason) == NULL);
   assert(decision.superior_member[0] == 0);
-  view.candidates[1].score = 60;
+  set_candidate_score(&view.candidates[1], 60.0);
   assert(select_migration(&view, &decision, 117.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 131.9, &reason) == NULL);
   candidate = select_migration(&view, &decision, 132.0, &reason);
@@ -357,8 +478,8 @@ int main(void) {
 
   memset(&decision, 0, sizeof(decision));
   assert(parse_service(legacy_disabled_event, &view));
-  view.candidates[0].score = 100;
-  view.candidates[1].score = 96;
+  set_candidate_score(&view.candidates[0], 100.0);
+  set_candidate_score(&view.candidates[1], 96.0);
   assert(select_migration(&view, &decision, 200.0, &reason) == NULL);
   assert(strcmp(decision.superior_member, "hub-primary") == 0);
   assert(select_migration(&view, &decision, 319.9, &reason) == NULL);
@@ -379,17 +500,17 @@ int main(void) {
   assert(select_migration(&view, &decision, 49.9, &reason) == NULL);
   assert(select_migration(&view, &decision, 50.0, &reason) == NULL);
   view.candidates[0].ready = 1;
-  view.candidates[0].score = 100;
+  set_candidate_score(&view.candidates[0], 100.0);
   assert(select_migration(&view, &decision, 52.56, &reason) == NULL);
   view.candidates[0].ready = 0;
-  view.candidates[0].score = 0;
+  set_candidate_score(&view.candidates[0], 0.0);
   view.candidates[1].ready = 0;
   assert(select_migration(&view, &decision, 60.0, &reason) == NULL);
   view.candidates[1].ready = 1;
-  view.candidates[1].score = 0;
+  set_candidate_score(&view.candidates[1], 0.0);
   assert(best_ready_candidate(&view) == NULL);
   assert(select_migration(&view, &decision, 60.5, &reason) == NULL);
-  view.candidates[1].score = 80;
+  set_candidate_score(&view.candidates[1], 80.0);
   assert(select_migration(&view, &decision, 61.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 75.9, &reason) == NULL);
   assert(select_migration(&view, &decision, 76.0, &reason) == &view.candidates[1]);
@@ -418,8 +539,8 @@ int main(void) {
   assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
   assert(strcmp(reason, "manual") == 0);
   snprintf(view.active_member, sizeof(view.active_member), "%s", "hub-backup1");
-  view.candidates[0].score = 100;
-  view.candidates[1].score = 1;
+  set_candidate_score(&view.candidates[0], 100.0);
+  set_candidate_score(&view.candidates[1], 1.0);
   assert(select_migration(&view, &decision, 1000.0, &reason) == NULL);
   snprintf(view.manual_member, sizeof(view.manual_member), "%s", "hub-primary");
   snprintf(view.candidates[0].leader, sizeof(view.candidates[0].leader), "%s",
