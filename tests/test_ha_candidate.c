@@ -248,6 +248,6 @@ int main(void) {
   assert(candidate.endpoint_ready[0]);
   assert(candidate.registered && !service.switching);
   puts("HA candidate probe accounting and score eligibility tests passed");
-  ev_default_destroy();
+  ev_loop_destroy();
   return 0;
 }

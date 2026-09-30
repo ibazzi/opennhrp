@@ -55,7 +55,7 @@ static void handle_signal_cb(struct ev_signal *w, int revents) {
     break;
   case SIGINT:
   case SIGTERM:
-    ev_unloop(EVUNLOOP_ALL);
+    ev_break(EVBREAK_ALL);
     break;
   case SIGHUP:
     nhrp_reload_config();
@@ -501,7 +501,7 @@ static int daemonize(void) {
     goto err;
   }
 
-  ev_default_fork();
+  ev_loop_fork();
 
   return TRUE;
 
@@ -617,7 +617,7 @@ int main(int argc, char **argv) {
   nhrp_running = TRUE;
   opennhrp_ha_process_start();
   nhrp_ha_start();
-  ev_loop(0);
+  ev_run(0);
   nhrp_running = FALSE;
 
   opennhrp_ha_process_cleanup();
@@ -631,7 +631,7 @@ int main(int argc, char **argv) {
   nhrp_rate_limit_clear(&any, 0);
   nhrp_address_cleanup();
 
-  ev_default_destroy();
+  ev_loop_destroy();
 
   return 0;
 }

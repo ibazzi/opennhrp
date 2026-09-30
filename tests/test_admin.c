@@ -174,7 +174,7 @@ int main(void) {
   assert(recv(fd[1], buffer, sizeof(buffer), 0) == 0);
   close(fd[1]);
   free(data);
-  ev_default_destroy();
+  ev_loop_destroy();
   puts("PASS: admin short writes, EINTR/EAGAIN, cursor mutation, budgets, "
        "deferred "
        "replies, limits and disconnects");

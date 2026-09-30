@@ -328,7 +328,7 @@ char *nhrp_peer_event_reason(union nhrp_peer_event e, int revents,
       snprintf(buf, buflen, "signal %d", WTERMSIG(status));
     else
       snprintf(buf, buflen, "rstatus %d", status);
-  } else if (revents & EV_TIMEOUT) {
+  } else if (revents & EV_TIMER) {
     snprintf(buf, buflen, "timeout");
   } else if (revents == 0) {
     snprintf(buf, buflen, "success");
@@ -343,7 +343,7 @@ struct nhrp_peer *nhrp_peer_from_event(union nhrp_peer_event e, int revents) {
 
   if (revents & EV_CHILD) {
     peer = container_of(e.child, struct nhrp_peer, child);
-  } else if (revents & EV_TIMEOUT) {
+  } else if (revents & EV_TIMER) {
     peer = container_of(e.timer, struct nhrp_peer, timer);
   } else {
     NHRP_BUG_ON(revents != 0);
@@ -2053,7 +2053,7 @@ void nhrp_peer_cleanup(void) {
       nhrp_info("Waiting for peers to die, %d left", nhrp_peer_num_total);
       prev = ev_now();
     }
-    ev_loop(EVLOOP_ONESHOT);
+    ev_run(EVRUN_ONCE);
   }
 }
 

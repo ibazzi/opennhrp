@@ -92,7 +92,7 @@ int main(void) {
   assert(nhrp_ha_hub_sync_end(&iface));
   assert(hub_entry_find(state, &peer.next_hop_address, 32) == NULL);
   nhrp_ha_hub_cleanup();
-  ev_default_destroy();
+  ev_loop_destroy();
   puts("HA owner report retirement and stale-version tests passed");
   return 0;
 }

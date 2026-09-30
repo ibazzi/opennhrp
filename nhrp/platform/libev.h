@@ -1,10 +1,13 @@
 #define EV_STANDALONE 1
+#define EV_COMPAT3 0
 #define EV_MULTIPLICITY 0
 #define EV_VERIFY 0
 
 #define EV_USE_CLOCK_SYSCALL 1
 #define EV_USE_SELECT 0
 #define EV_USE_POLL 1
+/* Keep the existing epoll/poll backend selection. */
+#define EV_USE_IOURING 0
 
 #define EV_IDLE_ENABLE 1
 
