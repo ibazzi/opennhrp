@@ -151,6 +151,8 @@ start_core spoke "$spoke_ns" "$runtime_dir/spoke-state" \
 if [[ $mode == ordinary-default ]]; then
 	wait_log "$runtime_dir/spoke.log" \
 		"Received Registration Reply from 10.30.0.1: success"
+	python3 "$repo_dir/tests/netns/test-multicast.py" "$spoke_ns" 10.30.0.2 \
+		"$hub_ns" "$hub_ns"
 	sleep 8
 	[[ $(count_log "$runtime_dir/spoke.log" \
 		"Sending Registration Request to 10.30.0.1") -eq 1 ]]
@@ -159,7 +161,7 @@ if [[ $mode == ordinary-default ]]; then
 	[[ $(count_log "$runtime_dir/spoke.log" \
 		"Peer inserted to multicast list") -eq 1 ]]
 	[[ -z $(find "$runtime_dir/hub-state" "$runtime_dir/spoke-state" \
-		-mindepth 1 -maxdepth 1 -print -quit) ]]
+		-mindepth 1 -maxdepth 1 ! -name .lock -print -quit) ]]
 	[[ -z $(pgrep -P "$hub_pid" || true) ]]
 	[[ -z $(pgrep -P "$spoke_pid" || true) ]]
 	[[ $(count_log "$runtime_dir/hub.log" "HA candidate") -eq 0 ]]

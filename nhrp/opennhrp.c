@@ -391,12 +391,13 @@ static int load_config(const char *config_file) {
       NEED_INTERFACE();
       read_word(in, &lineno, sizeof(word), word);
       if (strcmp(word, "dynamic") == 0) {
+        iface->mcast_mask =
+            BIT(NHRP_PEER_TYPE_STATIC) | BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) |
+            BIT(NHRP_PEER_TYPE_DYNAMIC) | BIT(NHRP_PEER_TYPE_HA_ACTIVE);
+      } else if (strcmp(word, "nhs") == 0) {
         iface->mcast_mask = BIT(NHRP_PEER_TYPE_STATIC) |
                             BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) |
-                            BIT(NHRP_PEER_TYPE_DYNAMIC);
-      } else if (strcmp(word, "nhs") == 0) {
-        iface->mcast_mask =
-            BIT(NHRP_PEER_TYPE_STATIC) | BIT(NHRP_PEER_TYPE_DYNAMIC_NHS);
+                            BIT(NHRP_PEER_TYPE_HA_ACTIVE);
       } else if (nhrp_address_parse(word, &paddr, NULL)) {
         iface->mcast_numaddr++;
         iface->mcast_addr =
@@ -738,6 +739,8 @@ static int save_iface_config(void *ctx, struct nhrp_interface *iface) {
   FILE *fp = (FILE *)ctx;
   struct nhrp_peer_selector sel;
   struct save_ctx sctx = {fp, iface};
+  char addr[64];
+  int i;
 
   if (!(iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED))
     return 0;
@@ -763,6 +766,13 @@ static int save_iface_config(void *ctx, struct nhrp_interface *iface) {
     fprintf(fp, "  non-caching\n");
   if (iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT_DEST)
     fprintf(fp, "  shortcut-destination\n");
+  if (iface->mcast_mask)
+    fprintf(fp, "  multicast %s\n",
+            iface->mcast_mask & BIT(NHRP_PEER_TYPE_DYNAMIC) ? "dynamic"
+                                                            : "nhs");
+  for (i = 0; i < iface->mcast_numaddr; i++)
+    fprintf(fp, "  multicast %s\n",
+            nhrp_address_format(&iface->mcast_addr[i], sizeof(addr), addr));
 
   fprintf(fp, "\n");
   return 0;

@@ -126,15 +126,17 @@ static struct nhrp_rate_limit *get_rate_limit(struct nhrp_address *src,
   return e;
 }
 
-static uint16_t nhrp_calculate_checksum(uint8_t *pdu, uint16_t len) {
-  uint16_t *pdu16 = (uint16_t *)pdu;
+uint16_t nhrp_calculate_checksum(uint8_t *pdu, uint16_t len) {
+  uint16_t word;
   uint32_t csum = 0;
   int i;
 
-  for (i = 0; i < len / 2; i++)
-    csum += pdu16[i];
+  for (i = 0; i < len / 2; i++) {
+    memcpy(&word, pdu + i * 2, sizeof(word));
+    csum += word;
+  }
   if (len & 1)
-    csum += htons(pdu[len - 1]);
+    csum += htons(pdu[len - 1] << 8);
 
   while (csum & 0xffff0000)
     csum = (csum & 0xffff) + (csum >> 16);

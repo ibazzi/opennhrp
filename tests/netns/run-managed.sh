@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+# MULTICAST_ONLY=1 checks the two-Hub data path without the cluster stress tests.
+
 if [[ $EUID -ne 0 ]]; then
 	echo "run this test as root" >&2
 	exit 1
@@ -291,6 +293,7 @@ interface gre-ha
   holding-time 60
   map 10.20.0.1/32 $hub1_underlay local-nbma $hub1_local_nbma register
   ha-local-nbma hub-backup1 $hub2_local_nbma
+  multicast nhs
 EOF
 start_core witness_spoke "$spoke_ns" "$runtime_dir/witness-spoke-state" \
 	"$runtime_dir/witness-spoke.conf"
@@ -308,6 +311,47 @@ done
 grep -q '"member":"hub-primary".*"ready":true' <<<"$witness_spoke_state"
 grep -q '"member":"hub-backup1"[^}]*"registered":false' <<<"$witness_spoke_state"
 grep -q '"active_member":"hub-primary"' <<<"$witness_spoke_state"
+
+if [[ ${MULTICAST_ONLY:-0} == 1 ]]; then
+	python3 "$repo_dir/tests/netns/test-multicast.py" "$spoke_ns" 10.20.0.2 \
+		"$hub1_ns" "$hub1_ns" "$hub2_ns"
+	"$bin_dir/opennhrpctl" -a "$runtime_dir/witness_spoke.socket" \
+		ha mode manual hub-backup1 >"$runtime_dir/multicast-switch.txt"
+	grep -q '^Status: ok' "$runtime_dir/multicast-switch.txt"
+	for _ in {1..300}; do
+		witness_spoke_state=$(witness_spoke_ha_show)
+		grep -q '"active_member":"hub-backup1"' <<<"$witness_spoke_state" && break
+		sleep 0.05
+	done
+	grep -q '"active_member":"hub-backup1"' <<<"$witness_spoke_state"
+	python3 "$repo_dir/tests/netns/test-multicast.py" "$spoke_ns" 10.20.0.2 \
+		"$hub2_ns" "$hub1_ns" "$hub2_ns"
+	"$bin_dir/opennhrpctl" -a "$runtime_dir/witness_spoke.socket" map save
+	grep -q '^  multicast nhs$' "$runtime_dir/witness-spoke.conf"
+	for mode in dynamic 10.20.0.1; do
+		stop_pid "$witness_spoke_pid"
+		witness_spoke_pid=
+		rm -f -- "$runtime_dir/witness_spoke.socket" "$runtime_dir/witness_spoke.pid"
+		sed -i "s/^  multicast .*/  multicast $mode/" "$runtime_dir/witness-spoke.conf"
+		start_core witness_spoke "$spoke_ns" "$runtime_dir/witness-spoke-state" \
+			"$runtime_dir/witness-spoke.conf"
+		for _ in {1..300}; do
+			witness_spoke_state=$(witness_spoke_ha_show)
+			if grep -q '"active_member":"hub-backup1"' <<<"$witness_spoke_state" &&
+				grep -q '"member":"hub-backup1"[^}]*"ready":true' <<<"$witness_spoke_state"; then
+				break
+			fi
+			sleep 0.05
+		done
+		grep -q '"active_member":"hub-backup1"' <<<"$witness_spoke_state"
+		python3 "$repo_dir/tests/netns/test-multicast.py" "$spoke_ns" 10.20.0.2 \
+			"$hub2_ns" "$hub1_ns" "$hub2_ns"
+		"$bin_dir/opennhrpctl" -a "$runtime_dir/witness_spoke.socket" map save
+		grep -q "^  multicast $mode$" "$runtime_dir/witness-spoke.conf"
+	done
+	log "managed multicast bootstrap, local NBMA, Hub switch and config save passed"
+	exit 0
+fi
 
 log "validating optional two-Hub Witness activation and quorum fencing"
 grep -q '"mode":"legacy"' <<<"$(hub_cluster hub1)"
@@ -730,10 +774,12 @@ interface gre-ha
   holding-time 60
   map 10.20.0.1/32 $hub1_underlay local-nbma $hub1_local_nbma register
   ha-local-nbma hub-backup1 $hub2_local_nbma
+  multicast nhs
 EOF
 cat >"$runtime_dir/private-spoke.conf" <<EOF
 interface gre-ha
   map 10.20.0.1/32 $hub1_private_nbma register
+  multicast dynamic
 EOF
 grep -q '^  map 10.20.0.1/32 ' "$runtime_dir/spoke.conf"
 if grep -Eq 'ha-(cluster-id|member-id|advertise|map)|generation' \
@@ -1006,9 +1052,17 @@ grep -q '"member":"hub-backup2".*"local_nbma":null.*"local_nbma_origin":null' \
 wait_spoke_neighbor "$hub1_local_nbma"
 wait_single_spoke_owner hub1 hub-primary
 
+check_spoke_multicast() {
+	python3 "$repo_dir/tests/netns/test-multicast.py" "$spoke_ns" 10.20.0.2 \
+		"$1" "$hub1_ns" "$hub2_ns" "$hub3_ns"
+}
+log "validating multicast to the active Hub through the local NBMA override"
+check_spoke_multicast "$hub1_ns"
+
 log "validating coordinator exit immediately fences the Hub"
 set_spoke_mode manual hub-backup1
 wait_single_spoke_owner hub2 hub-backup1
+check_spoke_multicast "$hub2_ns"
 spoke_state=$(spoke_ha_show)
 grep -q '"selection_mode":"manual"' <<<"$spoke_state"
 grep -q '"manual_member":"hub-backup1"' <<<"$spoke_state"
@@ -1054,6 +1108,7 @@ grep -q '"manual_member":"hub-backup1"' <<<"$spoke_state"
 grep -q '^Status: ok' "$runtime_dir/spoke-mode-auto.txt"
 activate_spoke_member hub-primary
 wait_single_spoke_owner hub1 hub-primary
+check_spoke_multicast "$hub1_ns"
 grep -q '"selection_mode":"auto"' <<<"$(spoke_ha_show)"
 
 log "validating a short probe outage preserves the active registration"
@@ -1361,6 +1416,8 @@ private_spoke_state=$(private_spoke_ha_show)
 grep -q '"member":"hub-backup1"[^}]*"registered":false' <<<"$private_spoke_state"
 grep -q '"active_member":"hub-primary"' <<<"$private_spoke_state"
 wait_private_spoke_neighbor "$hub1_private_nbma"
+python3 "$repo_dir/tests/netns/test-multicast.py" "$private_spoke_ns" 10.20.0.3 \
+	"$hub1_ns" "$hub1_ns" "$hub2_ns" "$hub3_ns"
 ip netns exec "$private_spoke_ns" ping -I 10.20.0.3 -c 3 -W 1 \
 	198.18.20.1 >"$runtime_dir/private-spoke.initial-ping.txt"
 
@@ -1414,6 +1471,7 @@ wait_spoke_neighbor "$hub1_local_nbma"
 
 log "validating local NBMA save, duplicate rejection and reload reconciliation"
 "$bin_dir/opennhrpctl" -a "$runtime_dir/spoke.socket" map save
+grep -q '^  multicast nhs$' "$runtime_dir/spoke.conf"
 grep -q "^  map 10.20.0.1/32 $hub1_underlay local-nbma $hub1_local_nbma register$" \
 	"$runtime_dir/spoke.conf"
 grep -q "^  ha-local-nbma hub-backup1 $hub2_local_nbma$" \

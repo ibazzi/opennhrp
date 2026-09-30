@@ -78,6 +78,7 @@ struct nhrp_packet {
 #define NHRP_EXTENSION_FLAG_NOCREATE 0x00010000
 
 int nhrp_rate_limit_clear(struct nhrp_address *addr, int prefix_len);
+uint16_t nhrp_calculate_checksum(uint8_t *pdu, uint16_t len);
 
 struct nhrp_buffer *nhrp_buffer_alloc(uint32_t size);
 struct nhrp_buffer *nhrp_buffer_copy(struct nhrp_buffer *buffer);

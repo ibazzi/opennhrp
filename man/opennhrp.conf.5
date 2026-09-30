@@ -203,6 +203,8 @@ Specfying
 .B nhs
 makes all multicast packets to be repeated to each statically configured
 next hop.
+With managed HA, this includes the current active Hub. Dormant bootstrap
+maps are excluded, so multicast follows Hub switches.
 .B dynamic
 instructs to forward to all peers which we have a direct connection with.
 Alternatively, you can specify the directive multiple times for each

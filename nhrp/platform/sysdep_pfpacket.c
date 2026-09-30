@@ -11,9 +11,11 @@
 #include <linux/filter.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
-#include <linux/ip.h>
 #include <linux/types.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
+#include <netinet/udp.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -30,15 +32,11 @@ struct multicast_packet {
   struct nhrp_interface *iface;
   struct sockaddr_ll lladdr;
   unsigned int pdulen;
-  unsigned char pdu[1500];
+  unsigned char pdu[65535];
 };
 
 static struct ev_io packet_io;
 static struct ev_timer install_filter_timer;
-static struct ev_idle mcast_route;
-
-static struct multicast_packet mcast_queue[16];
-static int mcast_head = 0, mcast_tail = 0;
 
 enum {
   LABEL_NEXT = 0,
@@ -243,20 +241,21 @@ int forward_local_addresses_changed(void) {
   return TRUE;
 }
 
-static void send_multicast(struct ev_idle *w, int revents) {
-  struct multicast_packet *pkt;
+static void multicast_error(const char *reason) {
+  static ev_tstamp next_log;
+
+  if (ev_now() >= next_log) {
+    nhrp_error("Multicast forwarding failed: %s", reason);
+    next_log = ev_now() + 5.0;
+  }
+}
+
+static void send_multicast(struct multicast_packet *pkt) {
   struct nhrp_peer *peer;
+  struct nhrp_address *nbma;
   struct iovec iov;
   struct msghdr msg;
-
-  if (mcast_head == mcast_tail) {
-    ev_idle_stop(&mcast_route);
-    return;
-  }
-
-  /* Pop a packet */
-  pkt = &mcast_queue[mcast_tail];
-  mcast_tail = (mcast_tail + 1) % ARRAY_SIZE(mcast_queue);
+  int r;
 
   /* And softroute it forward */
   iov.iov_base = pkt->pdu;
@@ -269,51 +268,98 @@ static void send_multicast(struct ev_idle *w, int revents) {
   };
 
   list_for_each_entry(peer, &pkt->iface->mcast_list, mcast_list_entry) {
+    if (!(peer->flags & NHRP_PEER_FLAG_UP) ||
+        (peer->flags & (NHRP_PEER_FLAG_HA_BOOTSTRAP | NHRP_PEER_FLAG_REMOVED)))
+      continue;
+
     /* Update NBMA destination */
-    pkt->lladdr.sll_halen = peer->next_hop_address.addr_len;
-    memcpy(pkt->lladdr.sll_addr, peer->next_hop_address.addr,
-           pkt->lladdr.sll_halen);
+    nbma = nhrp_peer_active_nbma(peer);
+    if (nbma->type != PF_INET || nbma->addr_len != 4) {
+      multicast_error("invalid NBMA destination");
+      continue;
+    }
+    pkt->lladdr.sll_halen = nbma->addr_len;
+    memcpy(pkt->lladdr.sll_addr, nbma->addr, nbma->addr_len);
 
     /* Best effort attempt to emulate multicast */
-    (void)sendmsg(packet_io.fd, &msg, 0);
+    do {
+      r = sendmsg(packet_io.fd, &msg, MSG_DONTWAIT);
+    } while (r < 0 && errno == EINTR);
+    if (r < 0)
+      multicast_error(strerror(errno));
+    else if (r != pkt->pdulen)
+      multicast_error("short packet send");
   }
+}
+
+static int complete_multicast_checksum(struct multicast_packet *pkt) {
+  struct iphdr *iph = (struct iphdr *)pkt->pdu;
+  unsigned int header_len = iph->ihl * 4, len = pkt->pdulen - header_len;
+  unsigned int offset, minimum;
+  uint16_t checksum;
+
+  if (ntohs(iph->frag_off) & (IP_MF | IP_OFFMASK))
+    return FALSE;
+  if (iph->protocol == IPPROTO_UDP) {
+    offset = offsetof(struct udphdr, check);
+    minimum = sizeof(struct udphdr);
+  } else if (iph->protocol == IPPROTO_TCP) {
+    offset = offsetof(struct tcphdr, check);
+    minimum = sizeof(struct tcphdr);
+  } else {
+    return FALSE;
+  }
+  if (len < minimum)
+    return FALSE;
+  /* CHECKSUM_PARTIAL already stores the pseudo-header sum in the field. */
+  checksum = nhrp_calculate_checksum(pkt->pdu + header_len, len);
+  if (checksum == 0 && iph->protocol == IPPROTO_UDP)
+    checksum = 0xffff;
+  memcpy(pkt->pdu + header_len + offset, &checksum, sizeof(checksum));
+  return TRUE;
 }
 
 static void pfp_read_cb(struct ev_io *w, int revents) {
   struct nhrp_address nbma_src, src, dst;
   struct nhrp_interface *iface;
   struct sockaddr_ll *lladdr;
+  struct multicast_packet pkt;
+  union {
+    struct cmsghdr align;
+    unsigned char data[CMSG_SPACE(sizeof(struct tpacket_auxdata))];
+  } control;
+  struct cmsghdr *cmsg;
   struct iovec iov;
   struct msghdr msg = {
       .msg_iov = &iov,
       .msg_iovlen = 1,
   };
   char fr[32], to[32];
-  int r, fd = w->fd;
+  int r, count, partial_checksum, fd = w->fd;
 
   if (!(revents & EV_READ))
     return;
 
-  while (TRUE) {
-    /* Get a scracth buffer directly from mcast queue, so we do
-     * not need copy the data later. */
-    msg.msg_name = &mcast_queue[mcast_head].lladdr;
-    msg.msg_namelen = sizeof(mcast_queue[mcast_head].lladdr);
-    iov.iov_base = mcast_queue[mcast_head].pdu;
-    iov.iov_len = sizeof(mcast_queue[mcast_head].pdu);
+  /* Bound each read batch so control traffic also gets event-loop time. */
+  for (count = 0; count < 16; count++) {
+    msg.msg_name = &pkt.lladdr;
+    msg.msg_namelen = sizeof(pkt.lladdr);
+    msg.msg_control = control.data;
+    msg.msg_controllen = sizeof(control.data);
+    iov.iov_base = pkt.pdu;
+    iov.iov_len = sizeof(pkt.pdu);
 
     /* Receive */
     r = recvmsg(fd, &msg, MSG_DONTWAIT);
-    mcast_queue[mcast_head].pdulen = r;
 
     /* Process */
     if (r < 0) {
       if (errno == EINTR)
         continue;
-      if (errno == EAGAIN)
+      if (errno == EAGAIN || errno == EWOULDBLOCK)
         return;
       nhrp_perror("PF_PACKET overrun");
-      continue;
+      return;
     }
 
     if (r == 0) {
@@ -321,7 +367,12 @@ static void pfp_read_cb(struct ev_io *w, int revents) {
       return;
     }
 
-    lladdr = &mcast_queue[mcast_head].lladdr;
+    if (msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) {
+      multicast_error("truncated packet");
+      continue;
+    }
+
+    lladdr = &pkt.lladdr;
     if (lladdr->sll_pkttype != PACKET_OUTGOING &&
         lladdr->sll_pkttype != PACKET_HOST)
       continue;
@@ -334,27 +385,40 @@ static void pfp_read_cb(struct ev_io *w, int revents) {
 
     if (!nhrp_address_parse_packet(lladdr->sll_protocol, r, iov.iov_base, &src,
                                    &dst))
-      return;
+      continue;
 
     if (nhrp_address_is_multicast(&dst)) {
+      struct iphdr *iph = (struct iphdr *)pkt.pdu;
+
       if (lladdr->sll_pkttype != PACKET_OUTGOING)
         continue;
+      if (iph->version != 4 || iph->ihl < 5 ||
+          ntohs(iph->tot_len) < iph->ihl * 4 || ntohs(iph->tot_len) > r) {
+        multicast_error("invalid IPv4 packet length");
+        continue;
+      }
 
       nhrp_debug("Multicast from %s to %s",
                  nhrp_address_format(&src, sizeof(fr), fr),
                  nhrp_address_format(&dst, sizeof(to), to));
 
-      /* Queue packet for processing later (handle important
-       * stuff first) */
-      mcast_queue[mcast_head].iface = iface;
-      mcast_head = (mcast_head + 1) % ARRAY_SIZE(mcast_queue);
-
-      /* Drop packets from queue tail, if we haven't processed
-       * them yet. */
-      if (mcast_head == mcast_tail)
-        mcast_tail = (mcast_tail + 1) % ARRAY_SIZE(mcast_queue);
-
-      ev_idle_start(&mcast_route);
+      pkt.iface = iface;
+      pkt.pdulen = ntohs(iph->tot_len);
+      partial_checksum = FALSE;
+      for (cmsg = CMSG_FIRSTHDR(&msg); cmsg != NULL;
+           cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+        if (cmsg->cmsg_level == SOL_PACKET &&
+            cmsg->cmsg_type == PACKET_AUXDATA &&
+            cmsg->cmsg_len >= CMSG_LEN(sizeof(struct tpacket_auxdata))) {
+          struct tpacket_auxdata *aux = (void *)CMSG_DATA(cmsg);
+          partial_checksum = aux->tp_status & TP_STATUS_CSUMNOTREADY;
+        }
+      }
+      if (partial_checksum && !complete_multicast_checksum(&pkt)) {
+        multicast_error("unsupported or invalid partial checksum");
+        continue;
+      }
+      send_multicast(&pkt);
     } else {
       if (lladdr->sll_pkttype != PACKET_HOST)
         continue;
@@ -367,7 +431,7 @@ static void pfp_read_cb(struct ev_io *w, int revents) {
 }
 
 int forward_init(void) {
-  int fd;
+  int fd, enabled = 1;
 
   fd = socket(PF_PACKET, SOCK_DGRAM, ntohs(ETH_P_ALL));
   if (fd < 0) {
@@ -380,15 +444,17 @@ int forward_init(void) {
   }
 
   fcntl(fd, F_SETFD, FD_CLOEXEC);
+  if (setsockopt(fd, SOL_PACKET, PACKET_AUXDATA, &enabled, sizeof(enabled))) {
+    nhrp_perror("Unable to enable packet checksum metadata");
+    close(fd);
+    return FALSE;
+  }
 
   ev_io_init(&packet_io, pfp_read_cb, fd, EV_READ);
   ev_io_start(&packet_io);
 
   ev_timer_init(&install_filter_timer, install_filter_cb, .01, .0);
   install_filter_cb(&install_filter_timer, 0);
-
-  ev_idle_init(&mcast_route, send_multicast);
-  ev_set_priority(&mcast_route, -1);
 
   return TRUE;
 }
@@ -397,5 +463,4 @@ void forward_cleanup(void) {
   ev_io_stop(&packet_io);
   close(packet_io.fd);
   ev_timer_stop(&install_filter_timer);
-  ev_idle_stop(&mcast_route);
 }

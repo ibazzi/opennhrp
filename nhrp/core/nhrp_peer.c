@@ -607,22 +607,17 @@ static void nhrp_peer_is_down(struct nhrp_peer *peer) {
     hlist_del(&peer->nbma_hash_entry);
 }
 
-static void nhrp_peer_is_up(struct nhrp_peer *peer) {
+static void nhrp_peer_update_multicast(struct nhrp_peer *peer) {
   struct nhrp_interface *iface = peer->interface;
-  struct nhrp_peer_selector sel;
   int mcast = 0, was_mcast, i;
   char tmp[64];
-
-  if ((peer->flags & (NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_REGISTER)) ==
-      NHRP_PEER_FLAG_REGISTER) {
-    /* First time registration reply received */
-    nhrp_peer_run_script(peer, "nhs-up", NULL);
-  }
 
   /* Remove from mcast list if previously there */
   was_mcast = list_hashed(&peer->mcast_list_entry);
   if (was_mcast)
     list_del(&peer->mcast_list_entry);
+  if (peer->flags & (NHRP_PEER_FLAG_HA_BOOTSTRAP | NHRP_PEER_FLAG_REMOVED))
+    return;
 
   /* Check if this one needs multicast traffic */
   if (BIT(peer->type) & iface->mcast_mask) {
@@ -646,6 +641,20 @@ static void nhrp_peer_is_up(struct nhrp_peer *peer) {
           "[%s] Peer remains in multicast list after registration refresh",
           nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp));
   }
+}
+
+static void nhrp_peer_is_up(struct nhrp_peer *peer) {
+  struct nhrp_interface *iface = peer->interface;
+  struct nhrp_peer_selector sel;
+  int i;
+
+  if ((peer->flags & (NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_REGISTER)) ==
+      NHRP_PEER_FLAG_REGISTER) {
+    /* First time registration reply received */
+    nhrp_peer_run_script(peer, "nhs-up", NULL);
+  }
+
+  nhrp_peer_update_multicast(peer);
 
   /* Searchable by NBMA */
   if (hlist_hashed(&peer->nbma_hash_entry))
@@ -2256,6 +2265,7 @@ struct nhrp_peer *nhrp_peer_ha_commit(struct nhrp_interface *iface,
 static int suspend_static_cb(void *ctx, struct nhrp_peer *peer) {
   (void)ctx;
   peer->flags |= NHRP_PEER_FLAG_HA_BOOTSTRAP;
+  nhrp_peer_update_multicast(peer);
   ev_timer_stop(&peer->timer);
   return 0;
 }
