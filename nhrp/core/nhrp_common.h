@@ -38,7 +38,8 @@ void nhrp_log(int level, const char *format, ...);
 #define nhrp_error(...) nhrp_log(NHRP_LOG_ERROR, __VA_ARGS__)
 
 void nhrp_perror(const char *message);
-void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes);
+char *nhrp_env(const char *key, const char *value);
+char *nhrp_envu32(const char *key, uint32_t value);
 
 #define NHRP_BUG_ON(cond)                                                      \
   if (cond) {                                                                  \

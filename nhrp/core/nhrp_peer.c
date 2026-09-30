@@ -285,17 +285,6 @@ static inline char *nhrp_peer_format(struct nhrp_peer *peer, size_t len,
   return nhrp_peer_format_full(peer, len, buf, TRUE);
 }
 
-static inline void nhrp_peer_debug_refcount(const char *func,
-                                            struct nhrp_peer *peer) {
-#if 0
-	char tmp[NHRP_PEER_FORMAT_LEN];
-	nhrp_debug("%s(%s %s) ref=%d",
-		   func, nhrp_peer_type[peer->type],
-		   nhrp_peer_format(peer, sizeof(tmp), tmp),
-		   peer->ref);
-#endif
-}
-
 static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer) {
   char tmp[64];
   int r;
@@ -312,24 +301,6 @@ static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer) {
     peer->my_nbma_address = peer->interface->nbma_address;
     peer->my_nbma_mtu = peer->interface->nbma_mtu;
   }
-}
-
-static char *env(const char *key, const char *value) {
-  char *buf;
-  buf = malloc(strlen(key) + strlen(value) + 2);
-  if (buf == NULL)
-    return NULL;
-  sprintf(buf, "%s=%s", key, value);
-  return buf;
-}
-
-static char *envu32(const char *key, uint32_t value) {
-  char *buf;
-  buf = malloc(strlen(key) + 16);
-  if (buf == NULL)
-    return NULL;
-  sprintf(buf, "%s=%u", key, value);
-  return buf;
 }
 
 int nhrp_peer_event_ok(union nhrp_peer_event e, int revents) {
@@ -419,20 +390,22 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
     return;
   }
 
-  envp[i++] = env("NHRP_TYPE", nhrp_peer_type[peer->type]);
+  envp[i++] = nhrp_env("NHRP_TYPE", nhrp_peer_type[peer->type]);
   if (iface->protocol_address.type != PF_UNSPEC)
     envp[i++] =
-        env("NHRP_SRCADDR",
-            nhrp_address_format(&iface->protocol_address, sizeof(tmp), tmp));
+        nhrp_env("NHRP_SRCADDR", nhrp_address_format(&iface->protocol_address,
+                                                     sizeof(tmp), tmp));
   if (peer->my_nbma_address.type != PF_UNSPEC)
-    envp[i++] = env("NHRP_SRCNBMA", nhrp_address_format(&peer->my_nbma_address,
-                                                        sizeof(tmp), tmp));
-  envp[i++] = env("NHRP_DESTADDR", nhrp_address_format(&peer->protocol_address,
-                                                       sizeof(tmp), tmp));
-  envp[i++] = envu32("NHRP_DESTPREFIX", peer->prefix_length);
+    envp[i++] =
+        nhrp_env("NHRP_SRCNBMA",
+                 nhrp_address_format(&peer->my_nbma_address, sizeof(tmp), tmp));
+  envp[i++] =
+      nhrp_env("NHRP_DESTADDR",
+               nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp));
+  envp[i++] = nhrp_envu32("NHRP_DESTPREFIX", peer->prefix_length);
 
   if (peer->purge_reason)
-    envp[i++] = env("NHRP_PEER_DOWN_REASON", peer->purge_reason);
+    envp[i++] = nhrp_env("NHRP_PEER_DOWN_REASON", peer->purge_reason);
 
   switch (peer->type) {
   case NHRP_PEER_TYPE_CACHED:
@@ -441,26 +414,27 @@ void nhrp_peer_run_script(struct nhrp_peer *peer, char *action,
   case NHRP_PEER_TYPE_DYNAMIC:
   case NHRP_PEER_TYPE_DYNAMIC_NHS:
   case NHRP_PEER_TYPE_HA_ACTIVE:
-    envp[i++] =
-        env("NHRP_DESTNBMA",
-            nhrp_address_format(nhrp_peer_active_nbma(peer), sizeof(tmp), tmp));
+    envp[i++] = nhrp_env(
+        "NHRP_DESTNBMA",
+        nhrp_address_format(nhrp_peer_active_nbma(peer), sizeof(tmp), tmp));
     if (peer->mtu)
-      envp[i++] = envu32("NHRP_DESTMTU", peer->mtu);
+      envp[i++] = nhrp_envu32("NHRP_DESTMTU", peer->mtu);
     if (peer->next_hop_nat_oa.type != PF_UNSPEC)
-      envp[i++] =
-          env("NHRP_DESTNBMA_NAT_OA",
-              nhrp_address_format(&peer->next_hop_nat_oa, sizeof(tmp), tmp));
+      envp[i++] = nhrp_env(
+          "NHRP_DESTNBMA_NAT_OA",
+          nhrp_address_format(&peer->next_hop_nat_oa, sizeof(tmp), tmp));
     break;
   case NHRP_PEER_TYPE_SHORTCUT_ROUTE:
   case NHRP_PEER_TYPE_LOCAL_ROUTE:
-    envp[i++] = env("NHRP_NEXTHOP", nhrp_address_format(&peer->next_hop_address,
-                                                        sizeof(tmp), tmp));
+    envp[i++] =
+        nhrp_env("NHRP_NEXTHOP", nhrp_address_format(&peer->next_hop_address,
+                                                     sizeof(tmp), tmp));
     break;
   default:
     NHRP_BUG_ON("invalid peer type");
   }
-  envp[i++] = env("NHRP_INTERFACE", peer->interface->name);
-  envp[i++] = envu32("NHRP_GRE_KEY", peer->interface->gre_key);
+  envp[i++] = nhrp_env("NHRP_INTERFACE", peer->interface->name);
+  envp[i++] = nhrp_envu32("NHRP_GRE_KEY", peer->interface->gre_key);
   envp[i++] = NULL;
 
   execve(nhrp_script_file, (char **)argv, envp);
@@ -1387,7 +1361,6 @@ struct nhrp_peer *nhrp_peer_get(struct nhrp_peer *peer) {
     return NULL;
 
   peer->ref++;
-  nhrp_peer_debug_refcount(__FUNCTION__, peer);
 
   return peer;
 }
@@ -1472,7 +1445,6 @@ int nhrp_peer_put(struct nhrp_peer *peer) {
   NHRP_BUG_ON(peer->ref == 0);
 
   peer->ref--;
-  nhrp_peer_debug_refcount(__FUNCTION__, peer);
 
   if (peer->ref > 0)
     return FALSE;

@@ -381,19 +381,6 @@ static int member_id_valid(const char *member_id) {
   return TRUE;
 }
 
-static void
-cluster_id_format(const uint8_t cluster_id[NHRP_HA_AUTH_CLUSTER_ID_SIZE],
-                  char output[NHRP_HA_AUTH_CLUSTER_ID_SIZE * 2 + 1]) {
-  static const char hex[] = "0123456789abcdef";
-  size_t i;
-
-  for (i = 0; i < NHRP_HA_AUTH_CLUSTER_ID_SIZE; i++) {
-    output[i * 2] = hex[cluster_id[i] >> 4];
-    output[i * 2 + 1] = hex[cluster_id[i] & 15];
-  }
-  output[NHRP_HA_AUTH_CLUSTER_ID_SIZE * 2] = 0;
-}
-
 static struct nhrp_ha_auth_profile *
 auth_profile_find(struct nhrp_interface *iface, int create) {
   struct nhrp_ha_auth_profile *profile;
@@ -3662,7 +3649,8 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
     rendered++;
     nhrp_address_format(&service->protocol, sizeof(protocol), protocol);
     if (profile != NULL && profile->cluster_configured)
-      cluster_id_format(profile->cluster_id, cluster_id);
+      nhrp_ha_hex_encode(profile->cluster_id, sizeof(profile->cluster_id),
+                         cluster_id);
     if (profile != NULL && profile->key_configured[0])
       nhrp_ha_auth_key_id_format(profile->keys.key[0].id, current_key_id);
     if (profile != NULL && profile->key_configured[1])

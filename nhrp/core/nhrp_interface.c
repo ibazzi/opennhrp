@@ -23,7 +23,7 @@
 static struct list_head name_list = LIST_INITIALIZER(name_list);
 static struct hlist_head index_hash[NHRP_INDEX_HASH_SIZE];
 
-static char *env(const char *key, const char *value) {
+char *nhrp_env(const char *key, const char *value) {
   char *buf;
   buf = malloc(strlen(key) + strlen(value) + 2);
   if (buf == NULL)
@@ -32,7 +32,7 @@ static char *env(const char *key, const char *value) {
   return buf;
 }
 
-static char *envu32(const char *key, uint32_t value) {
+char *nhrp_envu32(const char *key, uint32_t value) {
   char *buf;
   buf = malloc(strlen(key) + 16);
   if (buf == NULL)
@@ -159,8 +159,8 @@ int nhrp_interface_run_script(struct nhrp_interface *iface, char *action) {
     return TRUE;
 
   envp[i++] = "NHRP_TYPE=INTERFACE";
-  envp[i++] = env("NHRP_INTERFACE", iface->name);
-  envp[i++] = envu32("NHRP_GRE_KEY", iface->gre_key);
+  envp[i++] = nhrp_env("NHRP_INTERFACE", iface->name);
+  envp[i++] = nhrp_envu32("NHRP_GRE_KEY", iface->gre_key);
   envp[i++] = NULL;
 
   execve(nhrp_script_file, (char **)argv, envp);

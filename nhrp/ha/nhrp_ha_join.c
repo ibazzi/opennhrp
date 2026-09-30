@@ -3,7 +3,6 @@
 #include <arpa/inet.h>
 #include <endian.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <netinet/in.h>
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -14,7 +13,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
@@ -161,77 +159,22 @@ static int crypt_payload(int encrypt, const uint8_t session[32],
   return ok && (size_t)(output_length + final_length) == length;
 }
 
-static EVP_PKEY *identity_private(const char *path) {
-  char encoded[66];
-  uint8_t raw[32];
-  struct stat status;
-  ssize_t length;
-  int fd;
-  size_t i;
-  EVP_PKEY *key = NULL;
-
-  fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-  if (fd < 0)
-    return NULL;
-  if (fstat(fd, &status) != 0 || !S_ISREG(status.st_mode) ||
-      (status.st_mode & 077) != 0 || status.st_uid != geteuid() ||
-      (length = read(fd, encoded, sizeof(encoded))) < 64 || length > 65 ||
-      (length == 65 && encoded[64] != '\n'))
-    goto done;
-  for (i = 0; i < sizeof(raw); i++) {
-    unsigned char high = (unsigned char)encoded[i * 2];
-    unsigned char low = (unsigned char)encoded[i * 2 + 1];
-    int high_value = high >= '0' && high <= '9'   ? high - '0'
-                     : high >= 'a' && high <= 'f' ? high - 'a' + 10
-                                                  : -1;
-    int low_value = low >= '0' && low <= '9'   ? low - '0'
-                    : low >= 'a' && low <= 'f' ? low - 'a' + 10
-                                               : -1;
-
-    if (high_value < 0 || low_value < 0)
-      goto done;
-    raw[i] = (uint8_t)((high_value << 4) | low_value);
-  }
-  key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, raw, sizeof(raw));
-
-done:
-  close(fd);
-  OPENSSL_cleanse(encoded, sizeof(encoded));
-  OPENSSL_cleanse(raw, sizeof(raw));
-  return key;
-}
-
 static int reply_signature(const char *identity_path,
                            const struct join_hello *hello,
                            struct join_reply *reply, int verify,
                            const uint8_t expected_public[32]) {
   uint8_t canonical[sizeof(*hello) + offsetof(struct join_reply, signature)];
-  EVP_PKEY *key = NULL;
-  EVP_MD_CTX *context = EVP_MD_CTX_new();
-  size_t signature_length = sizeof(reply->signature);
   int ok;
 
   memcpy(canonical, hello, sizeof(*hello));
   memcpy(canonical + sizeof(*hello), reply,
          offsetof(struct join_reply, signature));
   if (verify)
-    key = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, NULL, expected_public,
-                                      32);
+    ok = nhrp_ha_managed_identity_verify(expected_public, canonical,
+                                         sizeof(canonical), reply->signature);
   else
-    key = identity_private(identity_path);
-  if (verify)
-    ok = key != NULL && context != NULL &&
-         EVP_DigestVerifyInit(context, NULL, NULL, NULL, key) == 1 &&
-         EVP_DigestVerify(context, reply->signature, sizeof(reply->signature),
-                          canonical, sizeof(canonical)) == 1;
-  else
-    ok = key != NULL && context != NULL &&
-         EVP_DigestSignInit(context, NULL, NULL, NULL, key) == 1 &&
-         EVP_DigestSign(context, reply->signature, &signature_length, canonical,
-                        sizeof(canonical)) == 1 &&
-         signature_length == sizeof(reply->signature);
-  EVP_MD_CTX_free(context);
-  EVP_PKEY_free(key);
+    ok = nhrp_ha_managed_identity_sign(identity_path, canonical,
+                                       sizeof(canonical), reply->signature);
   OPENSSL_cleanse(canonical, sizeof(canonical));
   return ok;
 }

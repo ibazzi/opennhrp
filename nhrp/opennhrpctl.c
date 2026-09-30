@@ -314,17 +314,6 @@ static int command_cluster_init(int argc, char **argv) {
   return 0;
 }
 
-static void id_format(const uint8_t id[16], char output[33]) {
-  static const char digits[] = "0123456789abcdef";
-  size_t i;
-
-  for (i = 0; i < 16; i++) {
-    output[i * 2] = digits[id[i] >> 4];
-    output[i * 2 + 1] = digits[id[i] & 15];
-  }
-  output[32] = 0;
-}
-
 static int command_invite_create(int argc, char **argv) {
   const char *member_id = option_value(argc, argv, "--member-id");
   const char *priority_text = option_value(argc, argv, "--priority");
@@ -444,7 +433,7 @@ static int command_invite_list(int argc, char **argv) {
   for (i = 0; i < state.invite_count; i++) {
     char id[33];
 
-    id_format(state.invites[i].id, id);
+    nhrp_ha_hex_encode(state.invites[i].id, sizeof(state.invites[i].id), id);
     if (format != NULL && strcmp(format, "json") == 0)
       printf("%s{\"id_prefix\":\"%.12s\",\"member\":\"%s\","
              "\"priority\":%u,\"expires_at\":%lld,\"state\":\"%s\"}",
@@ -495,7 +484,7 @@ static int command_invite_remove(int argc, char **argv, int do_delete) {
   for (i = 0; i < state.invite_count; i++) {
     char id[33];
 
-    id_format(state.invites[i].id, id);
+    nhrp_ha_hex_encode(state.invites[i].id, sizeof(state.invites[i].id), id);
     if (strncmp(id, prefix, prefix_length) != 0)
       continue;
     if (found != NULL) {

@@ -59,6 +59,7 @@ int nhrp_ha_auth_key_load(struct nhrp_ha_auth_key *key, const char *path);
 void nhrp_ha_auth_key_clear(struct nhrp_ha_auth_key *key);
 void nhrp_ha_auth_keys_clear(struct nhrp_ha_auth_keys *keys);
 size_t nhrp_ha_auth_key_count(const struct nhrp_ha_auth_keys *keys);
+void nhrp_ha_hex_encode(const uint8_t *input, size_t length, char *output);
 void nhrp_ha_auth_key_id_format(const uint8_t id[NHRP_HA_AUTH_KEY_ID_SIZE],
                                 char output[NHRP_HA_AUTH_KEY_ID_SIZE * 2 + 1]);
 int nhrp_ha_auth_hmac(const uint8_t key[NHRP_HA_AUTH_KEY_SIZE],

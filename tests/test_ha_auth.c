@@ -42,6 +42,8 @@ int main(void) {
   struct nhrp_ha_auth_metadata decoded;
   uint8_t matched[8];
   uint8_t wire[512];
+  uint8_t hex_input[] = {0x00, 0x09, 0xab, 0xff};
+  char hex_output[9];
   struct nhrp_ha_auth_key loaded_key;
   char key_path[] = "/tmp/opennhrp-ha-auth-test.XXXXXX";
   static const char encoded_key[] = "00112233445566778899aabbccddeeff"
@@ -49,6 +51,10 @@ int main(void) {
   size_t length;
   int fd;
 
+  nhrp_ha_hex_encode(hex_input, sizeof(hex_input), hex_output);
+  assert(strcmp(hex_output, "0009abff") == 0);
+  nhrp_ha_hex_encode(hex_input, 0, hex_output);
+  assert(hex_output[0] == 0);
   initialize(&keys, &input, &metadata);
   length = nhrp_ha_auth_encoded_size(&keys, &metadata);
   assert(length > 0 && length < sizeof(wire));

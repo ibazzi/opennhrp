@@ -211,15 +211,19 @@ size_t nhrp_ha_auth_key_count(const struct nhrp_ha_auth_keys *keys) {
   return count;
 }
 
-void nhrp_ha_auth_key_id_format(const uint8_t id[8], char output[17]) {
+void nhrp_ha_hex_encode(const uint8_t *input, size_t length, char *output) {
   static const char hex[] = "0123456789abcdef";
   size_t i;
 
-  for (i = 0; i < 8; i++) {
-    output[i * 2] = hex[id[i] >> 4];
-    output[i * 2 + 1] = hex[id[i] & 15];
+  for (i = 0; i < length; i++) {
+    output[i * 2] = hex[input[i] >> 4];
+    output[i * 2 + 1] = hex[input[i] & 15];
   }
-  output[16] = 0;
+  output[length * 2] = 0;
+}
+
+void nhrp_ha_auth_key_id_format(const uint8_t id[8], char output[17]) {
+  nhrp_ha_hex_encode(id, NHRP_HA_AUTH_KEY_ID_SIZE, output);
 }
 
 size_t nhrp_ha_auth_encoded_size(const struct nhrp_ha_auth_keys *keys,

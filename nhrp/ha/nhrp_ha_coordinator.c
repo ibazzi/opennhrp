@@ -2645,6 +2645,41 @@ static int witness_lease(struct managed_runtime *runtime,
   return set_core_state(runtime);
 }
 
+static void render_witness(struct managed_runtime *runtime, char *response,
+                           size_t size, size_t *used, uint64_t now,
+                           int peer_vote, int manager_vote, int quorum) {
+  size_t i;
+
+  response_append(response, size, used,
+                  "{\"capable\":%s,\"mode\":\"%s\","
+                  "\"policy\":\"%s\",\"voters\":%zu,"
+                  "\"required\":%zu,\"votes\":%zu,\"epoch\":\"",
+                  witness_capable(runtime) ? "true" : "false",
+                  witness_mode_name(runtime->state.witness_mode),
+                  quorum_policy_name(runtime), quorum_voter_count(runtime),
+                  quorum_required(runtime), quorum_votes(runtime, now));
+  for (i = 0; i < 16; i++)
+    response_append(response, size, used, "%02x", runtime->witness_epoch[i]);
+  response_append(
+      response, size, used,
+      "\",\"peer_vote\":%s,\"manager_vote\":%s,"
+      "\"quorum_available\":%s,\"lease_holder\":\"%s\","
+      "\"lease_term\":%llu,\"lease_sequence\":%llu,"
+      "\"lease_remaining_ms\":%llu,\"fallback_remaining_ms\":%llu,"
+      "\"digest\":\"%s\"}",
+      peer_vote ? "true" : "false", manager_vote ? "true" : "false",
+      quorum ? "true" : "false", runtime->witness_lease_holder,
+      (unsigned long long)runtime->witness_lease_term,
+      (unsigned long long)runtime->witness_lease_sequence,
+      (unsigned long long)remaining_ms(now, runtime->witness_lease_deadline_ms),
+      (unsigned long long)(runtime->witness_fallback_since_ms != 0
+                               ? remaining_ms(
+                                     now, runtime->witness_fallback_since_ms +
+                                              WITNESS_FALLBACK_MS)
+                               : 0),
+      runtime->local_digest);
+}
+
 static int control_handle(struct managed_runtime *runtime) {
   char command[512];
   char response[32768];
@@ -2831,37 +2866,10 @@ static int control_handle(struct managed_runtime *runtime) {
     int peer_vote = witness_peer_vote(runtime, now);
     int manager_vote = witness_manager_vote(runtime, now);
 
-    response_append(response, sizeof(response), &used,
-                    "Status: ok\n\n{\"capable\":%s,\"mode\":\"%s\","
-                    "\"policy\":\"%s\",\"voters\":%zu,"
-                    "\"required\":%zu,\"votes\":%zu,\"epoch\":\"",
-                    witness_capable(runtime) ? "true" : "false",
-                    witness_mode_name(runtime->state.witness_mode),
-                    quorum_policy_name(runtime), quorum_voter_count(runtime),
-                    quorum_required(runtime), quorum_votes(runtime, now));
-    for (i = 0; i < 16; i++)
-      response_append(response, sizeof(response), &used, "%02x",
-                      runtime->witness_epoch[i]);
-    response_append(
-        response, sizeof(response), &used,
-        "\",\"peer_vote\":%s,\"manager_vote\":%s,"
-        "\"quorum_available\":%s,\"lease_holder\":\"%s\","
-        "\"lease_term\":%llu,\"lease_sequence\":%llu,"
-        "\"lease_remaining_ms\":%llu,\"fallback_remaining_ms\":%llu,"
-        "\"digest\":\"%s\"}\n",
-        peer_vote ? "true" : "false", manager_vote ? "true" : "false",
-        service_quorum(runtime, now) ? "true" : "false",
-        runtime->witness_lease_holder,
-        (unsigned long long)runtime->witness_lease_term,
-        (unsigned long long)runtime->witness_lease_sequence,
-        (unsigned long long)remaining_ms(now,
-                                         runtime->witness_lease_deadline_ms),
-        (unsigned long long)(runtime->witness_fallback_since_ms != 0
-                                 ? remaining_ms(
-                                       now, runtime->witness_fallback_since_ms +
-                                                WITNESS_FALLBACK_MS)
-                                 : 0),
-        runtime->local_digest);
+    response_append(response, sizeof(response), &used, "Status: ok\n\n");
+    render_witness(runtime, response, sizeof(response), &used, now, peer_vote,
+                   manager_vote, service_quorum(runtime, now));
+    response_append(response, sizeof(response), &used, "\n");
   } else if (strcmp(command, "ha cluster show format json") == 0 ||
              strcmp(command, "ha cluster show --format json") == 0 ||
              strcmp(command, "ha cluster show") == 0) {
@@ -2908,36 +2916,10 @@ static int control_handle(struct managed_runtime *runtime) {
                       i == 0 ? "" : ",", address,
                       runtime->health_last_success[i] ? "true" : "false");
     }
-    response_append(response, sizeof(response), &used,
-                    "],\"witness\":{\"capable\":%s,\"mode\":\"%s\","
-                    "\"policy\":\"%s\",\"voters\":%zu,\"required\":%zu,"
-                    "\"votes\":%zu,\"epoch\":\"",
-                    witness_capable(runtime) ? "true" : "false",
-                    witness_mode_name(runtime->state.witness_mode),
-                    quorum_policy_name(runtime), quorum_voter_count(runtime),
-                    quorum_required(runtime), quorum_votes(runtime, now));
-    for (i = 0; i < 16; i++)
-      response_append(response, sizeof(response), &used, "%02x",
-                      runtime->witness_epoch[i]);
-    response_append(
-        response, sizeof(response), &used,
-        "\",\"peer_vote\":%s,\"manager_vote\":%s,"
-        "\"quorum_available\":%s,\"lease_holder\":\"%s\","
-        "\"lease_term\":%llu,\"lease_sequence\":%llu,"
-        "\"lease_remaining_ms\":%llu,\"fallback_remaining_ms\":%llu,"
-        "\"digest\":\"%s\"},\"members\":[",
-        peer_vote ? "true" : "false", manager_vote ? "true" : "false",
-        quorum ? "true" : "false", runtime->witness_lease_holder,
-        (unsigned long long)runtime->witness_lease_term,
-        (unsigned long long)runtime->witness_lease_sequence,
-        (unsigned long long)remaining_ms(now,
-                                         runtime->witness_lease_deadline_ms),
-        (unsigned long long)(runtime->witness_fallback_since_ms != 0
-                                 ? remaining_ms(
-                                       now, runtime->witness_fallback_since_ms +
-                                                WITNESS_FALLBACK_MS)
-                                 : 0),
-        runtime->local_digest);
+    response_append(response, sizeof(response), &used, "],\"witness\":");
+    render_witness(runtime, response, sizeof(response), &used, now, peer_vote,
+                   manager_vote, quorum);
+    response_append(response, sizeof(response), &used, ",\"members\":[");
     for (i = 0; i < runtime->state.member_count; i++) {
       size_t j;
       struct managed_peer *peer =

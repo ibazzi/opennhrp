@@ -456,76 +456,43 @@ static void admin_cache_show(void *ctx, const char *cmd) {
                    NHRP_PEER_TYPEMASK_ALL & ~BIT(NHRP_PEER_TYPE_LOCAL_ROUTE));
 }
 
-static void admin_cache_purge(void *ctx, const char *cmd) {
+static void admin_cache_modify(void *ctx, const char *cmd, int type_mask,
+                               nhrp_peer_enumerator operation) {
   struct nhrp_peer_selector sel;
   int count = 0;
 
   memset(&sel, 0, sizeof(sel));
-  sel.type_mask = NHRP_PEER_TYPEMASK_PURGEABLE;
+  sel.type_mask = type_mask;
   if (!admin_parse_selector(ctx, cmd, &sel))
     return;
 
-  nhrp_peer_foreach(nhrp_peer_purge_matching, &count, &sel);
+  nhrp_peer_foreach(operation, &count, &sel);
   admin_free_selector(&sel);
 
   admin_write(ctx,
               "Status: ok\n"
               "Entries-Affected: %d\n",
               count);
+}
+
+static void admin_cache_purge(void *ctx, const char *cmd) {
+  admin_cache_modify(ctx, cmd, NHRP_PEER_TYPEMASK_PURGEABLE,
+                     nhrp_peer_purge_matching);
 }
 
 static void admin_cache_lower_down(void *ctx, const char *cmd) {
-  struct nhrp_peer_selector sel;
-  int count = 0;
-
-  memset(&sel, 0, sizeof(sel));
-  sel.type_mask = NHRP_PEER_TYPEMASK_PURGEABLE;
-  if (!admin_parse_selector(ctx, cmd, &sel))
-    return;
-
-  nhrp_peer_foreach(nhrp_peer_lowerdown_matching, &count, &sel);
-  admin_free_selector(&sel);
-
-  admin_write(ctx,
-              "Status: ok\n"
-              "Entries-Affected: %d\n",
-              count);
+  admin_cache_modify(ctx, cmd, NHRP_PEER_TYPEMASK_PURGEABLE,
+                     nhrp_peer_lowerdown_matching);
 }
 
 static void admin_cache_renew(void *ctx, const char *cmd) {
-  struct nhrp_peer_selector sel;
-  int count = 0;
-
-  memset(&sel, 0, sizeof(sel));
-  sel.type_mask = BIT(NHRP_PEER_TYPE_STATIC);
-  if (!admin_parse_selector(ctx, cmd, &sel))
-    return;
-
-  nhrp_peer_foreach(nhrp_peer_reregister_matching, &count, &sel);
-  admin_free_selector(&sel);
-
-  admin_write(ctx,
-              "Status: ok\n"
-              "Entries-Affected: %d\n",
-              count);
+  admin_cache_modify(ctx, cmd, BIT(NHRP_PEER_TYPE_STATIC),
+                     nhrp_peer_reregister_matching);
 }
 
 static void admin_cache_flush(void *ctx, const char *cmd) {
-  struct nhrp_peer_selector sel;
-  int count = 0;
-
-  memset(&sel, 0, sizeof(sel));
-  sel.type_mask = NHRP_PEER_TYPEMASK_REMOVABLE;
-  if (!admin_parse_selector(ctx, cmd, &sel))
-    return;
-
-  nhrp_peer_foreach(nhrp_peer_remove_matching, &count, &sel);
-  admin_free_selector(&sel);
-
-  admin_write(ctx,
-              "Status: ok\n"
-              "Entries-Affected: %d\n",
-              count);
+  admin_cache_modify(ctx, cmd, NHRP_PEER_TYPEMASK_REMOVABLE,
+                     nhrp_peer_remove_matching);
 }
 
 static int admin_show_interface(void *ctx, struct nhrp_interface *iface) {

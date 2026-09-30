@@ -48,34 +48,6 @@ int nhrp_running = FALSE;
 
 static int pid_file_fd;
 
-void nhrp_hex_dump(const char *name, const uint8_t *buf, int bytes) {
-  int i, j;
-  int left;
-
-  fprintf(stderr, "%s:\n", name);
-  for (i = 0; i < bytes; i++) {
-    fprintf(stderr, "%02X ", buf[i]);
-    if (i % 0x10 == 0x0f) {
-      fprintf(stderr, "    ");
-      for (j = 0; j < 0x10; j++)
-        fprintf(stderr, "%c",
-                isgraph(buf[i + j - 0xf]) ? buf[i + j - 0xf] : '.');
-      fprintf(stderr, "\n");
-    }
-  }
-
-  left = i % 0x10;
-  if (left != 0) {
-    fprintf(stderr, "%*s    ", 3 * (0x10 - left), "");
-
-    for (j = 0; j < left; j++)
-      fprintf(stderr, "%c",
-              isgraph(buf[i + j - left]) ? buf[i + j - left] : '.');
-    fprintf(stderr, "\n");
-  }
-  fprintf(stderr, "\n");
-}
-
 static void handle_signal_cb(struct ev_signal *w, int revents) {
   switch (w->signum) {
   case SIGUSR1:

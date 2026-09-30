@@ -195,17 +195,6 @@ static int hex_value(unsigned char character) {
   return -1;
 }
 
-static void hex_encode(const uint8_t *input, size_t length, char *output) {
-  static const char digits[] = "0123456789abcdef";
-  size_t i;
-
-  for (i = 0; i < length; i++) {
-    output[i * 2] = digits[input[i] >> 4];
-    output[i * 2 + 1] = digits[input[i] & 15];
-  }
-  output[length * 2] = 0;
-}
-
 static int hex_decode(const char *input, size_t length, uint8_t *output) {
   size_t i;
 
@@ -276,7 +265,7 @@ int nhrp_ha_managed_keyring_generate(const char *path,
   if (access(path, F_OK) == 0 || RAND_bytes(psk, sizeof(psk)) != 1)
     goto done;
   memcpy(encoded, "current ", 8);
-  hex_encode(psk, sizeof(psk), encoded + 8);
+  nhrp_ha_hex_encode(psk, sizeof(psk), encoded + 8);
   encoded[72] = '\n';
   encoded[73] = 0;
   if (!nhrp_ha_secure_file_write(path, encoded, 73) ||
@@ -372,7 +361,7 @@ int nhrp_ha_managed_keyring_prepare_rotation(const char *path,
       existing[72] != '\n' || RAND_bytes(next, sizeof(next)) != 1)
     goto done;
   existing[length] = 0;
-  hex_encode(next, sizeof(next), next_hex);
+  nhrp_ha_hex_encode(next, sizeof(next), next_hex);
   output_length = snprintf(output, sizeof(output), "%.*snext %s\n", (int)length,
                            existing, next_hex);
   if (output_length <= 0 || output_length >= (int)sizeof(output) ||
@@ -486,7 +475,7 @@ int nhrp_ha_managed_identity_generate(const char *path,
       EVP_PKEY_get_raw_public_key(key, public_key, &length) != 1 ||
       length != 32)
     goto done;
-  hex_encode(private_key, 32, encoded);
+  nhrp_ha_hex_encode(private_key, 32, encoded);
   encoded[64] = '\n';
   encoded[65] = 0;
   ok = nhrp_ha_secure_file_write(path, encoded, 65);

@@ -105,6 +105,22 @@ int main(void) {
   assert(nhrp_ha_managed_keyring_generate(keys_path, &keys));
   assert(keys.key[0].present && !keys.key[1].present);
   assert(nhrp_ha_managed_identity_generate(identity_path, public_key));
+  {
+    uint8_t signature[64];
+    const char message[] = "join reply";
+
+    assert(nhrp_ha_managed_identity_sign(identity_path, message,
+                                         sizeof(message), signature));
+    assert(nhrp_ha_managed_identity_verify(public_key, message, sizeof(message),
+                                           signature));
+    signature[0] ^= 1;
+    assert(!nhrp_ha_managed_identity_verify(public_key, message,
+                                            sizeof(message), signature));
+    assert(chmod(identity_path, 0644) == 0);
+    assert(!nhrp_ha_managed_identity_sign(identity_path, message,
+                                          sizeof(message), signature));
+    assert(chmod(identity_path, 0600) == 0);
+  }
   assert(nhrp_ha_managed_keyring_export(keys_path, export_path));
   assert(nhrp_ha_managed_keyring_load(export_path, &exported_keys));
   assert(memcmp(keys.key[0].id, exported_keys.key[0].id, 8) == 0);

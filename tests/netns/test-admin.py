@@ -124,6 +124,9 @@ def main():
             with connect(b"route") as stalled:
                 stalled.settimeout(12)
                 assert stalled.recv(1) == b""
+            for command in (b"purge", b"cache lowerdown", b"renew", b"flush"):
+                assert ctl(command) == b"Status: ok\nEntries-Affected: 0\n"
+                assert b"Status: failed" in ctl(command + b" invalid-selector")
             assert b"Status: ok" in ctl(b"show")
             assert process.poll() is None
             print("PASS: admin fragmented commands, half-close, 4000-route slow dump, mutation, monitor, timeout and responsiveness")

@@ -6,7 +6,7 @@ CFLAGS += -Wall -Wextra -Werror -std=gnu99 -I../nhrp/core -I../nhrp/ha \
 BUILD_DIR ?= ../build/tests
 TESTS := test_extensions test_ha_wire test_ha_auth test_ha_seen \
 	test_ha_control test_ha_store test_ha_delta test_ha_failback \
-	test_ha_managed test_ha_join test_coordinator test_admin test_ha_candidate test_ha_hub
+	test_ha_managed test_ha_join test_coordinator test_admin test_ha_candidate test_ha_hub test_ha_status
 TEST_BINS := $(addprefix $(BUILD_DIR)/,$(TESTS))
 
 .PHONY: all test clean
@@ -56,6 +56,9 @@ $(BUILD_DIR)/test_ha_join: test_ha_join.c ../nhrp/ha/nhrp_ha_join.c ../nhrp/ha/n
 
 $(BUILD_DIR)/test_coordinator: test_coordinator.c ../nhrp/opennhrp-ha.c ../nhrp/ha/nhrp_ha.h
 	$(CC) $(CFLAGS) -o $@ $<
+
+$(BUILD_DIR)/test_ha_status: test_ha_status.c ../nhrp/ha/nhrp_ha_coordinator.c ../nhrp/ha/nhrp_ha_managed.c ../nhrp/ha/nhrp_ha_auth.c
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ test_ha_status.c ../nhrp/ha/nhrp_ha_managed.c ../nhrp/ha/nhrp_ha_auth.c -lcrypto
 
 clean:
 	rm -rf $(BUILD_DIR)
