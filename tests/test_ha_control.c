@@ -74,6 +74,13 @@ int main(void) {
   input.payload = NULL;
   input.payload_length = 0;
   assert(nhrp_ha_control_encoded_size(&keys, &input) > 0);
+  input.type = NHRP_HA_CONTROL_OWNER;
+  size = nhrp_ha_control_encoded_size(&keys, &input);
+  assert(nhrp_ha_control_encode(&keys, &input, wire, size) ==
+         NHRP_HA_CONTROL_OK);
+  assert(nhrp_ha_control_decode(&keys, wire, size, &output, matched) ==
+         NHRP_HA_CONTROL_OK);
+  assert(output.type == NHRP_HA_CONTROL_OWNER);
 
   free(wire);
   nhrp_ha_auth_keys_clear(&keys);

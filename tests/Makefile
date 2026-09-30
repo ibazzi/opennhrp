@@ -6,7 +6,7 @@ CFLAGS += -Wall -Wextra -Werror -std=gnu99 -I../nhrp/core -I../nhrp/ha \
 BUILD_DIR ?= ../build/tests
 TESTS := test_extensions test_ha_wire test_ha_auth test_ha_seen \
 	test_ha_control test_ha_store test_ha_delta test_ha_failback \
-	test_ha_managed test_ha_join test_coordinator test_admin test_ha_candidate
+	test_ha_managed test_ha_join test_coordinator test_admin test_ha_candidate test_ha_hub
 TEST_BINS := $(addprefix $(BUILD_DIR)/,$(TESTS))
 
 .PHONY: all test clean
@@ -26,6 +26,9 @@ $(BUILD_DIR)/test_extensions: test_extensions.c ../nhrp/core/nhrp_extension.c
 
 $(BUILD_DIR)/test_ha_wire: test_ha_wire.c ../nhrp/ha/nhrp_ha_wire.c
 	$(CC) $(CFLAGS) -o $@ $^
+
+$(BUILD_DIR)/test_ha_hub: test_ha_hub.c ../nhrp/ha/nhrp_ha_hub.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c
+	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -o $@ test_ha_hub.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c -lm -lcrypto -lcares
 
 $(BUILD_DIR)/test_ha_auth: test_ha_auth.c ../nhrp/ha/nhrp_ha_auth.c
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto

@@ -34,7 +34,7 @@ progs-y			+= opennhrp-ha
 opennhrp-ha-objs	+= opennhrp-ha.o ha/nhrp_ha_auth.o \
 			   ha/nhrp_ha_control.o ha/nhrp_ha_store.o \
 			   ha/nhrp_ha_managed.o ha/nhrp_ha_join.o \
-			   ha/nhrp_ha_failback.o ha/opennhrp-ha-managed-hub.o \
+			   ha/nhrp_ha_failback.o ha/nhrp_ha_coordinator.o \
 			   ha/nhrp_ha_delta.o
 LIBS_opennhrp-ha	+= -lcrypto
 

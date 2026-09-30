@@ -1147,7 +1147,8 @@ static int hub_list_apply(struct nhrp_ha_candidate *source,
   size_t group_count = 0;
   size_t i;
 
-  if (!source->static_configured || service->switching ||
+  if ((!source->static_configured && source != service->active) ||
+      service->switching ||
       list->list_generation <= service->hub_list_generation)
     return TRUE;
 
@@ -1205,7 +1206,7 @@ static int hub_list_apply(struct nhrp_ha_candidate *source,
         selected_found = TRUE;
         break;
       }
-    if (candidate->static_configured &&
+    if (candidate->static_configured && !service->automatic &&
         (!selected_found || candidate->priority != groups[i].priority))
       return FALSE;
     endpoints_changed =
@@ -2004,6 +2005,10 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
       candidate->registered_endpoint_valid = FALSE;
     }
   }
+  /* A newer replicated owner can fence this Hub between registration and
+   * activation. A successful probe must not preserve a vanished owner. */
+  if (serviceable && candidate == active && !takeover)
+    candidate->registered = FALSE;
   if (serviceable && candidate == candidate->service->active &&
       !candidate->registered) {
     candidate_set_state(candidate, NHRP_HA_CANDIDATE_REGISTERING);

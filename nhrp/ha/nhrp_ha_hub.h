@@ -51,7 +51,7 @@ int nhrp_ha_hub_set_role(struct nhrp_interface *iface,
                          enum nhrp_ha_hub_role role, uint64_t term,
                          uint64_t index);
 int nhrp_ha_hub_sync_begin(struct nhrp_interface *iface, uint64_t term,
-                           uint64_t index);
+                           uint64_t index, int merge);
 int nhrp_ha_hub_sync_apply(struct nhrp_interface *iface,
                            const struct nhrp_address *protocol,
                            uint8_t prefix_length,

@@ -1136,6 +1136,7 @@ static void admin_ha_registration_sync_begin(void *ctx, const char *cmd) {
   struct nhrp_interface *iface = NULL;
   char keyword[64], value[64];
   uint64_t term = 0, index = 0;
+  int merge = FALSE;
 
   while (parse_word(&cmd, sizeof(keyword), keyword)) {
     if (!parse_word(&cmd, sizeof(value), value))
@@ -1148,10 +1149,14 @@ static void admin_ha_registration_sync_begin(void *ctx, const char *cmd) {
     } else if (strcmp(keyword, "index") == 0) {
       if (!parse_u64(value, &index))
         goto invalid;
+    } else if (strcmp(keyword, "merge") == 0) {
+      if (strcmp(value, "yes") != 0)
+        goto invalid;
+      merge = TRUE;
     } else
       goto invalid;
   }
-  if (iface == NULL || !nhrp_ha_hub_sync_begin(iface, term, index))
+  if (iface == NULL || !nhrp_ha_hub_sync_begin(iface, term, index, merge))
     goto invalid;
   admin_write(ctx, "Status: ok\n");
   return;

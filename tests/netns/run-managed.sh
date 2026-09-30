@@ -398,10 +398,6 @@ for role in hub1 hub2; do
 done
 wait_core_role hub2 leader
 hub1_term=$(hub_cluster hub1 | grep -o '"term":[0-9]*' | head -n 1 | cut -d: -f2)
-sleep 0.5
-hub1_cluster=$(hub_cluster hub1)
-grep -q '"leader":"hub-backup1"' <<<"$hub1_cluster"
-grep -q '"term":'"$hub1_term" <<<"$hub1_cluster"
 witness_spoke_recovered=0
 for _ in {1..20}; do
 	witness_spoke_state=$(witness_spoke_ha_show)
@@ -416,6 +412,10 @@ done
 ((witness_spoke_recovered))
 recovery_elapsed_ms=$(($(date +%s%3N) - outage_started_ms))
 ((recovery_elapsed_ms <= 5000))
+sleep 0.5
+hub1_cluster=$(hub_cluster hub1)
+grep -q '"leader":"hub-backup1"' <<<"$hub1_cluster"
+grep -q '"term":'"$hub1_term" <<<"$hub1_cluster"
 assert_no_dual_serviceable_leader
 
 log "validating stale follower manifest keeps the HA session connected"
@@ -797,6 +797,18 @@ wait_single_spoke_owner() {
 	return 1
 }
 
+wait_active_spoke_owner() {
+	local member role
+	member=$(spoke_ha_show | grep -o '"active_member":"[^"]*' | cut -d'"' -f4)
+	case $member in
+		hub-primary) role=hub1 ;;
+		hub-backup1) role=hub2 ;;
+		hub-backup2) role=hub3 ;;
+		*) return 1 ;;
+	esac
+	wait_single_spoke_owner "$role" "$member"
+}
+
 wait_spoke_neighbor() {
 	local expected=$1
 
@@ -1103,8 +1115,9 @@ grep -q '"active_member":"hub-primary"' <<<"$(private_spoke_ha_show)"
 grep -q '"leader":"hub-primary"' <<<"$(hub_cluster hub1)"
 wait_single_spoke_owner "$quality_role" "$quality_member"
 delay_spoke_backups change 20ms 20ms
-# Observe beyond the 30-second cooldown, including the new standby probe rate.
-for _ in {1..35}; do
+# Cover the 60-second loss window so the previous injected loss expires,
+# as well as the 30-second cooldown and the new standby probe rate.
+for _ in {1..61}; do
 	spoke_state=$(spoke_ha_show)
 	printf '%s\n' "$spoke_state" >>"$runtime_dir/spoke.latency-stable.jsonl"
 	grep -q '"active_member":"'"$quality_member"'"' <<<"$spoke_state"
@@ -1180,32 +1193,79 @@ ip netns exec "$spoke_ns" iptables -I OUTPUT -d "$hub1_private_nbma" \
 	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
 for _ in {1..1000}; do
 	spoke_state=$(spoke_ha_show)
-	if grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"; then
+	if grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state"; then
 		break
 	fi
 	sleep 0.05
 done
-grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
+grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state"
+hard_member=$(grep -o '"active_member":"[^"]*' <<<"$spoke_state" | cut -d'"' -f4)
+hard_role=hub2
+hard_nbma=$hub2_local_nbma
+if [[ $hard_member == hub-backup2 ]]; then
+	hard_role=hub3
+	hard_nbma=$hub3_underlay
+fi
 tail -c +"$((hard_failure_log_offset + 1))" "$runtime_dir/spoke.log" |
-	grep -q 'migrated hub-primary -> hub-backup1 reason=hard-failure'
+	grep -q "migrated hub-primary -> $hard_member reason=hard-failure"
 grep -q '"leader":"hub-primary"' <<<"$(hub_cluster hub1)"
 wait_core_role hub1 leader
-wait_core_role hub2 follower
-wait_spoke_neighbor "$hub2_local_nbma"
+wait_core_role "$hard_role" follower
+wait_spoke_neighbor "$hard_nbma"
 ip netns exec "$spoke_ns" ping -I 10.20.0.2 -c 2 -W 1 198.18.20.1 \
 	>"$runtime_dir/ping.follower.txt"
+# The old Hub remains unreachable: its owner must be retired over the
+# authenticated Hub control connection, without a successful Spoke Purge.
+wait_single_spoke_owner "$hard_role" "$hard_member"
+
+log "validating announcement refresh through the active Follower"
+ip netns exec "$spoke_ns" iptables -I OUTPUT -d "$hub1_reloaded_nbma" \
+	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
+"$bin_dir/opennhrpctl" -a "$runtime_dir/hub1-ha.socket" \
+	ha configure addresses 1 "$hub1_reloaded_nbma" health 2 \
+	198.51.100.250 198.51.100.251 >"$runtime_dir/announcement-change.txt"
+grep -q '^Status: ok' "$runtime_dir/announcement-change.txt"
+for _ in {1..600}; do
+	spoke_state=$(spoke_ha_show)
+	if grep -Eq '"hub_list_source":"hub-backup[12]"' <<<"$spoke_state" &&
+		grep -q '"member":"hub-primary"[^}]*"addresses":\["'"$hub1_reloaded_nbma"'"\]' \
+			<<<"$spoke_state"; then
+		break
+	fi
+	sleep 0.05
+done
+grep -Eq '"hub_list_source":"hub-backup[12]"' <<<"$spoke_state"
+grep -q '"member":"hub-primary"[^}]*"addresses":\["'"$hub1_reloaded_nbma"'"\]' \
+	<<<"$spoke_state"
+wait_active_spoke_owner
+"$bin_dir/opennhrpctl" -a "$runtime_dir/hub1-ha.socket" \
+	ha configure addresses 2 "$hub1_underlay" "$hub1_private_nbma" health 2 \
+	198.51.100.250 198.51.100.251 >"$runtime_dir/announcement-restore.txt"
+grep -q '^Status: ok' "$runtime_dir/announcement-restore.txt"
+for _ in {1..600}; do
+	spoke_state=$(spoke_ha_show)
+	if grep -q '"member":"hub-primary"[^}]*"addresses":\["'"$hub1_underlay"'","'"$hub1_private_nbma"'"\]' \
+		<<<"$spoke_state"; then
+		break
+	fi
+	sleep 0.05
+done
+grep -q '"member":"hub-primary"[^}]*"addresses":\["'"$hub1_underlay"'","'"$hub1_private_nbma"'"\]' \
+	<<<"$spoke_state"
+ip netns exec "$spoke_ns" iptables -D OUTPUT -d "$hub1_reloaded_nbma" \
+	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
 ip netns exec "$spoke_ns" iptables -D OUTPUT -d "$hub1_private_nbma" \
 	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
 ip netns exec "$spoke_ns" iptables -D OUTPUT -d "$hub1_underlay" \
 	-m comment --comment opennhrp-ha-spoke-path-test -j DROP
-wait_single_spoke_owner hub2 hub-backup1
+wait_active_spoke_owner
 
 if [[ ${SINGLE_SPOKE_MIGRATION_ONLY:-0} == 1 ]]; then
 	printf 'OpenNHRP single-Spoke active-only migration test passed\n'
 	exit 0
 fi
 spoke_state=$(spoke_ha_show)
-grep -q '"active_member":"hub-backup1"' <<<"$spoke_state"
+grep -Eq '"active_member":"hub-backup[12]"' <<<"$spoke_state"
 activate_spoke_member hub-primary
 for _ in {1..300}; do
 	spoke_state=$(spoke_ha_show)
@@ -1221,6 +1281,23 @@ wait_spoke_neighbor "$hub1_local_nbma"
 wait_single_spoke_owner hub1 hub-primary
 
 log "validating disabled member is removed from the Spoke Hub List"
+# Replacing every Primary endpoint can close its control sessions and elect a
+# Backup. Restore the test's Leader before making Primary-only member changes.
+current_leader=$(cluster_json | grep -o '"leader":"[^"]*' | cut -d'"' -f4)
+case $current_leader in
+	hub-backup1) witness_command hub2 ha failback request force ;;
+	hub-backup2) witness_command hub3 ha failback request force ;;
+esac
+for _ in {1..300}; do
+	if grep -q '"leader":"hub-primary"' <<<"$(cluster_json)"; then
+		break
+	fi
+	sleep 0.05
+done
+grep -q '"leader":"hub-primary"' <<<"$(cluster_json)"
+wait_core_role hub1 leader
+wait_single_spoke_owner hub1 hub-primary
+spoke_state=$(spoke_ha_show)
 hub_list_generation=$(grep -o '"hub_list_generation":[0-9]*' \
 	<<<"$spoke_state" | cut -d: -f2)
 OPENNHRP_HA_STATE_DIR="$runtime_dir/hub1-state" \
@@ -1272,14 +1349,15 @@ grep -q '"active_member":"hub-primary"' <<<"$spoke_state"
 for _ in {1..400}; do
 	private_spoke_state=$(private_spoke_ha_show)
 	if grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_private_nbma"'"[^}]*"ready":true' \
-		<<<"$private_spoke_state" &&
-		grep -q '"active_member":"hub-primary"' <<<"$private_spoke_state"; then
+		<<<"$private_spoke_state"; then
 		break
 	fi
 	sleep 0.05
 done
 grep -q '"member":"hub-primary"[^}]*"selected_address":"'"$hub1_private_nbma"'"[^}]*"ready":true' \
 	<<<"$private_spoke_state"
+activate_spoke_member hub-primary "$runtime_dir/private_spoke.socket"
+private_spoke_state=$(private_spoke_ha_show)
 grep -q '"member":"hub-backup1"[^}]*"registered":false' <<<"$private_spoke_state"
 grep -q '"active_member":"hub-primary"' <<<"$private_spoke_state"
 wait_private_spoke_neighbor "$hub1_private_nbma"
@@ -1702,7 +1780,9 @@ hub1_failback_delete_before=$(grep -c 'Delete link from' \
 "$bin_dir/opennhrpctl" -a "$runtime_dir/hub2-ha.socket" \
 	ha failback request force >"$runtime_dir/failback.request.txt"
 grep -q 'Requested: force' "$runtime_dir/failback.request.txt"
-for _ in {1..400}; do
+# A Spoke that first learns the new term from its active Follower still
+# observes the 120-second priority failback hold.
+for _ in {1..2600}; do
 	hub1_cluster=$(cluster_json_for hub1)
 	hub2_cluster=$(cluster_json_for hub2)
 	spoke_state=$(spoke_ha_show)
@@ -1835,6 +1915,19 @@ grep -q '"member":"hub-backup1".*"connected":true.*"authenticated":true' \
 	<<<"$hub3_cluster"
 
 log "validating active member leave and Primary cluster destroy"
+for _ in {1..300}; do
+	hub2_cluster=$(hub_cluster hub2)
+	hub3_cluster=$(hub_cluster hub3)
+	hub2_term=$(grep -o '"term":[0-9]*' <<<"$hub2_cluster" | head -n 1)
+	hub3_term=$(grep -o '"term":[0-9]*' <<<"$hub3_cluster" | head -n 1)
+	if [[ $hub2_term == "$hub3_term" ]] &&
+		grep -q '"leader":"hub-backup1"' <<<"$hub3_cluster"; then
+		break
+	fi
+	sleep 0.05
+done
+[[ $hub2_term == "$hub3_term" ]]
+grep -q '"leader":"hub-backup1"' <<<"$hub3_cluster"
 "$bin_dir/opennhrpctl" -a "$runtime_dir/hub3-ha.socket" ha leave \
 	>"$runtime_dir/leave.txt"
 grep -q 'Leave requested' "$runtime_dir/leave.txt"

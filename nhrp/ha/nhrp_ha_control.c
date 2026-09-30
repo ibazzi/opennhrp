@@ -14,7 +14,7 @@
   (NHRP_HA_AUTH_KEY_ID_SIZE + NHRP_HA_AUTH_TAG_SIZE)
 
 static int type_valid(uint8_t type) {
-  return type >= NHRP_HA_CONTROL_HELLO && type <= NHRP_HA_CONTROL_DESTROY;
+  return type >= NHRP_HA_CONTROL_HELLO && type <= NHRP_HA_CONTROL_OWNER;
 }
 
 size_t nhrp_ha_control_encoded_size(const struct nhrp_ha_auth_keys *keys,

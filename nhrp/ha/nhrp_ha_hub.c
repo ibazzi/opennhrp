@@ -42,6 +42,7 @@ struct nhrp_ha_hub_state {
   uint64_t pending_index;
   size_t count;
   int sync_active;
+  int sync_merge;
   struct list_head entries;
 };
 
@@ -576,7 +577,7 @@ int nhrp_ha_hub_set_role(struct nhrp_interface *iface,
 }
 
 int nhrp_ha_hub_sync_begin(struct nhrp_interface *iface, uint64_t term,
-                           uint64_t index) {
+                           uint64_t index, int merge) {
   struct nhrp_ha_hub_state *state = hub_state_find(iface, TRUE);
   struct nhrp_ha_hub_entry *entry;
 
@@ -586,6 +587,7 @@ int nhrp_ha_hub_sync_begin(struct nhrp_interface *iface, uint64_t term,
   state->pending_term = term;
   state->pending_index = index;
   state->sync_active = TRUE;
+  state->sync_merge = merge;
   list_for_each_entry(entry, &state->entries, list_entry) entry->replica_seen =
       FALSE;
   return TRUE;
@@ -609,6 +611,18 @@ int nhrp_ha_hub_sync_apply(struct nhrp_interface *iface,
   entry = hub_entry_get(state, protocol, prefix_length);
   if (entry == NULL)
     return FALSE;
+  /* Only a new owner or a renewal of the same owner may refresh the shadow. */
+  if (state->sync_merge &&
+      ((entry->direct.present &&
+        binding_version_cmp(binding, &entry->direct.binding) <= 0) ||
+       (entry->replica.present &&
+        (binding_version_cmp(binding, &entry->replica.binding) < 0 ||
+         (binding_version_cmp(binding, &entry->replica.binding) == 0 &&
+          (strcmp(binding->owner_member, entry->replica.binding.owner_member) !=
+               0 ||
+           binding->registration_id ==
+               entry->replica.binding.registration_id))))))
+    return TRUE;
   hub_owner_observe(entry, binding);
   if (entry->direct.present && !entry->direct.retired &&
       strcmp(binding->owner_member, iface->ha_member_id) != 0 &&
@@ -621,7 +635,7 @@ int nhrp_ha_hub_sync_apply(struct nhrp_interface *iface,
   /* A Follower normally keeps the replica for a future takeover.  A
    * standby-to-follower transition may project it as a local fallback, but
    * a retired direct owner remains fenced. */
-  if (state->role == NHRP_HA_HUB_LEADER &&
+  if (!state->sync_merge && state->role == NHRP_HA_HUB_LEADER &&
       (!entry->direct.present || entry->direct.retired))
     return project_entry(state, entry);
   return TRUE;
@@ -636,7 +650,7 @@ int nhrp_ha_hub_sync_end(struct nhrp_interface *iface) {
     return FALSE;
   hub_state_gc(state);
   list_for_each_entry_safe(entry, next, &state->entries, list_entry) {
-    if (!entry->replica_seen)
+    if (!state->sync_merge && !entry->replica_seen)
       entry->replica.present = FALSE;
     hub_value_expire(&entry->direct);
     hub_value_expire(&entry->replica);

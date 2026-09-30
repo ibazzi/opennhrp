@@ -14,7 +14,7 @@
 #include <unistd.h>
 
 #include "nhrp_ha.h"
-#include "opennhrp-ha-managed-hub.h"
+#include "nhrp_ha_coordinator.h"
 
 #define BUFFER_SIZE NHRP_HA_STATUS_BUFFER_SIZE
 #define SCORE_SWITCH_MARGIN 10

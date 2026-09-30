@@ -1,7 +1,7 @@
-/* ha/opennhrp-ha-managed-hub.h - Managed multi-Hub coordinator */
+/* ha/nhrp_ha_coordinator.h - Managed multi-Hub coordinator */
 
-#ifndef OPENNHRP_HA_MANAGED_HUB_H
-#define OPENNHRP_HA_MANAGED_HUB_H
+#ifndef NHRP_HA_COORDINATOR_H
+#define NHRP_HA_COORDINATOR_H
 
 #include <stdint.h>
 #include <string.h>

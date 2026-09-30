@@ -28,6 +28,7 @@ enum nhrp_ha_control_type {
   NHRP_HA_CONTROL_LEAVE = 13,
   NHRP_HA_CONTROL_LEAVE_ACK = 14,
   NHRP_HA_CONTROL_DESTROY = 15,
+  NHRP_HA_CONTROL_OWNER = 16,
 };
 
 enum nhrp_ha_control_result {

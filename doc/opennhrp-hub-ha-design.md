@@ -102,6 +102,11 @@ Hub 返回 Hub List 后，Spoke 只在当前 active Hub 保持注册，其他 Hu
 候选。active Hub 故障时，Spoke 将注册迁移到目标 Hub，再提交新的 HA neighbor。
 普通非 HA 配置不受影响。
 
+Follower 通过认证的 Hub 控制连接向 Leader 回报本地 owner；Leader 按 owner
+版本清理旧注册并同步新的 shadow，避免旧 Hub 不可达时只能等待 Purge 或注册过期。
+此回报通过 HELLO 能力协商启用，需要两端 Hub 均支持。Spoke 从静态引导 Hub
+或当前 active Hub 接收更新的 Hub List，自动发现模式允许公告地址替换旧端点。
+
 需要认证时，在 Hub 导出 keyring 并通过可信通道复制：
 
 ```sh

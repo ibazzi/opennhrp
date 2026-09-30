@@ -1,4 +1,4 @@
-/* ha/opennhrp-ha-managed-hub.c - Managed multi-Hub HA coordinator */
+/* ha/nhrp_ha_coordinator.c - Managed multi-Hub HA coordinator */
 
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -32,13 +32,14 @@
 #include "nhrp_ha_join.h"
 #include "nhrp_ha_managed.h"
 #include "nhrp_ha_store.h"
-#include "opennhrp-ha-managed-hub.h"
+#include "nhrp_ha_coordinator.h"
 
 #define MANAGED_TICK_MS 100
 #define MANAGED_SEND_MS 250
 #define MANAGED_RECONNECT_MS 500
 #define MANAGED_ADMIN_PAGE 128
 #define MANAGED_HELLO_VERSION 1
+#define MANAGED_HELLO_OWNER_REPORT 2
 #define MANAGED_HELLO_DOMAIN "OpenNHRP-HA-HELLO-v1"
 #define HEALTH_PROBE_TIMEOUT_MS 800
 #define HEALTH_FAILURE_ROUNDS 3
@@ -94,6 +95,7 @@ struct managed_peer {
   uint64_t reported_term;
   uint8_t *remote_snapshot;
   size_t remote_snapshot_length;
+  char owner_digest[65];
   struct in_addr addresses[NHRP_HA_MANAGED_MAX_ENDPOINTS];
   uint8_t address_count;
   uint8_t address_index;
@@ -101,6 +103,7 @@ struct managed_peer {
   int fd;
   int authenticated;
   int hello_received;
+  int owner_report_capable;
   int outgoing;
   unsigned int consecutive_misses;
   unsigned int connect_failures;
@@ -740,6 +743,7 @@ static void peer_close(struct managed_peer *peer) {
   peer->hello_received = 0;
   peer->outgoing = 0;
   peer->stable_since_ms = 0;
+  peer->owner_digest[0] = 0;
 }
 
 static void peers_close(struct managed_runtime *runtime) {
@@ -992,7 +996,8 @@ static int hello_payload_build(struct managed_runtime *runtime,
   memset(payload, 0, sizeof(*payload));
   payload->version = MANAGED_HELLO_VERSION;
   payload->flags =
-      strcmp(runtime->state.local_member, runtime->state.leader) == 0;
+      (strcmp(runtime->state.local_member, runtime->state.leader) == 0) |
+      MANAGED_HELLO_OWNER_REPORT;
   payload->nonce = htobe64(runtime->nonce++);
   memcpy(payload->public_key, local->public_key, 32);
   hello_canonical(runtime, frame, payload, &canonical);
@@ -1292,6 +1297,7 @@ static int snapshot_apply(struct managed_runtime *runtime,
   char *line;
   char *save = NULL;
   size_t count = 0;
+  int owner_report = frame->type == NHRP_HA_CONTROL_OWNER;
 
   copy = malloc(snapshot_length + 1);
   if (copy == NULL)
@@ -1326,10 +1332,12 @@ static int snapshot_apply(struct managed_runtime *runtime,
         (strcmp(origin, "direct") != 0 && strcmp(origin, "replica") != 0))
       goto failed;
   }
-  snprintf(command, sizeof(command),
-           "ha registration sync begin interface %s term %llu index %llu\n",
-           runtime->state.interface, (unsigned long long)frame->term,
-           (unsigned long long)frame->index);
+  snprintf(
+      command, sizeof(command),
+      "ha registration sync begin interface %s term %llu index %llu%s\n",
+      runtime->state.interface, (unsigned long long)frame->term,
+      (unsigned long long)(owner_report ? runtime->local_index : frame->index),
+      owner_report ? " merge yes" : "");
   if (!admin_ok(runtime, command))
     goto failed;
   memcpy(copy, snapshot, snapshot_length);
@@ -1355,6 +1363,10 @@ static int snapshot_apply(struct managed_runtime *runtime,
                &old_term, &old_index, &registration_id, owner_member,
                origin) != 12)
       goto failed;
+    /* A member may report only its own direct registrations. */
+    if (owner_report && (strcmp(origin, "direct") != 0 ||
+                         strcmp(owner_member, frame->sender) != 0))
+      continue;
     snprintf(command, sizeof(command),
              "ha registration sync apply interface %s protocol %s/%u nbma %s "
              "nat-oa %s mtu %u holding %u flags %u registration-id %u "
@@ -1697,6 +1709,9 @@ static int frame_process(struct managed_runtime *runtime,
        !hello_payload_verify(runtime, frame, hello, sender)))
     return 0;
   record_message(peer);
+  if (frame->type == NHRP_HA_CONTROL_HELLO)
+    peer->owner_report_capable =
+        (hello->flags & MANAGED_HELLO_OWNER_REPORT) != 0;
   peer->reported_term = frame->term;
   peer->reported_leader = (frame->flags & 1) != 0;
   transfer_grace =
@@ -1740,12 +1755,22 @@ static int frame_process(struct managed_runtime *runtime,
       return 0;
   }
   switch (frame->type) {
+  case NHRP_HA_CONTROL_OWNER:
+    if (strcmp(runtime->state.local_member, runtime->state.leader) != 0 ||
+        sender->state != NHRP_HA_MANAGED_ACTIVE || !peer->authenticated ||
+        !peer->hello_received || frame->term != runtime->state.term)
+      return 0;
+    return snapshot_apply(runtime, frame, frame->payload,
+                          frame->payload_length);
   case NHRP_HA_CONTROL_HELLO: {
     struct nhrp_ha_managed_member *current =
         state_member(runtime, runtime->state.leader);
 
     int first_hello = !peer->hello_received;
 
+    /* Join's commit index does not prove that the learner has a snapshot. */
+    if (first_hello && sender->state == NHRP_HA_MANAGED_LEARNER)
+      peer->need_snapshot = 1;
     peer->authenticated = 1;
     peer->hello_received = 1;
     peer->match_index = frame->ack_index;
@@ -3195,6 +3220,27 @@ static int run_loop(struct managed_runtime *runtime) {
                         runtime->local_index, peer->match_index))
           peer_close(peer);
       } else {
+        if (peer->owner_report_capable &&
+            local_member(runtime)->state == NHRP_HA_MANAGED_ACTIVE &&
+            strcmp(peer->member, runtime->state.leader) == 0) {
+          uint8_t *owners = NULL;
+          size_t owners_length = 0;
+          char digest[65];
+          int sent = snapshot_fetch(runtime, &owners, &owners_length, digest);
+          if (sent && strcmp(peer->owner_digest, digest) != 0) {
+            sent = frame_send(runtime, peer, NHRP_HA_CONTROL_OWNER, owners,
+                              owners_length, runtime->local_index,
+                              runtime->local_index);
+            if (sent)
+              snprintf(peer->owner_digest, sizeof(peer->owner_digest), "%s",
+                       digest);
+          }
+          free(owners);
+          if (!sent) {
+            peer_close(peer);
+            continue;
+          }
+        }
         if ((!configured_matches(runtime) &&
              strcmp(peer->member, runtime->state.leader) == 0 &&
              !configured_send(runtime, peer)) ||
