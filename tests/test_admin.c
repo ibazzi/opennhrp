@@ -67,11 +67,37 @@ int main(void) {
     n = recv(fd[1], buffer, sizeof(buffer) - 1, 0);
     assert(n > 0);
     buffer[n] = 0;
-    if (i == 3)
+    if (i == 3) {
       assert(strstr(buffer, "Registration-Mode:") == NULL);
-    else
+      assert(strstr(buffer, "Map-Options: register=0 cisco=0 no-unique=0\n"));
+      assert(strstr(buffer, "Map-Managed: 0\n"));
+    } else
       assert(strstr(buffer, i == 0 ? "Registration-Mode: legacy\n"
                                    : "Registration-Mode: ha\n") != NULL);
+    admin_free_remote(r);
+    close(fd[1]);
+  }
+  for (i = 0; i < 8; i++) {
+    struct nhrp_peer peer = {0};
+    char expected[80];
+    ssize_t n;
+    peer.type = NHRP_PEER_TYPE_STATIC;
+    peer.flags = (i & 1 ? NHRP_PEER_FLAG_REGISTER : 0) |
+                 (i & 2 ? NHRP_PEER_FLAG_CISCO : 0) |
+                 (i & 4 ? NHRP_PEER_FLAG_REG_NON_UNIQUE : 0) |
+                 NHRP_PEER_FLAG_HA_BOOTSTRAP;
+    assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, fd) == 0);
+    r = remote_new(fd[0]);
+    admin_show_peer(r, &peer);
+    admin_send_cb(&r->output_io, EV_WRITE);
+    n = recv(fd[1], buffer, sizeof(buffer) - 1, 0);
+    assert(n > 0);
+    buffer[n] = 0;
+    snprintf(expected, sizeof(expected),
+             "Map-Options: register=%d cisco=%d no-unique=%d\n", !!(i & 1),
+             !!(i & 2), !!(i & 4));
+    assert(strstr(buffer, expected));
+    assert(strstr(buffer, "Map-Managed: 1\n"));
     admin_free_remote(r);
     close(fd[1]);
   }

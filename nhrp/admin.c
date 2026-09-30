@@ -272,6 +272,16 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer) {
   if (peer->nbma_hostname) {
     i += admin_append(&buf[i], len - i, "Hostname: %s\n", peer->nbma_hostname);
   }
+  if (peer->type == NHRP_PEER_TYPE_STATIC) {
+    i += admin_append(&buf[i], len - i,
+                      "Map-Options: register=%d cisco=%d no-unique=%d\n",
+                      !!(peer->flags & NHRP_PEER_FLAG_REGISTER),
+                      !!(peer->flags & NHRP_PEER_FLAG_CISCO),
+                      !!(peer->flags & NHRP_PEER_FLAG_REG_NON_UNIQUE));
+    i += admin_append(&buf[i], len - i, "Map-Managed: %d\n",
+                      !!(peer->flags & (NHRP_PEER_FLAG_HA_BOOTSTRAP |
+                                        NHRP_PEER_FLAG_HA_PROJECTED)));
+  }
   if (peer->local_connect_address.type != PF_UNSPEC) {
     i += admin_append(
         &buf[i], len - i, "Local-NBMA-Address: %s\n",

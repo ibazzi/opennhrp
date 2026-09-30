@@ -167,6 +167,9 @@ are not needed when three or more active Hubs use Hub majority.
 .BI "[cache] show [" selector "]..."
 .RS
 Show contents of next hop cache (configured and resolved entries).
+Static entries include Map-Options with register, cisco and no-unique values
+(0 or 1), and Map-Managed (1 for HA-managed entries, otherwise 0).
+Hostname and Local-NBMA-Address are included when configured.
 .RE
 
 .BI "[cache] flush [" selector "]..."
