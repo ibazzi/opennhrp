@@ -130,7 +130,8 @@ static void test_sticky_target(void) {
   assert(size > 0);
   log_decision(log, &view, &decision, 15.5);
   assert(ftell(log) == size);
-  assert(select_migration(&view, &decision, 16.0, &reason) == &view.candidates[1]);
+  assert(select_migration(&view, &decision, 16.0, &reason) ==
+         &view.candidates[1]);
   assert(strcmp(reason, "quality") == 0);
   log_decision(log, &view, &decision, 16.0);
   assert(ftell(log) > size);
@@ -141,7 +142,8 @@ static void test_sticky_target(void) {
   assert(ftell(log) == size);
   fclose(log);
 
-  /* Authentication loss drops the pinned target, then the endpoint resets it. */
+  /* Authentication loss drops the pinned target, then the endpoint resets it.
+   */
   view.candidates[1].authenticated = 0;
   assert(select_migration(&view, &decision, 20.0, &reason) == NULL);
   assert(strcmp(decision.superior_member, "c") == 0);
@@ -149,7 +151,8 @@ static void test_sticky_target(void) {
   assert(select_migration(&view, &decision, 34.0, &reason) == NULL);
   assert(decision.superior_since == 34.0);
   assert(select_migration(&view, &decision, 48.9, &reason) == NULL);
-  assert(select_migration(&view, &decision, 49.0, &reason) == &view.candidates[2]);
+  assert(select_migration(&view, &decision, 49.0, &reason) ==
+         &view.candidates[2]);
   view.candidates[2].ready = 0;
   assert(select_migration(&view, &decision, 50.0, &reason) == NULL);
   assert(decision.superior_member[0] == 0);
@@ -173,14 +176,17 @@ static void test_sticky_target(void) {
   assert(decision.superior_since == 190.0);
   assert(decision.superior_hold == SCORE_SWITCH_HOLD);
   assert(select_migration(&view, &decision, 204.9, &reason) == NULL);
-  assert(select_migration(&view, &decision, 205.0, &reason) == &view.candidates[2]);
+  assert(select_migration(&view, &decision, 205.0, &reason) ==
+         &view.candidates[2]);
   set_candidate_score(&view.candidates[2], 75.0);
   assert(select_migration(&view, &decision, 206.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 325.9, &reason) == NULL);
-  assert(select_migration(&view, &decision, 326.0, &reason) == &view.candidates[2]);
+  assert(select_migration(&view, &decision, 326.0, &reason) ==
+         &view.candidates[2]);
   assert(strcmp(reason, "failback") == 0);
 
-  /* A better-scored but ineligible challenger must not hide a valid failback. */
+  /* A better-scored but ineligible challenger must not hide a valid failback.
+   */
   decision_reset_superior(&decision);
   view.candidates[1].authenticated = 1;
   view.candidates[1].term = 2;
@@ -271,8 +277,7 @@ static void test_migration_boundaries(void) {
   assert(decision.superior_hold == HARD_FAILURE_HOLD);
   assert(select_migration(&view, &decision, 302.9, &reason) == NULL);
   target = select_migration(&view, &decision, 303.0, &reason);
-  assert(target == &view.candidates[1] &&
-         strcmp(reason, "hard-failure") == 0);
+  assert(target == &view.candidates[1] && strcmp(reason, "hard-failure") == 0);
 
   /* Recovery and target endpoint changes both restart hard-failure timing. */
   decision_reset_superior(&decision);
@@ -288,8 +293,7 @@ static void test_migration_boundaries(void) {
   assert(decision.superior_since == 405.9);
   assert(select_migration(&view, &decision, 408.8, &reason) == NULL);
   target = select_migration(&view, &decision, 408.9, &reason);
-  assert(target == &view.candidates[1] &&
-         strcmp(reason, "hard-failure") == 0);
+  assert(target == &view.candidates[1] && strcmp(reason, "hard-failure") == 0);
 }
 
 int main(void) {
@@ -303,7 +307,8 @@ int main(void) {
       "\"ready\":false,\"active\":true,\"score\":0},"
       "{\"member\":\"hub-backup1\",\"nbma\":\"49.234.145.47\","
       "\"priority\":90,\"state\":\"ready\",\"registered\":true,"
-      "\"ready\":true,\"active\":false,\"score\":85,\"selected_address\":\"192.0.2.2\"}]}";
+      "\"ready\":true,\"active\":false,\"score\":85,\"selected_address\":\"192."
+      "0.2.2\"}]}";
   struct service_view view;
   struct candidate_view *candidate;
   struct decision_state decision = {0};
@@ -495,7 +500,8 @@ int main(void) {
   assert(candidate != NULL && strcmp(candidate->member, "hub-backup1") == 0);
   assert(strcmp(reason, "quality") == 0);
 
-  /* Zero score obeys cooldown; a recovery or no READY target resets the hold. */
+  /* Zero score obeys cooldown; a recovery or no READY target resets the hold.
+   */
   decision.cooldown_until = 50.0;
   assert(select_migration(&view, &decision, 49.9, &reason) == NULL);
   assert(select_migration(&view, &decision, 50.0, &reason) == NULL);
@@ -513,13 +519,15 @@ int main(void) {
   set_candidate_score(&view.candidates[1], 80.0);
   assert(select_migration(&view, &decision, 61.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 75.9, &reason) == NULL);
-  assert(select_migration(&view, &decision, 76.0, &reason) == &view.candidates[1]);
+  assert(select_migration(&view, &decision, 76.0, &reason) ==
+         &view.candidates[1]);
 
   /* A failed manually selected Hub uses the same score hold. */
   view.selection_manual = 1;
   assert(select_migration(&view, &decision, 80.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 94.9, &reason) == NULL);
-  assert(select_migration(&view, &decision, 95.0, &reason) == &view.candidates[1]);
+  assert(select_migration(&view, &decision, 95.0, &reason) ==
+         &view.candidates[1]);
   assert(strcmp(reason, "quality") == 0);
 
   memset(&decision, 0, sizeof(decision));

@@ -239,11 +239,13 @@ static int parse_service(const char *line, struct service_view *view) {
                      sizeof(candidate->state)) ||
         !json_unsigned(position, "priority", &priority))
       return 0;
-    /* Optional for old monitor snapshots; never read into the next candidate. */
+    /* Optional for old monitor snapshots; never read into the next candidate.
+     */
     {
       const char *address = strstr(position, "\"selected_address\":");
       if (address != NULL && address < end &&
-          !json_string(position, "selected_address", candidate->selected_address,
+          !json_string(position, "selected_address",
+                       candidate->selected_address,
                        sizeof(candidate->selected_address)))
         return 0;
     }
@@ -415,8 +417,9 @@ static struct candidate_view *select_migration(struct service_view *view,
     decision_reset_superior(state);
   }
   if (strcmp(state->active_member, view->active_member) != 0 ||
-      (active != NULL && (state->active_term != active->term ||
-       strcmp(state->active_address, active->selected_address) != 0))) {
+      (active != NULL &&
+       (state->active_term != active->term ||
+        strcmp(state->active_address, active->selected_address) != 0))) {
     snprintf(state->active_member, sizeof(state->active_member), "%s",
              view->active_member);
     state->active_term = active != NULL ? active->term : 0;
@@ -502,10 +505,9 @@ static struct candidate_view *select_migration(struct service_view *view,
   hold = migration_hold(view, active, best);
   snprintf(state->decision_target, sizeof(state->decision_target), "%s",
            best->member);
-  state->decision_reason = hold == HARD_FAILURE_HOLD
-                               ? "hard-failure-wait"
-                               : hold == SCORE_FAILBACK_HOLD ? "failback-wait"
-                                                             : "quality-wait";
+  state->decision_reason = hold == HARD_FAILURE_HOLD     ? "hard-failure-wait"
+                           : hold == SCORE_FAILBACK_HOLD ? "failback-wait"
+                                                         : "quality-wait";
   if (strcmp(state->superior_member, best->member) != 0 ||
       strcmp(state->superior_address, best->selected_address) != 0 ||
       state->superior_term != best->term || state->superior_hold != hold) {
@@ -520,11 +522,9 @@ static struct candidate_view *select_migration(struct service_view *view,
   }
   if (now - state->superior_since < hold)
     return NULL;
-  state->decision_reason = *reason = hold == HARD_FAILURE_HOLD
-                                        ? "hard-failure"
-                                        : hold == SCORE_FAILBACK_HOLD
-                                              ? "failback"
-                                              : "quality";
+  state->decision_reason = *reason = hold == HARD_FAILURE_HOLD ? "hard-failure"
+                                     : hold == SCORE_FAILBACK_HOLD ? "failback"
+                                                                   : "quality";
   return best;
 }
 
@@ -544,15 +544,16 @@ static void log_decision(FILE *output, struct service_view *view,
            view->active_member);
   snprintf(state->logged_target, sizeof(state->logged_target), "%s",
            state->decision_target);
-  fprintf(output, "opennhrp-ha: DEBUG decision protocol=%s active=%s target=%s "
+  fprintf(output,
+          "opennhrp-ha: DEBUG decision protocol=%s active=%s target=%s "
           "raw-score=%.3f/%.3f score=%u/%u reason=%s held=%.3f "
           "cooldown=%.3f\n",
           view->protocol, active != NULL ? active->member : "none",
           target != NULL ? target->member : "none",
           active != NULL ? active->raw_score : 0.0,
           target != NULL ? target->raw_score : 0.0,
-          active != NULL ? active->score : 0, target != NULL ? target->score : 0,
-          state->decision_reason,
+          active != NULL ? active->score : 0,
+          target != NULL ? target->score : 0, state->decision_reason,
           state->superior_member[0] ? now - state->superior_since : 0.0,
           state->cooldown_until > now ? state->cooldown_until - now : 0.0);
 }

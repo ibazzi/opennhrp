@@ -98,7 +98,8 @@ static void test_full_candidate_status(struct nhrp_ha_service *service) {
   size_t i, length;
 
   assert(buffer != NULL);
-  /* Include long member/leader names and every endpoint at the supported limit. */
+  /* Include long member/leader names and every endpoint at the supported limit.
+   */
   for (i = 0; i < ARRAY_SIZE(candidates); i++) {
     struct nhrp_ha_candidate *candidate = &candidates[i];
     candidate->service = service;

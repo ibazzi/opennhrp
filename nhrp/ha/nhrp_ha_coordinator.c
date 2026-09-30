@@ -27,12 +27,12 @@
 #include <unistd.h>
 
 #include "nhrp_ha_control.h"
+#include "nhrp_ha_coordinator.h"
 #include "nhrp_ha_delta.h"
 #include "nhrp_ha_failback.h"
 #include "nhrp_ha_join.h"
 #include "nhrp_ha_managed.h"
 #include "nhrp_ha_store.h"
-#include "nhrp_ha_coordinator.h"
 
 #define MANAGED_TICK_MS 100
 #define MANAGED_SEND_MS 250
