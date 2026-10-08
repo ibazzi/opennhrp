@@ -196,6 +196,16 @@ int main(void) {
 
   assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, fd) == 0);
   r = remote_new(fd[0]);
+  admin_ha_monitor(r, " interface gre-ha\n");
+  assert(r->monitor);
+  admin_send_cb(&r->output_io, EV_WRITE);
+  assert(!ev_is_active(&r->timeout));
+  list_del(&r->monitor_list_entry);
+  admin_free_remote(r);
+  close(fd[1]);
+
+  assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, fd) == 0);
+  r = remote_new(fd[0]);
   admin_timeout_cb(&r->timeout, 0);
   assert(recv(fd[1], buffer, sizeof(buffer), 0) == 0);
   close(fd[1]);

@@ -76,6 +76,8 @@ static int parse_word(const char **bufptr, size_t len, char *word) {
 }
 
 static void admin_progress(struct admin_remote *remote) {
+  if (remote->monitor)
+    return;
   ev_timer_stop(&remote->timeout);
   ev_timer_set(&remote->timeout, 10., 0.);
   ev_timer_start(&remote->timeout);
@@ -838,12 +840,12 @@ static void admin_ha_monitor(void *ctx, const char *cmd) {
   if (!admin_ha_parse_common(ctx, cmd, remote->monitor_interface,
                              sizeof(remote->monitor_interface), &json))
     return;
-  length =
-      nhrp_ha_render(buffer, sizeof(buffer), remote->monitor_interface, TRUE);
-  admin_raw_write(ctx, buffer, length);
   remote->monitor = TRUE;
   ev_timer_stop(&remote->timeout);
   list_add_tail(&remote->monitor_list_entry, &ha_monitors);
+  length =
+      nhrp_ha_render(buffer, sizeof(buffer), remote->monitor_interface, TRUE);
+  admin_raw_write(ctx, buffer, length);
 }
 
 static void admin_ha_activate_done(void *ctx, int status, const char *reason,
