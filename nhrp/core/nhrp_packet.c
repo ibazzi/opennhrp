@@ -1308,11 +1308,11 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface,
       p, NHRP_EXTENSION_FORWARD_TRANSIT_NHS | NHRP_EXTENSION_FLAG_COMPULSORY,
       NHRP_PAYLOAD_TYPE_CIE_LIST);
 
-  nhrp_info("Sending Traffic Indication about packet from %s to %s (to %s/%s)",
-            nhrp_address_format(protocol_src, sizeof(tmp1), tmp1),
-            nhrp_address_format(protocol_dst, sizeof(tmp2), tmp2),
-            nhrp_address_format(&peer->protocol_address, sizeof(tmp3), tmp3),
-            nhrp_address_format(&peer->next_hop_address, sizeof(tmp4), tmp4));
+  nhrp_debug("Sending Traffic Indication about packet from %s to %s (to %s/%s)",
+             nhrp_address_format(protocol_src, sizeof(tmp1), tmp1),
+             nhrp_address_format(protocol_dst, sizeof(tmp2), tmp2),
+             nhrp_address_format(&peer->protocol_address, sizeof(tmp3), tmp3),
+             nhrp_address_format(&peer->next_hop_address, sizeof(tmp4), tmp4));
 
   p->dst_iface = iface;
   p->dst_peer = nhrp_peer_get(peer);

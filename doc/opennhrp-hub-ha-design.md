@@ -294,6 +294,9 @@ term 变化、选择模式变化时，等待重新计时。15 秒质量迁移与
 
 ### 4.5 状态与日志
 
+Traffic Indication 的发送、接收及未启用 shortcut 时的忽略消息仅在 DEBUG 输出；
+注册请求与回复、实际 Hub 切换和故障日志仍保留。
+
 JSON 和文本状态同时提供评分 RTT、窗口完成数与失败数、最近有效回复年龄、
 测量有效性、未舍入总分和 endpoint 故障状态：`quality_rtt_ms`、`quality_samples`、
 `quality_failures`、`last_quality_reply_age_ms`、`quality_valid`、`loss_score`、

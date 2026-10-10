@@ -601,7 +601,7 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet) {
 
   /* Shortcuts enabled? */
   if (packet->src_iface->flags & NHRP_INTERFACE_FLAG_SHORTCUT) {
-    nhrp_info(
+    nhrp_debug(
         "Traffic Indication from proto src %s; "
         "about packet to %s",
         nhrp_address_format(&packet->src_protocol_address, sizeof(tmp), tmp),
@@ -609,7 +609,7 @@ static int nhrp_handle_traffic_indication(struct nhrp_packet *packet) {
 
     nhrp_peer_traffic_indication(packet->src_iface, packet->hdr.afnum, &dst);
   } else {
-    nhrp_info(
+    nhrp_debug(
         "Traffic Indication ignored from proto src %s; "
         "about packet to %s",
         nhrp_address_format(&packet->src_protocol_address, sizeof(tmp), tmp),
