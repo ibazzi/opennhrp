@@ -82,13 +82,37 @@ static void test_probe_identity(struct nhrp_ha_candidate *candidate) {
   assert(!probe_request_current(&request));
 }
 
-static void test_equal_owner_version_recovery(void) {
+static void test_takeover_respects_committed_selection(void) {
   struct nhrp_ha_service service = {.owner_term = 169, .owner_index = 268};
+  struct nhrp_ha_candidate active = {.service = &service, .registered = TRUE};
+  struct nhrp_ha_candidate leader = {.service = &service, .auth_valid = TRUE};
 
-  assert(owner_version_at_least(&service, 170, 1));
-  assert(owner_version_at_least(&service, 169, 268));
-  assert(!owner_version_at_least(&service, 169, 267));
-  assert(!owner_version_at_least(&service, 168, UINT64_MAX));
+  service.active = &active;
+  strcpy(leader.member_id, "orcl-jp1");
+  strcpy(leader.auth_leader, leader.member_id);
+  /* Partitioned Hubs can retain different owner indexes in the same term. */
+  assert(!candidate_takeover_preferred(&leader, 169, 268));
+  assert(!candidate_takeover_preferred(&leader, 169, 269));
+  service.selection_manual = TRUE;
+  assert(!candidate_takeover_preferred(&leader, 169, UINT64_MAX));
+  assert(candidate_takeover_preferred(&leader, 170, 1));
+
+  /* Lost registration still permits recovery of an equal-version owner. */
+  active.registered = FALSE;
+  assert(candidate_takeover_preferred(&leader, 169, 268));
+  assert(candidate_takeover_preferred(&leader, 169, 269));
+  assert(!candidate_takeover_preferred(&leader, 169, 267));
+  assert(!candidate_takeover_preferred(&leader, 168, UINT64_MAX));
+  leader.auth_valid = FALSE;
+  assert(!candidate_takeover_preferred(&leader, 170, 1));
+  leader.auth_valid = TRUE;
+  strcpy(leader.auth_leader, "tunnel");
+  assert(!candidate_takeover_preferred(&leader, 170, 1));
+  strcpy(leader.auth_leader, leader.member_id);
+  service.active = &leader;
+  assert(!candidate_takeover_preferred(&leader, 170, 1));
+  service.active = NULL;
+  assert(!candidate_takeover_preferred(&leader, 170, 1));
 }
 
 static void test_full_candidate_status(struct nhrp_ha_service *service) {
@@ -144,7 +168,7 @@ int main(void) {
 
   test_quality_window();
   test_probe_identity(&candidate);
-  test_equal_owner_version_recovery();
+  test_takeover_respects_committed_selection();
   ev_default_loop(0);
   service.active = &candidate;
   list_init(&service.candidates);
