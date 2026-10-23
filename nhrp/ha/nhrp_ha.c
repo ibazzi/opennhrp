@@ -90,6 +90,11 @@ struct nhrp_ha_candidate {
   int priority;
   int configured;
   int static_configured;
+  int reload_existing;
+  int reload_static_configured;
+  int reload_configured;
+  /* Removed candidates survive until every packet callback has finished. */
+  unsigned int pending_requests;
   int dynamically_discovered;
   int bootstrap_unbound;
   int bootstrap_anchor;
@@ -175,6 +180,7 @@ struct nhrp_ha_service {
   int switching;
   int switch_committing;
   int configured;
+  int reload_configured;
   int automatic;
   nhrp_ha_activate_callback switch_callback;
   void *switch_callback_ctx;
@@ -216,6 +222,9 @@ struct nhrp_ha_advertised_entry {
   struct nhrp_address nbma;
   int priority;
   int configured;
+  int reload_existing;
+  int reload_configured;
+  int reload_priority;
 };
 
 struct nhrp_ha_advertisement {
@@ -225,6 +234,8 @@ struct nhrp_ha_advertisement {
   uint8_t prefix_length;
   uint32_t generation;
   int configured;
+  int reload_configured;
+  uint32_t reload_generation;
   struct list_head entries;
 };
 
@@ -971,6 +982,86 @@ static void candidate_set_state(struct nhrp_ha_candidate *candidate,
   service_changed(candidate->service);
 }
 
+static void candidates_sweep(struct nhrp_ha_service *service) {
+  struct nhrp_ha_candidate *candidate, *next;
+
+  list_for_each_entry_safe(candidate, next, &service->candidates, list_entry) {
+    if (candidate->configured || candidate->pending_requests != 0 ||
+        service->active == candidate || service->switch_target == candidate ||
+        (service->reconciling && service->reconcile_candidate == candidate))
+      continue;
+    ev_timer_stop(&candidate->registration_timer);
+    ev_timer_stop(&candidate->probe_timer);
+    list_del(&candidate->list_entry);
+    free(candidate);
+  }
+}
+
+static void service_free_if_unused(struct nhrp_ha_service *service) {
+  if (configuration_reload || service->configured ||
+      !list_empty(&service->candidates) || service->active != NULL ||
+      service->active_peer != NULL || service->switch_target != NULL ||
+      service->switching || service->switch_committing || service->reconciling)
+    return;
+  ev_timer_stop(&service->reconcile_timer);
+  list_del(&service->list_entry);
+  free(service);
+}
+
+static void candidate_disable(struct nhrp_ha_candidate *candidate) {
+  struct nhrp_ha_service *service = candidate->service;
+
+  candidate->configured = FALSE;
+  candidate->registered = FALSE;
+  candidate->endpoint_generation++;
+  candidate->registration_pending = FALSE;
+  candidate->probe_pending = FALSE;
+  ev_timer_stop(&candidate->registration_timer);
+  ev_timer_stop(&candidate->probe_timer);
+  candidate_reset_quality(candidate);
+  candidate_set_state(candidate, NHRP_HA_CANDIDATE_DISABLED);
+  if (service->switch_target == candidate && !service->switch_committing) {
+    nhrp_ha_activate_callback callback = service->switch_callback;
+    void *ctx = service->switch_callback_ctx;
+
+    service->switch_target = NULL;
+    service->switching = FALSE;
+    service->switch_owner_set = FALSE;
+    service->switch_callback = NULL;
+    service->switch_callback_ctx = NULL;
+    if (callback != NULL)
+      callback(ctx, -EHOSTDOWN, "target-unavailable", service->generation);
+  }
+}
+
+static void advertised_entries_sweep(struct nhrp_ha_advertisement *advertisement) {
+  struct nhrp_ha_advertised_entry *entry, *next;
+
+  list_for_each_entry_safe(entry, next, &advertisement->entries, list_entry) {
+    if (entry->configured)
+      continue;
+    list_del(&entry->list_entry);
+    free(entry);
+  }
+}
+
+static void history_sweep(void) {
+  struct nhrp_ha_service *service, *next_service;
+  struct nhrp_ha_advertisement *advertisement, *next_advertisement;
+
+  list_for_each_entry_safe(service, next_service, &services, list_entry) {
+    candidates_sweep(service);
+    service_free_if_unused(service);
+  }
+  list_for_each_entry_safe(advertisement, next_advertisement, &advertisements,
+                           list_entry) {
+    if (advertisement->configured || !list_empty(&advertisement->entries))
+      continue;
+    list_del(&advertisement->list_entry);
+    free(advertisement);
+  }
+}
+
 static struct nhrp_peer *
 candidate_direct_peer(struct nhrp_ha_candidate *candidate,
                       const struct nhrp_address *endpoint) {
@@ -1201,6 +1292,31 @@ static int hub_list_apply(struct nhrp_ha_candidate *source,
     groups[group].address_count++;
   }
 
+  for (i = 0; i < group_count; i++) {
+    size_t endpoint;
+
+    candidate = candidate_find(service, groups[i].member);
+    if (candidate == NULL || !candidate->static_configured || service->automatic)
+      continue;
+    for (endpoint = 0; endpoint < groups[i].address_count; endpoint++)
+      if (nhrp_address_cmp(&candidate->nbma, &groups[i].addresses[endpoint]) == 0)
+        break;
+    if (endpoint == groups[i].address_count ||
+        candidate->priority != groups[i].priority)
+      return FALSE;
+  }
+  /* Allocate the whole update before changing any live candidate. */
+  for (i = 0; i < group_count; i++) {
+    if (candidate_find(service, groups[i].member) != NULL)
+      continue;
+    candidate = candidate_alloc(service, groups[i].member);
+    if (candidate == NULL) {
+      candidates_sweep(service);
+      return FALSE;
+    }
+    list_add_tail(&candidate->list_entry, &service->candidates);
+  }
+
   list_for_each_entry(candidate, &service->candidates, list_entry)
       candidate->dynamically_discovered = FALSE;
 
@@ -1214,12 +1330,6 @@ static int hub_list_apply(struct nhrp_ha_candidate *source,
     int endpoints_changed;
 
     candidate = candidate_find(service, groups[i].member);
-    if (candidate == NULL) {
-      candidate = candidate_alloc(service, groups[i].member);
-      if (candidate == NULL)
-        return FALSE;
-      list_add_tail(&candidate->list_entry, &service->candidates);
-    }
     old_count = candidate->endpoint_count;
     memcpy(old_endpoints, candidate->endpoints, sizeof(old_endpoints));
     memcpy(old_ready, candidate->endpoint_ready, sizeof(old_ready));
@@ -1230,9 +1340,6 @@ static int hub_list_apply(struct nhrp_ha_candidate *source,
         selected_found = TRUE;
         break;
       }
-    if (candidate->static_configured && !service->automatic &&
-        (!selected_found || candidate->priority != groups[i].priority))
-      return FALSE;
     endpoints_changed =
         candidate->endpoint_count != groups[i].address_count ||
         memcmp(candidate->endpoints, groups[i].addresses,
@@ -1282,16 +1389,9 @@ static int hub_list_apply(struct nhrp_ha_candidate *source,
   list_for_each_entry(candidate, &service->candidates, list_entry) {
     if (candidate->static_configured || candidate->dynamically_discovered)
       continue;
-    candidate->configured = FALSE;
-    candidate->registered = FALSE;
-    candidate->endpoint_generation++;
-    candidate->registration_pending = FALSE;
-    candidate->probe_pending = FALSE;
-    ev_timer_stop(&candidate->registration_timer);
-    ev_timer_stop(&candidate->probe_timer);
-    candidate->state = NHRP_HA_CANDIDATE_DISABLED;
-    candidate_reset_quality(candidate);
+    candidate_disable(candidate);
   }
+  candidates_sweep(service);
   service->hub_list_generation = list->list_generation;
   snprintf(service->hub_list_source, sizeof(service->hub_list_source), "%s",
            list->source_member);
@@ -1299,7 +1399,7 @@ static int hub_list_apply(struct nhrp_ha_candidate *source,
   return TRUE;
 }
 
-static void registration_reply(void *ctx, struct nhrp_packet *reply) {
+static void registration_reply_process(void *ctx, struct nhrp_packet *reply) {
   struct nhrp_ha_registration_request *request = ctx;
   struct nhrp_ha_candidate *candidate = request->candidate;
   struct nhrp_payload *payload;
@@ -1458,6 +1558,17 @@ failed:
   registration_schedule(candidate, HA_REGISTRATION_RETRY);
 }
 
+static void registration_reply(void *ctx, struct nhrp_packet *reply) {
+  struct nhrp_ha_candidate *candidate =
+      ((struct nhrp_ha_registration_request *)ctx)->candidate;
+  struct nhrp_ha_service *service = candidate->service;
+
+  registration_reply_process(ctx, reply);
+  candidate->pending_requests--;
+  candidates_sweep(service);
+  service_free_if_unused(service);
+}
+
 int nhrp_ha_prepare_registration_discovery(struct nhrp_peer *peer,
                                            struct nhrp_packet *packet) {
   struct nhrp_payload *payload;
@@ -1591,6 +1702,7 @@ int nhrp_ha_handle_registration_discovery(struct nhrp_peer *peer,
   if (request == NULL)
     return FALSE;
   request->candidate = candidate;
+  candidate->pending_requests++;
   request->endpoint_generation = candidate->endpoint_generation;
   request->registration_generation = candidate->registration_generation;
   request->endpoint = candidate->nbma;
@@ -1708,6 +1820,7 @@ static void registration_timer_cb(struct ev_timer *timer, int revents) {
   if (request == NULL)
     goto failed;
   request->candidate = candidate;
+  candidate->pending_requests++;
   request->endpoint_generation = candidate->endpoint_generation;
   request->registration_generation = candidate->registration_generation;
   request->endpoint = candidate->nbma;
@@ -1909,7 +2022,7 @@ candidate_takeover_preferred(const struct nhrp_ha_candidate *candidate,
   return term > service->owner_term || !active->registered;
 }
 
-static void probe_reply(void *ctx, struct nhrp_packet *reply) {
+static void probe_reply_process(void *ctx, struct nhrp_packet *reply) {
   struct nhrp_ha_probe_request *request = ctx;
   struct nhrp_ha_candidate *candidate = request->candidate;
   struct nhrp_ha_candidate *active = candidate->service->active;
@@ -2121,6 +2234,17 @@ missed:
                                 : HA_STANDBY_PROBE_INTERVAL);
 }
 
+static void probe_reply(void *ctx, struct nhrp_packet *reply) {
+  struct nhrp_ha_candidate *candidate =
+      ((struct nhrp_ha_probe_request *)ctx)->candidate;
+  struct nhrp_ha_service *service = candidate->service;
+
+  probe_reply_process(ctx, reply);
+  candidate->pending_requests--;
+  candidates_sweep(service);
+  service_free_if_unused(service);
+}
+
 static void probe_timer_cb(struct ev_timer *timer, int revents) {
   struct nhrp_ha_candidate *candidate =
       container_of(timer, struct nhrp_ha_candidate, probe_timer);
@@ -2211,6 +2335,7 @@ static void probe_timer_cb(struct ev_timer *timer, int revents) {
     return;
   }
   request->candidate = candidate;
+  candidate->pending_requests++;
   request->endpoint_generation = candidate->endpoint_generation;
   request->sequence = candidate->probe_sequence;
   request->generation = candidate->probe_generation;
@@ -2354,6 +2479,12 @@ void nhrp_ha_mark_configured(void) {
   }
 
   list_for_each_entry(service, &services, list_entry) {
+    service->reload_configured = service->configured;
+    list_for_each_entry(candidate, &service->candidates, list_entry) {
+      candidate->reload_existing = TRUE;
+      candidate->reload_configured = candidate->configured;
+      candidate->reload_static_configured = candidate->static_configured;
+    }
     if (service->automatic)
       continue;
     service->configured = FALSE;
@@ -2361,9 +2492,15 @@ void nhrp_ha_mark_configured(void) {
         candidate->static_configured = FALSE;
   }
   list_for_each_entry(advertisement, &advertisements, list_entry) {
+    advertisement->reload_configured = advertisement->configured;
+    advertisement->reload_generation = advertisement->generation;
     advertisement->configured = FALSE;
-    list_for_each_entry(entry, &advertisement->entries, list_entry)
-        entry->configured = FALSE;
+    list_for_each_entry(entry, &advertisement->entries, list_entry) {
+      entry->reload_existing = TRUE;
+      entry->reload_configured = entry->configured;
+      entry->reload_priority = entry->priority;
+      entry->configured = FALSE;
+    }
   }
   list_for_each_entry(profile, &auth_profiles, list_entry) {
     if (profile->bootstrap)
@@ -2385,6 +2522,10 @@ void nhrp_ha_mark_configured(void) {
 }
 
 void nhrp_ha_config_reload_abort(void) {
+  struct nhrp_ha_service *service;
+  struct nhrp_ha_candidate *candidate;
+  struct nhrp_ha_advertisement *advertisement;
+  struct nhrp_ha_advertised_entry *entry;
   struct nhrp_ha_local_override *override;
   struct nhrp_ha_local_override *next;
 
@@ -2400,13 +2541,41 @@ void nhrp_ha_config_reload_abort(void) {
   }
   if (reload_hub_enable_valid)
     hub_enable = reload_hub_enable;
+  list_for_each_entry(service, &services, list_entry) {
+    service->configured = service->reload_configured;
+    list_for_each_entry(candidate, &service->candidates, list_entry) {
+      if (candidate->reload_existing) {
+        candidate->configured = candidate->reload_configured;
+        candidate->static_configured = candidate->reload_static_configured;
+      } else {
+        candidate->static_configured = FALSE;
+        candidate_disable(candidate);
+      }
+      candidate->reload_existing = FALSE;
+    }
+    candidates_sweep(service);
+  }
+  list_for_each_entry(advertisement, &advertisements, list_entry) {
+    advertisement->configured = advertisement->reload_configured;
+    advertisement->generation = advertisement->reload_generation;
+    list_for_each_entry(entry, &advertisement->entries, list_entry) {
+      entry->configured = entry->reload_existing && entry->reload_configured;
+      if (entry->reload_existing)
+        entry->priority = entry->reload_priority;
+      entry->reload_existing = FALSE;
+    }
+    advertised_entries_sweep(advertisement);
+  }
   reload_hub_enable_valid = FALSE;
   configuration_reload = FALSE;
+  history_sweep();
 }
 
 void nhrp_ha_sweep_unconfigured(void) {
   struct nhrp_ha_service *service;
   struct nhrp_ha_candidate *candidate;
+  struct nhrp_ha_advertisement *advertisement;
+  struct nhrp_ha_advertised_entry *entry;
   struct nhrp_ha_auth_profile *profile;
   struct nhrp_ha_local_override *override;
   struct nhrp_ha_local_override *next;
@@ -2422,20 +2591,20 @@ void nhrp_ha_sweep_unconfigured(void) {
 
   list_for_each_entry(service, &services, list_entry) {
     list_for_each_entry(candidate, &service->candidates, list_entry) {
+      candidate->reload_existing = FALSE;
       candidate->configured =
           service->configured &&
           (candidate->static_configured || candidate->dynamically_discovered);
       if (candidate->configured)
         continue;
-      candidate->registered = FALSE;
-      candidate->endpoint_generation++;
-      candidate->registration_pending = FALSE;
-      candidate->probe_pending = FALSE;
-      ev_timer_stop(&candidate->registration_timer);
-      ev_timer_stop(&candidate->probe_timer);
-      candidate_reset_quality(candidate);
-      candidate_set_state(candidate, NHRP_HA_CANDIDATE_DISABLED);
+      candidate_disable(candidate);
     }
+    candidates_sweep(service);
+  }
+  list_for_each_entry(advertisement, &advertisements, list_entry) {
+    list_for_each_entry(entry, &advertisement->entries, list_entry)
+      entry->reload_existing = FALSE;
+    advertised_entries_sweep(advertisement);
   }
   list_for_each_entry(profile, &auth_profiles, list_entry) {
     int slot;
@@ -2455,6 +2624,7 @@ void nhrp_ha_sweep_unconfigured(void) {
   }
   configuration_reload = FALSE;
   reload_hub_enable_valid = FALSE;
+  history_sweep();
 }
 
 int nhrp_ha_config_member(struct nhrp_interface *iface, const char *member_id) {
@@ -2861,6 +3031,7 @@ int nhrp_ha_reload_managed(const char *directory) {
   if (nhrp_ha_prepare_managed(directory)) {
     nhrp_ha_auth_keys_clear(&saved_profile.keys);
     free(saved_entries);
+    advertised_entries_sweep(advertisement);
     nhrp_info("Managed HA state reloaded successfully");
     return TRUE;
   }
@@ -2883,6 +3054,7 @@ int nhrp_ha_reload_managed(const char *directory) {
     saved_entries[i].entry->configured = saved_entries[i].configured;
   }
   free(saved_entries);
+  advertised_entries_sweep(advertisement);
   nhrp_error("Failed to reload managed HA state from %s", directory);
   return FALSE;
 }
@@ -4024,7 +4196,7 @@ static void reconcile_schedule(struct nhrp_ha_service *service,
   ev_timer_start(&service->reconcile_timer);
 }
 
-static void reconcile_neighbor_done(void *ctx, int status) {
+static void reconcile_neighbor_done_process(void *ctx, int status) {
   struct nhrp_ha_service *service = ctx;
   struct nhrp_peer *peer;
   struct nhrp_address *local;
@@ -4060,6 +4232,15 @@ static void reconcile_neighbor_done(void *ctx, int status) {
   service->active_peer = peer;
   service_changed(service);
   reconcile_schedule(service, 0.01);
+}
+
+static void reconcile_neighbor_done(void *ctx, int status) {
+  struct nhrp_ha_service *service = ctx;
+
+  reconcile_neighbor_done_process(ctx, status);
+  service->reconcile_candidate = NULL;
+  candidates_sweep(service);
+  service_free_if_unused(service);
 }
 
 static void reconcile_timer_cb(struct ev_timer *timer, int revents) {
@@ -4113,7 +4294,7 @@ static int candidate_begin_activation(struct nhrp_ha_service *service,
   return TRUE;
 }
 
-static void activate_neighbor_done(void *ctx, int status) {
+static void activate_neighbor_done_process(void *ctx, int status) {
   struct nhrp_ha_service *service = ctx;
   struct nhrp_ha_candidate *old = service->active;
   struct nhrp_ha_candidate *target = service->switch_target;
@@ -4196,6 +4377,14 @@ static void activate_neighbor_done(void *ctx, int status) {
   reconcile_schedule(service, 0.01);
   if (callback != NULL)
     callback(callback_ctx, 0, "ok", service->generation);
+}
+
+static void activate_neighbor_done(void *ctx, int status) {
+  struct nhrp_ha_service *service = ctx;
+
+  activate_neighbor_done_process(ctx, status);
+  candidates_sweep(service);
+  service_free_if_unused(service);
 }
 
 int nhrp_ha_activate(const char *interface_name,

@@ -7,7 +7,7 @@ BUILD_DIR ?= ../build/tests
 TESTS := test_libev test_extensions test_payload test_config test_snapshot_memory test_ha_wire test_ha_auth test_ha_seen \
 	test_ha_control test_ha_store test_ha_delta test_ha_failback \
 	test_ha_managed test_ha_join test_coordinator test_admin test_ha_candidate test_ha_hub test_ha_status test_multicast
-TESTS += test_peer_lifetime
+TESTS += test_peer_lifetime test_ha_lifecycle
 TEST_BINS := $(addprefix $(BUILD_DIR)/,$(TESTS))
 
 .PHONY: all test clean
@@ -22,7 +22,7 @@ $(TEST_BINS): | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(addprefix $(BUILD_DIR)/,test_libev test_admin test_ha_candidate test_ha_hub test_multicast test_peer_lifetime test_config): $(wildcard ../libev/*) ../nhrp/platform/libev.h
+$(addprefix $(BUILD_DIR)/,test_libev test_admin test_ha_candidate test_ha_hub test_multicast test_peer_lifetime test_config test_ha_lifecycle): $(wildcard ../libev/*) ../nhrp/platform/libev.h
 
 $(BUILD_DIR)/test_libev: test_libev.c ../nhrp/platform/libev.c
 	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -o $@ test_libev.c ../nhrp/platform/libev.c -lm
@@ -91,3 +91,6 @@ $(BUILD_DIR)/test_multicast: test_multicast.c ../nhrp/platform/sysdep_pfpacket.c
 
 $(BUILD_DIR)/test_peer_lifetime: test_peer_lifetime.c ../nhrp/core/nhrp_peer.c ../nhrp/core/nhrp_peer.h ../nhrp/core/nhrp_packet.c ../nhrp/core/nhrp_packet.h ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c
 	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ test_peer_lifetime.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c -lm -lcares
+
+$(BUILD_DIR)/test_ha_lifecycle: test_ha_lifecycle.c ../nhrp/ha/nhrp_ha.c ../nhrp/core/nhrp_packet.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c ../nhrp/ha/nhrp_ha_auth.c ../nhrp/ha/nhrp_ha_seen.c ../nhrp/ha/nhrp_ha_managed.c ../nhrp/ha/nhrp_ha_wire.c
+	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ test_ha_lifecycle.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c ../nhrp/ha/nhrp_ha_auth.c ../nhrp/ha/nhrp_ha_seen.c ../nhrp/ha/nhrp_ha_managed.c ../nhrp/ha/nhrp_ha_wire.c -lm -lcares -lcrypto

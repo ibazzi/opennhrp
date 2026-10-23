@@ -1363,7 +1363,7 @@ for _ in {1..400}; do
 	next_generation=$(grep -o '"hub_list_generation":[0-9]*' \
 		<<<"$spoke_state" | cut -d: -f2)
 	if ((next_generation > hub_list_generation)) &&
-		grep -q '"member":"hub-backup2".*"state":"disabled"' \
+		! grep -q '"member":"hub-backup2"' \
 			<<<"$spoke_state"; then
 		break
 	fi
@@ -1371,7 +1371,7 @@ for _ in {1..400}; do
 done
 ((next_generation > hub_list_generation))
 grep -q '"active_member":"hub-primary"' <<<"$spoke_state"
-grep -q '"member":"hub-backup2".*"state":"disabled"' <<<"$spoke_state"
+! grep -q '"member":"hub-backup2"' <<<"$spoke_state"
 invalid_before=$(grep -c 'Registration request has invalid HA member data' \
 	"$runtime_dir/hub3.log" || true)
 sleep 3
