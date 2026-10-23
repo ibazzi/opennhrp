@@ -56,6 +56,8 @@ struct filter {
 };
 
 static int checkfilter(struct filter *f) {
+  struct sock_filter *code;
+
   if (f->numops < f->numalloc)
     return 1;
 
@@ -67,11 +69,12 @@ static int checkfilter(struct filter *f) {
   else
     f->numalloc = 128;
 
-  f->code = realloc(f->code, f->numalloc * sizeof(struct sock_filter));
-  if (f->code == NULL) {
+  code = realloc(f->code, f->numalloc * sizeof(struct sock_filter));
+  if (code == NULL) {
     f->numalloc = -1;
     return 0;
   }
+  f->code = code;
 
   return 1;
 }
@@ -210,6 +213,7 @@ static void install_filter_cb(struct ev_timer *w, int revents) {
     nhrp_error("Unable to construct filter code: out of memory (code actual "
                "length %d)",
                f.numops);
+    free(f.code);
     return;
   }
 

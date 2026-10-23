@@ -607,7 +607,7 @@ static void nhrp_peer_is_down(struct nhrp_peer *peer) {
     hlist_del(&peer->nbma_hash_entry);
 }
 
-static void nhrp_peer_update_multicast(struct nhrp_peer *peer) {
+void nhrp_peer_update_multicast(struct nhrp_peer *peer) {
   struct nhrp_interface *iface = peer->interface;
   int mcast = 0, was_mcast, i;
   char tmp[64];
@@ -1088,7 +1088,7 @@ static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents) {
   /* Payload CIE */
   cie = nhrp_cie_alloc();
   if (cie == NULL)
-    goto error;
+    goto error_free_packet;
 
   *cie = (struct nhrp_cie){
       .hdr.code = NHRP_CODE_SUCCESS,
@@ -1176,23 +1176,18 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
               nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp),
               nhrp_error_indication_text(ec), ntohs(ec));
 
-    if (reply != NULL) {
-      /* We got reply that this address is not available -
-       * negative cache it. */
-      peer->flags |= NHRP_PEER_FLAG_UP;
-      nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
-    } else {
-      /* Time out - NHS reachable, or packet lost multiple
-       * times. Keep trying if still needed. */
-      nhrp_peer_remove(peer);
-    }
+    if (reply != NULL)
+      goto negative;
+    /* Time out - NHS unreachable, or packet lost multiple
+     * times. Keep trying if still needed. */
+    nhrp_peer_remove(peer);
     goto ret;
   }
 
   payload = nhrp_packet_payload(reply, NHRP_PAYLOAD_TYPE_CIE_LIST);
   cie = list_next(&payload->u.cie_list, struct nhrp_cie, cie_list_entry);
   if (cie == NULL)
-    goto ret;
+    goto negative;
 
   nhrp_info("Received Resolution Reply %s/%d is at proto %s nbma %s (code %d)",
             nhrp_address_format(&peer->protocol_address, sizeof(dst), dst),
@@ -1202,7 +1197,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
             cie->hdr.code);
 
   if (cie->hdr.code != NHRP_CODE_SUCCESS)
-    goto ret;
+    goto negative;
 
   payload = nhrp_packet_extension(
       reply, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE,
@@ -1245,9 +1240,7 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
                "with shortcut",
                nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp),
                cie->hdr.prefix_length);
-    peer->flags |= NHRP_PEER_FLAG_UP;
-    nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
-    goto ret;
+    goto negative;
   }
 
   /* Update the received NBMA address to nexthop */
@@ -1284,6 +1277,10 @@ static void nhrp_peer_handle_resolution_reply(void *ctx,
 
   /* Delete the incomplete entry */
   nhrp_peer_remove(peer);
+  goto ret;
+negative:
+  peer->flags |= NHRP_PEER_FLAG_UP;
+  nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 ret:
   nhrp_peer_put(peer);
 }
@@ -1344,9 +1341,13 @@ static void nhrp_peer_send_resolve(struct nhrp_peer *peer) {
   packet->dst_iface = peer->interface;
   nhrp_packet_send_request(packet, nhrp_peer_handle_resolution_reply,
                            nhrp_peer_get(peer));
+  nhrp_packet_put(packet);
+  return;
 
 error:
-  nhrp_packet_put(packet);
+  if (packet != NULL)
+    nhrp_packet_put(packet);
+  nhrp_peer_reinsert(peer, NHRP_PEER_TYPE_NEGATIVE);
 }
 
 struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface) {

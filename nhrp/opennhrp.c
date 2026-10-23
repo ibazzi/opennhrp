@@ -123,6 +123,65 @@ static int read_word(FILE *in, int *lineno, size_t len, char *word) {
   return TRUE;
 }
 
+struct interface_config {
+  struct list_head list;
+  struct nhrp_interface *interface;
+  struct nhrp_buffer *auth_token;
+  struct nhrp_address *mcast_addr;
+  int mcast_mask, mcast_numaddr;
+};
+
+static int save_interface_config(void *ctx, struct nhrp_interface *iface) {
+  struct list_head *saved = ctx;
+  struct interface_config *entry;
+
+  list_for_each_entry(entry, saved, list) {
+    if (entry->interface == iface)
+      return 0;
+  }
+  entry = calloc(1, sizeof(*entry));
+  if (entry == NULL)
+    return -1;
+  entry->interface = iface;
+  entry->auth_token = iface->auth_token;
+  entry->mcast_addr = iface->mcast_addr;
+  entry->mcast_mask = iface->mcast_mask;
+  entry->mcast_numaddr = iface->mcast_numaddr;
+  iface->auth_token = NULL;
+  iface->mcast_addr = NULL;
+  iface->mcast_mask = iface->mcast_numaddr = 0;
+  list_add_tail(&entry->list, saved);
+  return 0;
+}
+
+static void finish_interface_config(struct list_head *saved, int commit) {
+  struct interface_config *entry, *next;
+
+  list_for_each_entry_safe(entry, next, saved, list) {
+    struct nhrp_interface *iface = entry->interface;
+
+    nhrp_buffer_free(commit ? entry->auth_token : iface->auth_token);
+    free(commit ? entry->mcast_addr : iface->mcast_addr);
+    if (!commit) {
+      iface->auth_token = entry->auth_token;
+      iface->mcast_addr = entry->mcast_addr;
+      iface->mcast_mask = entry->mcast_mask;
+      iface->mcast_numaddr = entry->mcast_numaddr;
+    } else {
+      struct nhrp_peer *peer;
+
+      list_for_each_entry(peer, &iface->peer_list, peer_list_entry) {
+        if (peer->flags & NHRP_PEER_FLAG_UP)
+          nhrp_peer_update_multicast(peer);
+      }
+    }
+    list_del(&entry->list);
+    free(entry);
+  }
+  if (commit)
+    forward_local_addresses_changed();
+}
+
 static int load_config(const char *config_file) {
 #define NEED_INTERFACE()                                                       \
   if (iface == NULL) {                                                         \
@@ -145,7 +204,9 @@ static int load_config(const char *config_file) {
       "dynamic-map requires a network address",
       "bad multicast destination",
       "keyword valid only for 'interace' and 'shortcut-target' definition",
+      "unable to allocate interface configuration",
   };
+  struct list_head saved_interfaces = LIST_INITIALIZER(saved_interfaces);
   struct nhrp_interface *iface = NULL;
   struct nhrp_peer *peer = NULL, *exist = NULL;
   struct nhrp_address paddr, nbma_addr;
@@ -159,6 +220,11 @@ static int load_config(const char *config_file) {
     nhrp_error("Unable to open configuration file '%s'.", config_file);
     return FALSE;
   }
+  if (nhrp_interface_foreach(save_interface_config, &saved_interfaces) != 0) {
+    fclose(in);
+    finish_interface_config(&saved_interfaces, FALSE);
+    return FALSE;
+  }
 
   while (read_word(in, &lineno, sizeof(word), word)) {
     if (strcmp(word, "interface") == 0) {
@@ -167,8 +233,11 @@ static int load_config(const char *config_file) {
         break;
       }
       iface = nhrp_interface_get_by_name(word, TRUE);
-      if (iface != NULL)
-        iface->flags |= NHRP_INTERFACE_FLAG_CONFIGURED;
+      if (iface == NULL || save_interface_config(&saved_interfaces, iface) != 0) {
+        rc = 8;
+        break;
+      }
+      iface->flags |= NHRP_INTERFACE_FLAG_CONFIGURED;
       peer = NULL;
     } else if (strcmp(word, "shortcut-target") == 0) {
       NEED_INTERFACE();
@@ -370,6 +439,7 @@ static int load_config(const char *config_file) {
       auth->type = NHRP_AUTHENTICATION_PLAINTEXT;
       memcpy(auth->secret, word, strlen(word));
 
+      nhrp_buffer_free(iface->auth_token);
       iface->auth_token = buf;
     } else if (strcmp(word, "route-table") == 0) {
       NEED_INTERFACE();
@@ -399,11 +469,15 @@ static int load_config(const char *config_file) {
                             BIT(NHRP_PEER_TYPE_DYNAMIC_NHS) |
                             BIT(NHRP_PEER_TYPE_HA_ACTIVE);
       } else if (nhrp_address_parse(word, &paddr, NULL)) {
-        iface->mcast_numaddr++;
-        iface->mcast_addr =
+        struct nhrp_address *addresses =
             realloc(iface->mcast_addr,
-                    iface->mcast_numaddr * sizeof(struct nhrp_address));
-        iface->mcast_addr[iface->mcast_numaddr - 1] = paddr;
+                    (iface->mcast_numaddr + 1) * sizeof(struct nhrp_address));
+        if (addresses == NULL) {
+          rc = 8;
+          break;
+        }
+        iface->mcast_addr = addresses;
+        iface->mcast_addr[iface->mcast_numaddr++] = paddr;
       } else {
         rc = 6;
         break;
@@ -418,10 +492,14 @@ static int load_config(const char *config_file) {
   if (rc >= 0) {
     nhrp_error("Configuration file %s in %s:%d, near word '%s'", errors[rc],
                config_file, lineno, word);
+    finish_interface_config(&saved_interfaces, FALSE);
     return FALSE;
   }
-  if (!nhrp_ha_config_validate())
+  if (!nhrp_ha_config_validate()) {
+    finish_interface_config(&saved_interfaces, FALSE);
     return FALSE;
+  }
+  finish_interface_config(&saved_interfaces, TRUE);
   return TRUE;
 }
 

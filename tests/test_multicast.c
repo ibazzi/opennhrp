@@ -4,6 +4,7 @@
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 #include <netinet/in.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 
@@ -12,6 +13,39 @@ static unsigned char sent_destination[4], sent_packet[65535];
 static size_t sent_length;
 static int receive_flags;
 static int partial_checksum;
+static unsigned int fail_filter_growth, filter_frees, filter_installs;
+static void *filter_buffer;
+
+static void *test_filter_realloc(void *ptr, size_t size) {
+  void *next;
+  if (ptr && fail_filter_growth) {
+    fail_filter_growth = 0;
+    errno = ENOMEM;
+    return NULL;
+  }
+  next = realloc(ptr, size);
+  assert(next);
+  filter_buffer = next;
+  return next;
+}
+
+static void test_filter_free(void *ptr) {
+  if (ptr && ptr == filter_buffer) {
+    filter_frees++;
+    filter_buffer = NULL;
+  }
+  free(ptr);
+}
+
+static int test_filter_setsockopt(int fd, int level, int option,
+                                    const void *value, socklen_t length) {
+  (void)fd;
+  (void)value;
+  (void)length;
+  assert(level == SOL_SOCKET && option == SO_ATTACH_FILTER);
+  filter_installs++;
+  return 0;
+}
 
 static ssize_t test_sendmsg(int fd, const struct msghdr *msg, int flags) {
   const struct sockaddr_ll *addr = msg->msg_name;
@@ -65,9 +99,15 @@ static ssize_t test_recvmsg(int fd, struct msghdr *msg, int flags) {
 
 #define sendmsg test_sendmsg
 #define recvmsg test_recvmsg
+#define realloc test_filter_realloc
+#define free test_filter_free
+#define setsockopt test_filter_setsockopt
 #include "../nhrp/platform/sysdep_pfpacket.c"
 #undef sendmsg
 #undef recvmsg
+#undef realloc
+#undef free
+#undef setsockopt
 #include "../nhrp/core/nhrp_peer.c"
 
 static struct nhrp_interface iface;
@@ -79,6 +119,9 @@ void nhrp_log(int level, const char *format, ...) {
     failures++;
 }
 void nhrp_perror(const char *message) { assert(!message); }
+int nhrp_interface_foreach(nhrp_interface_enumerator cb, void *ctx) {
+  return cb(ctx, &iface);
+}
 struct nhrp_interface *nhrp_interface_get_by_index(unsigned int index,
                                                    int create) {
   (void)create;
@@ -117,6 +160,28 @@ int main(void) {
   iface.flags = NHRP_INTERFACE_FLAG_CONFIGURED;
   iface.mcast_mask = BIT(NHRP_PEER_TYPE_STATIC) | BIT(NHRP_PEER_TYPE_HA_ACTIVE);
   list_init(&iface.mcast_list);
+  list_init(&iface.peer_list);
+
+  /* A growing filter keeps and frees its previous code after realloc fails. */
+  {
+    struct nhrp_peer local[128] = {0};
+    for (size_t i = 0; i < ARRAY_SIZE(local); i++) {
+      local[i].type = NHRP_PEER_TYPE_LOCAL_ADDR;
+      local[i].protocol_type = ETHPROTO_IP;
+      local[i].prefix_length = 32;
+      assert(nhrp_address_parse("10.20.0.1", &local[i].protocol_address, NULL));
+      list_add(&local[i].peer_list_entry, &local_peer_list);
+    }
+    fail_filter_growth = 1;
+    install_filter_cb(&install_filter_timer, 0);
+    assert(!fail_filter_growth && !filter_buffer && filter_frees == 1);
+    assert(filter_installs == 0);
+    install_filter_cb(&install_filter_timer, 0);
+    assert(!filter_buffer && filter_frees == 2 && filter_installs == 1);
+    for (size_t i = 0; i < ARRAY_SIZE(local); i++)
+      list_del(&local[i].peer_list_entry);
+    failures = 0;
+  }
   list_init(&anchor.mcast_list_entry);
   list_init(&active.mcast_list_entry);
   ev_timer_init(&anchor.timer, NULL, 0., 0.);
@@ -148,6 +213,24 @@ int main(void) {
   iface.mcast_addr = &active.protocol_address;
   nhrp_peer_update_multicast(&active);
   assert(list_hashed(&active.mcast_list_entry));
+  {
+    struct nhrp_address replacement;
+    assert(nhrp_address_parse("10.20.0.9", &replacement, NULL));
+    iface.mcast_addr = &replacement;
+    nhrp_peer_update_multicast(&active);
+    assert(!list_hashed(&active.mcast_list_entry));
+    iface.mcast_addr = &active.protocol_address;
+    nhrp_peer_update_multicast(&active);
+    assert(list_hashed(&active.mcast_list_entry));
+    iface.mcast_numaddr = 0;
+    iface.mcast_addr = NULL;
+    nhrp_peer_update_multicast(&active);
+    assert(!list_hashed(&active.mcast_list_entry));
+    iface.mcast_numaddr = 1;
+    iface.mcast_addr = &active.protocol_address;
+    nhrp_peer_update_multicast(&active);
+    assert(list_hashed(&active.mcast_list_entry));
+  }
   active.flags = 0;
   send_multicast(&pkt);
   assert(sends == 2);

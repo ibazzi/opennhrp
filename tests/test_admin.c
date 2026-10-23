@@ -19,6 +19,20 @@ static ssize_t test_send(int fd, const void *data, size_t size, int flags) {
 #include <assert.h>
 
 int nhrp_verbose;
+
+struct nhrp_interface *nhrp_interface_get_by_name(const char *name,
+                                                  int create) {
+  return NULL;
+}
+struct nhrp_interface *
+nhrp_interface_get_by_protocol(struct nhrp_address *address) {
+  return NULL;
+}
+struct nhrp_interface *
+nhrp_interface_get_by_nbma(struct nhrp_address *address) {
+  return NULL;
+}
+
 void nhrp_log(int level, const char *format, ...) {
   (void)level;
   (void)format;
@@ -52,6 +66,26 @@ int main(void) {
   struct nhrp_peer_cursor a = {0}, b = {0};
 
   ev_default_loop(0);
+  /* Every parser error after hostname allocation must release the selector. */
+  {
+    static const char *commands[] = {
+        "host leak.example protocol", "host leak.example protocol invalid",
+        "host leak.example unknown 192.0.2.1", "host leak.example host other",
+        "host leak.example interface missing"};
+    size_t j;
+
+    for (i = 0; i < 1000; i++) {
+      for (j = 0; j < ARRAY_SIZE(commands); j++) {
+        struct nhrp_peer_selector selector = {0};
+        assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, fd) == 0);
+        r = remote_new(fd[0]);
+        assert(!admin_parse_selector(r, commands[j], &selector));
+        assert(selector.hostname == NULL);
+        admin_free_remote(r);
+        close(fd[1]);
+      }
+    }
+  }
   /* Report registration capability, including projected HA owners. */
   for (i = 0; i < 4; i++) {
     struct nhrp_peer peer = {0};

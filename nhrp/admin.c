@@ -340,7 +340,7 @@ static int admin_parse_selector(void *ctx, const char *cmd,
                   "Reason: missing-argument\n"
                   "Near-Keyword: '%s'\n",
                   keyword);
-      return FALSE;
+      goto err;
     }
 
     if (strcmp(keyword, "interface") == 0 || strcmp(keyword, "iface") == 0 ||
@@ -365,7 +365,7 @@ static int admin_parse_selector(void *ctx, const char *cmd,
                   "Reason: invalid-address\n"
                   "Near-Keyword: '%s'\n",
                   keyword);
-      return FALSE;
+      goto err;
     }
 
     if (strcmp(keyword, "protocol") == 0) {
@@ -396,7 +396,7 @@ static int admin_parse_selector(void *ctx, const char *cmd,
                   "Reason: syntax-error\n"
                   "Near-Keyword: '%s'\n",
                   keyword);
-      return FALSE;
+      goto err;
     }
   }
   return TRUE;

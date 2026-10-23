@@ -251,6 +251,8 @@ struct nhrp_cie *nhrp_payload_get_cie(struct nhrp_payload *payload, int index) {
 struct nhrp_packet *nhrp_packet_alloc(void) {
   struct nhrp_packet *packet;
   packet = calloc(1, sizeof(struct nhrp_packet));
+  if (packet == NULL)
+    return NULL;
   packet->ref = 1;
   packet->max_retries = PACKET_RETRIES;
   packet->hdr.hop_count = NHRP_PACKET_DEFAULT_HOP_COUNT;
@@ -1219,6 +1221,8 @@ int nhrp_packet_send_error(struct nhrp_packet *error_packet,
     return TRUE;
 
   p = nhrp_packet_alloc();
+  if (p == NULL)
+    return FALSE;
   p->hdr = error_packet->hdr;
   p->hdr.type = NHRP_PACKET_ERROR_INDICATION;
   p->hdr.hop_count = 0;
@@ -1293,6 +1297,8 @@ int nhrp_packet_send_traffic(struct nhrp_interface *iface,
   rl->rate_last = ev_now();
 
   p = nhrp_packet_alloc();
+  if (p == NULL)
+    return FALSE;
   p->hdr = (struct nhrp_packet_header){
       .protocol_type = protocol_type,
       .version = NHRP_VERSION_RFC2332,

@@ -166,6 +166,7 @@ struct nhrp_peer *nhrp_peer_alloc(struct nhrp_interface *iface);
 struct nhrp_peer *nhrp_peer_get(struct nhrp_peer *peer);
 int nhrp_peer_put(struct nhrp_peer *peer);
 void nhrp_peer_cancel_async(struct nhrp_peer *peer);
+void nhrp_peer_update_multicast(struct nhrp_peer *peer);
 
 void nhrp_peer_insert(struct nhrp_peer *peer);
 void nhrp_peer_remove(struct nhrp_peer *peer);

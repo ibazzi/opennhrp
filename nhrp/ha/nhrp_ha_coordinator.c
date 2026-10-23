@@ -1465,6 +1465,7 @@ static int snapshot_send(struct managed_runtime *runtime,
       runtime->deltas_sent++;
     return ok;
   }
+  free(delta);
   ok = frame_send(runtime, peer, NHRP_HA_CONTROL_SNAPSHOT,
                   runtime->current_snapshot, runtime->current_snapshot_length,
                   runtime->local_index, runtime->state.commit_index);

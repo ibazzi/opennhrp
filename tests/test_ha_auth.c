@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -8,6 +9,55 @@
 #include <unistd.h>
 
 #include "nhrp_ha_auth.h"
+
+static int fail_write, fail_fsync, failed_fd;
+ssize_t __real_write(int fd, const void *data, size_t length);
+int __real_fsync(int fd);
+
+ssize_t __wrap_write(int fd, const void *data, size_t length) {
+  if (fail_write) {
+    failed_fd = fd;
+    errno = ENOSPC;
+    return -1;
+  }
+  return __real_write(fd, data, length);
+}
+
+int __wrap_fsync(int fd) {
+  if (fail_fsync) {
+    failed_fd = fd;
+    errno = EIO;
+    return -1;
+  }
+  return __real_fsync(fd);
+}
+
+static void test_atomic_write_failures(void) {
+  char path[] = "/tmp/opennhrp-atomic-write.XXXXXX";
+  char contents[16] = {0};
+  int fd = mkstemp(path);
+  unsigned int i;
+
+  assert(fd >= 0);
+  assert(write(fd, "original", 8) == 8);
+  assert(close(fd) == 0);
+  for (i = 0; i < 100; i++) {
+    fail_write = i % 2 == 0;
+    fail_fsync = !fail_write;
+    failed_fd = -1;
+    assert(!nhrp_ha_secure_file_write(path, "replacement", 11));
+    assert(failed_fd >= 0);
+    errno = 0;
+    assert(fcntl(failed_fd, F_GETFD) == -1 && errno == EBADF);
+  }
+  fail_write = fail_fsync = 0;
+  fd = open(path, O_RDONLY);
+  assert(fd >= 0 && read(fd, contents, sizeof(contents)) == 8);
+  assert(strcmp(contents, "original") == 0);
+  assert(close(fd) == 0);
+  assert(nhrp_ha_secure_file_write(path, "replacement", 11));
+  assert(unlink(path) == 0);
+}
 
 static void initialize(struct nhrp_ha_auth_keys *keys,
                        struct nhrp_ha_auth_input *input,
@@ -116,6 +166,7 @@ int main(void) {
 
   nhrp_ha_auth_keys_clear(&keys);
   nhrp_ha_auth_keys_clear(&wrong_keys);
+  test_atomic_write_failures();
   puts("HA authentication tests passed");
   return 0;
 }

@@ -4,9 +4,10 @@ CFLAGS += -Wall -Wextra -Werror -std=gnu99 -I../nhrp/core -I../nhrp/ha \
 	  -I../nhrp -I../nhrp/platform
 
 BUILD_DIR ?= ../build/tests
-TESTS := test_libev test_extensions test_payload test_ha_wire test_ha_auth test_ha_seen \
+TESTS := test_libev test_extensions test_payload test_config test_snapshot_memory test_ha_wire test_ha_auth test_ha_seen \
 	test_ha_control test_ha_store test_ha_delta test_ha_failback \
 	test_ha_managed test_ha_join test_coordinator test_admin test_ha_candidate test_ha_hub test_ha_status test_multicast
+TESTS += test_peer_lifetime
 TEST_BINS := $(addprefix $(BUILD_DIR)/,$(TESTS))
 
 .PHONY: all test clean
@@ -21,7 +22,7 @@ $(TEST_BINS): | $(BUILD_DIR)
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(addprefix $(BUILD_DIR)/,test_libev test_admin test_ha_candidate test_ha_hub test_multicast): $(wildcard ../libev/*) ../nhrp/platform/libev.h
+$(addprefix $(BUILD_DIR)/,test_libev test_admin test_ha_candidate test_ha_hub test_multicast test_peer_lifetime test_config): $(wildcard ../libev/*) ../nhrp/platform/libev.h
 
 $(BUILD_DIR)/test_libev: test_libev.c ../nhrp/platform/libev.c
 	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -o $@ test_libev.c ../nhrp/platform/libev.c -lm
@@ -32,6 +33,13 @@ $(BUILD_DIR)/test_extensions: test_extensions.c ../nhrp/core/nhrp_extension.c
 $(BUILD_DIR)/test_payload: test_payload.c ../nhrp/core/nhrp_packet.c ../nhrp/core/nhrp_packet.h
 	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--wrap=free -o $@ test_payload.c ../nhrp/core/nhrp_packet.c
 
+CONFIG_TEST_SOURCES := $(filter-out ../nhrp/platform/sysdep_syslog.c,$(wildcard ../nhrp/core/*.c ../nhrp/platform/*.c ../nhrp/ha/*.c)) ../nhrp/admin.c ../nhrp/opennhrp_ha_process.c
+$(BUILD_DIR)/test_config: test_config.c ../nhrp/opennhrp.c $(CONFIG_TEST_SOURCES)
+	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -D_GNU_SOURCE -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--wrap=realloc -o $@ test_config.c $(CONFIG_TEST_SOURCES) -lm -lcares -lcrypto
+
+$(BUILD_DIR)/test_snapshot_memory: test_snapshot_memory.c ../nhrp/ha/nhrp_ha_coordinator.c ../nhrp/ha/nhrp_ha_delta.c ../nhrp/ha/nhrp_ha_control.c ../nhrp/ha/nhrp_ha_auth.c
+	$(CC) $(CFLAGS) -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--wrap=free -Wl,--wrap=nhrp_ha_delta_build -o $@ test_snapshot_memory.c ../nhrp/ha/nhrp_ha_delta.c ../nhrp/ha/nhrp_ha_control.c ../nhrp/ha/nhrp_ha_auth.c -lcrypto
+
 $(BUILD_DIR)/test_ha_wire: test_ha_wire.c ../nhrp/ha/nhrp_ha_wire.c
 	$(CC) $(CFLAGS) -o $@ $^
 
@@ -39,7 +47,7 @@ $(BUILD_DIR)/test_ha_hub: test_ha_hub.c ../nhrp/ha/nhrp_ha_hub.c ../nhrp/core/nh
 	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -o $@ test_ha_hub.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c -lm -lcrypto -lcares
 
 $(BUILD_DIR)/test_ha_auth: test_ha_auth.c ../nhrp/ha/nhrp_ha_auth.c
-	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
+	$(CC) $(CFLAGS) -Wl,--wrap=write -Wl,--wrap=fsync -o $@ $^ -lcrypto
 
 $(BUILD_DIR)/test_ha_seen: test_ha_seen.c ../nhrp/ha/nhrp_ha_seen.c ../nhrp/ha/nhrp_ha_auth.c
 	$(CC) $(CFLAGS) -o $@ $^ -lcrypto
@@ -80,3 +88,6 @@ $(BUILD_DIR)/test_ha_candidate: test_ha_candidate.c ../nhrp/ha/nhrp_ha.c ../nhrp
 
 $(BUILD_DIR)/test_multicast: test_multicast.c ../nhrp/platform/sysdep_pfpacket.c ../nhrp/core/nhrp_peer.c ../nhrp/core/nhrp_peer.h ../nhrp/core/nhrp_packet.c ../nhrp/core/nhrp_packet.h ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c
 	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--wrap=nhrp_packet_send_traffic -o $@ test_multicast.c ../nhrp/core/nhrp_packet.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c -lm -lcares
+
+$(BUILD_DIR)/test_peer_lifetime: test_peer_lifetime.c ../nhrp/core/nhrp_peer.c ../nhrp/core/nhrp_peer.h ../nhrp/core/nhrp_packet.c ../nhrp/core/nhrp_packet.h ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c
+	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -Wno-unused -Wno-comment -Wno-parentheses -Wno-unused-result -ffunction-sections -fdata-sections -Wl,--gc-sections -o $@ test_peer_lifetime.c ../nhrp/core/nhrp_address.c ../nhrp/platform/libev.c -lm -lcares

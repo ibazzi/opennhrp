@@ -91,8 +91,9 @@ int nhrp_ha_secure_file_write(const char *path, const void *data,
     return 0;
   fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
             0600);
-  if (fd < 0 || !write_all(fd, data, length) || fsync(fd) != 0 ||
-      close(fd) != 0) {
+  if (fd < 0 || !write_all(fd, data, length) || fsync(fd) != 0)
+    goto done;
+  if (close(fd) != 0) {
     fd = -1;
     goto done;
   }
