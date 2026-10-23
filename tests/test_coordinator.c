@@ -15,6 +15,7 @@ static void set_candidate_score(struct candidate_view *candidate,
                                 double raw_score) {
   candidate->raw_score = raw_score;
   candidate->score = (unsigned int)(raw_score + 0.5);
+  candidate->quality_observation_ms = QUALITY_OBSERVATION_MS;
 }
 
 static void set_quality_score(struct candidate_view *candidate, double loss,
@@ -25,6 +26,72 @@ static void set_quality_score(struct candidate_view *candidate, double loss,
   candidate->priority = priority;
   candidate->raw_score = score.raw_total;
   candidate->score = score.total;
+  candidate->loss_pct = loss * 100.0;
+  candidate->quality_observation_ms = QUALITY_OBSERVATION_MS;
+}
+
+static void test_degraded_migration(void) {
+  struct service_view view = {0};
+  struct decision_state decision = {0};
+  const char *reason;
+  struct candidate_view *active = &view.candidates[0];
+  struct candidate_view *target = &view.candidates[1];
+
+  view.candidate_count = 2;
+  strcpy(view.active_member, "a");
+  strcpy(active->member, "a");
+  strcpy(target->member, "b");
+  active->ready = target->ready = 1;
+  /* Both lossy: a twelve-point improvement and higher priority are not enough.
+   */
+  set_quality_score(active, 0.077, 39.5, 90);
+  set_quality_score(target, 0.045, 8.6, 100);
+  assert(select_migration(&view, &decision, 1.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 1000.0, &reason) == NULL);
+  assert(decision.superior_member[0] == 0);
+
+  set_quality_score(active, 0.10, 40.0, 90);
+  target->quality_observation_ms = 59999;
+  assert(select_migration(&view, &decision, 1001.0, &reason) == NULL);
+  target->quality_observation_ms = 60000;
+  assert(select_migration(&view, &decision, 1002.0, &reason) == NULL);
+  assert(strcmp(decision.decision_reason, "degraded-wait") == 0);
+  assert(select_migration(&view, &decision, 1061.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 1062.0, &reason) == target);
+  assert(strcmp(reason, "degraded") == 0);
+  assert(migration_cooldown(active, target) == 120.0);
+  decision.cooldown_until = 1182.0;
+  assert(select_migration(&view, &decision, 1181.9, &reason) == NULL);
+  assert(strcmp(decision.decision_reason, "cooldown") == 0);
+  assert(select_migration(&view, &decision, 1182.0, &reason) == NULL);
+  assert(decision.superior_since == 1182.0);
+  decision.cooldown_until = 0.0;
+
+  /* A healthy target uses normal timing; changing modes restarts confirmation.
+   */
+  decision_reset_superior(&decision);
+  assert(select_migration(&view, &decision, 1100.0, &reason) == NULL);
+  set_quality_score(target, 0.02999, 8.6, 100);
+  assert(select_migration(&view, &decision, 1150.0, &reason) == NULL);
+  assert(decision.superior_since == 1150.0);
+  assert(select_migration(&view, &decision, 1164.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 1165.0, &reason) == target);
+  assert(strcmp(reason, "quality") == 0);
+  assert(migration_cooldown(active, target) == 30.0);
+
+  /* Recovery observation blocks quality migration, never an actual outage. */
+  memset(&decision, 0, sizeof(decision));
+  target->quality_observation_ms = 0;
+  assert(select_migration(&view, &decision, 1200.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 1300.0, &reason) == NULL);
+  active->selected_endpoint_down = 1;
+  decision.cooldown_until = 2000.0;
+  assert(select_migration(&view, &decision, 1301.0, &reason) == NULL);
+  assert(select_migration(&view, &decision, 1303.9, &reason) == NULL);
+  assert(select_migration(&view, &decision, 1304.0, &reason) == target);
+  assert(strcmp(reason, "hard-failure") == 0);
+  target->ready = 0;
+  assert(select_migration(&view, &decision, 1400.0, &reason) == NULL);
 }
 
 static void test_latency_score(void) {
@@ -370,7 +437,8 @@ int main(void) {
       "\"authenticated\":true,\"score\":50,\"term\":5000000000},"
       "{\"member\":\"hub-backup1\",\"priority\":90,"
       "\"state\":\"ready\",\"ready\":true,"
-      "\"authenticated\":true,\"score\":60,\"term\":5000000000}]}";
+      "\"authenticated\":true,\"score\":60,\"term\":5000000000,"
+      "\"loss_pct\":2.5,\"quality_observation_ms\":60000}]}";
   static const char manual_event[] =
       "{\"protocol\":\"10.20.0.1\",\"generation\":7,"
       "\"switching\":false,\"auth_mode\":\"required\","
@@ -405,6 +473,7 @@ int main(void) {
   assert(candidate->score == 0);
   assert(candidate->raw_score == candidate->score);
   assert(!candidate->selected_endpoint_down);
+  assert(candidate->loss_pct == 0.0 && candidate->quality_observation_ms == 0);
   candidate = best_ready_candidate(&view);
   assert(candidate != NULL);
   assert(strcmp(candidate->member, "hub-backup1") == 0);
@@ -444,8 +513,13 @@ int main(void) {
   test_latency_migration();
   test_sticky_target();
   test_migration_boundaries();
+  test_degraded_migration();
 
   assert(parse_service(quality_event, &view));
+  assert(view.candidates[0].loss_pct == 0.0 &&
+         view.candidates[0].quality_observation_ms == 0);
+  assert(view.candidates[1].loss_pct == 2.5 &&
+         view.candidates[1].quality_observation_ms == 60000);
   candidate = find_candidate(&view, "hub-primary");
   assert(candidate != NULL && candidate->term == UINT64_C(5000000000));
   assert(candidate_usable(&view, candidate));
@@ -494,6 +568,7 @@ int main(void) {
 
   memset(&decision, 0, sizeof(decision));
   assert(parse_service(authenticated_event, &view));
+  set_candidate_score(&view.candidates[1], 80.0);
   assert(select_migration(&view, &decision, 1.0, &reason) == NULL);
   assert(select_migration(&view, &decision, 15.9, &reason) == NULL);
   candidate = select_migration(&view, &decision, 16.0, &reason);

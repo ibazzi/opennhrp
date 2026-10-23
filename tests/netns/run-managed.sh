@@ -1517,6 +1517,11 @@ for _ in {1..100}; do
 done
 [[ -n $spoke_ha_pid && $spoke_ha_pid != "$old_spoke_ha_pid" ]]
 
+# Endpoint changes retain loss history from the preceding injected outages.
+set_spoke_mode manual hub-primary
+sleep 61
+set_spoke_mode auto
+
 log "validating quiet steady-state registration refresh and HA probes"
 probe_log_before=$(grep -hEc \
 	'Received Resolution Request|Sending Resolution Reply' \

@@ -190,6 +190,8 @@ score = round(raw_score)
 | RTT 半分点 / Hill 指数 | 150ms / 3 |
 | 质量迁移分差 / 保持时间 | 10 分 / 15 秒 |
 | 迁移后冷却 | 30 秒 |
+| 恢复或更换 endpoint 后的普通迁移观察期 | 60 秒 |
+| 双方丢包均至少 3% 时的分差 / 保持时间 / 冷却 | 15 分 / 60 秒 / 120 秒 |
 | 小分差优先级回迁保持时间 | 120 秒 |
 | endpoint 不可达连续失败数 | 3 次，并满足 RTO 截止时间 |
 | endpoint DOWN 附加确认时间 | 3 秒 |
@@ -214,6 +216,11 @@ score = round(raw_score)
 被标记为确认不可达，状态接口输出 `selected_endpoint_down=true`，最终得分为 0。
 当前 active Hub 的注册暂时保留；若它在 3 秒附加确认期间仍不可达且存在健康目标，
 协调器执行 hard-failure 迁移。备用候选一旦 `suspect` 就不能成为迁移目标。
+
+每个 endpoint 分别保留最近 60 秒的丢包统计；切换端点再切回来不会清空原端点的
+丢包历史。恢复确认不可达的端点、更换端点或重新取得失效 RTT 后，重新开始 60 秒
+观察期，状态输出 `quality_observation_ms`。观察期只阻止普通质量迁移和优先级
+回迁，不阻止初次选路、手动选择、hard-failure 或新 term 迁移。
 
 ### 4.3 候选排序与决策
 
@@ -248,8 +255,16 @@ active selected_endpoint_down=true：
     固定第一个仍合格的目标并确认 3 秒
     确认期结束后以 hard-failure 迁移，绕过已有冷却
 
-仍在迁移后 30 秒冷却期：
+仍在迁移后冷却期（普通 30 秒，双方丢包均 >= 3% 时 120 秒）：
     不进行普通质量迁移或优先级回迁
+
+目标 endpoint 的 quality_observation_ms < 60000：
+    保持当前 Hub，继续采样
+
+当前和目标丢包率均 >= 3%：
+    只有网络质量优势 >= 15 分且总分更高连续保持 60 秒才迁移
+    原因记为 degraded，迁移后冷却 120 秒
+    小分差或仅优先级优势不回迁
 
 目标 network_score - active network_score >= 10
 且目标 raw_score > active raw_score：

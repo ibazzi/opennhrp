@@ -82,6 +82,44 @@ static void test_probe_identity(struct nhrp_ha_candidate *candidate) {
   assert(!probe_request_current(&request));
 }
 
+static void test_endpoint_quality_history(void) {
+  struct nhrp_ha_service service = {0};
+  struct nhrp_ha_candidate candidate = {.service = &service};
+  struct nhrp_address first, second;
+  struct candidate_quality_view view;
+
+  assert(nhrp_address_parse("192.0.2.1", &first, NULL));
+  assert(nhrp_address_parse("192.0.2.2", &second, NULL));
+  candidate.nbma = first;
+  candidate_reset_quality(&candidate);
+  quality_record(&candidate.quality, 100.0, FALSE, 0.01);
+  quality_record(&candidate.quality, 101.0, TRUE, 0.0);
+  candidate.quality_observe_since = 100.0;
+  view = candidate_quality_view(&candidate, 159.5);
+  assert(view.observation_ms == 59500);
+
+  candidate.nbma = second;
+  candidate_reset_quality(&candidate);
+  assert(candidate.quality.samples == 0);
+  assert(candidate.quality_observe_since == 0.0);
+  quality_record(&candidate.quality, 102.0, FALSE, 0.04);
+
+  candidate.nbma = first;
+  candidate_reset_quality(&candidate);
+  assert(candidate.quality.samples == 2 && candidate.quality.failures == 1);
+  assert(candidate.quality.rtt == 0.01);
+  assert(candidate.quality_observe_since == 0.0);
+  quality_expire(&candidate.quality, 160.0);
+  assert(candidate.quality.samples == 1 && candidate.quality.failures == 1);
+  quality_expire(&candidate.quality, 161.0);
+  assert(candidate.quality.samples == 0);
+
+  candidate.nbma = second;
+  candidate_reset_quality(&candidate);
+  assert(candidate.quality.samples == 1 && candidate.quality.failures == 0);
+  assert(candidate.quality.rtt == 0.04);
+}
+
 static void test_takeover_respects_committed_selection(void) {
   struct nhrp_ha_service service = {.owner_term = 169, .owner_index = 268};
   struct nhrp_ha_candidate active = {.service = &service, .registered = TRUE};
@@ -167,6 +205,7 @@ int main(void) {
   char output[4096];
 
   test_quality_window();
+  test_endpoint_quality_history();
   test_probe_identity(&candidate);
   test_takeover_respects_committed_selection();
   ev_default_loop(0);

@@ -22,6 +22,11 @@
 #define SCORE_FAILBACK_HOLD 120.0
 #define SCORE_SWITCH_COOLDOWN 30.0
 #define HARD_FAILURE_HOLD 3.0
+#define QUALITY_OBSERVATION_MS 60000
+#define DEGRADED_LOSS_PCT 3.0
+#define DEGRADED_SWITCH_MARGIN 15.0
+#define DEGRADED_SWITCH_HOLD 60.0
+#define DEGRADED_SWITCH_COOLDOWN 120.0
 
 struct candidate_view {
   char member[64];
@@ -33,6 +38,8 @@ struct candidate_view {
   int authenticated;
   int selected_endpoint_down;
   double raw_score;
+  double loss_pct;
+  unsigned int quality_observation_ms;
   unsigned int score;
   uint64_t term;
 };
@@ -261,10 +268,19 @@ static int parse_service(const char *line, struct service_view *view) {
       const char *raw_score = strstr(position, "\"raw_score\":");
       const char *endpoint_down =
           strstr(position, "\"selected_endpoint_down\":");
+      const char *loss = strstr(position, "\"loss_pct\":");
+      const char *observation = strstr(position, "\"quality_observation_ms\":");
 
       candidate->raw_score = candidate->score;
       if (raw_score != NULL && raw_score < end &&
           !json_double(position, "raw_score", &candidate->raw_score))
+        return 0;
+      if (loss != NULL && loss < end &&
+          !json_double(position, "loss_pct", &candidate->loss_pct))
+        return 0;
+      if (observation != NULL && observation < end &&
+          !json_unsigned(position, "quality_observation_ms",
+                         &candidate->quality_observation_ms))
         return 0;
       if (endpoint_down != NULL && endpoint_down < end) {
         endpoint_down += strlen("\"selected_endpoint_down\":");
@@ -370,6 +386,18 @@ static void decision_reset_superior(struct decision_state *state) {
   state->superior_hold = 0.0;
 }
 
+static int both_degraded(const struct candidate_view *active,
+                         const struct candidate_view *target) {
+  return active->loss_pct >= DEGRADED_LOSS_PCT &&
+         target->loss_pct >= DEGRADED_LOSS_PCT;
+}
+
+static double migration_cooldown(const struct candidate_view *active,
+                                 const struct candidate_view *target) {
+  return both_degraded(active, target) ? DEGRADED_SWITCH_COOLDOWN
+                                       : SCORE_SWITCH_COOLDOWN;
+}
+
 static double migration_hold(const struct service_view *view,
                              const struct candidate_view *active,
                              const struct candidate_view *target) {
@@ -381,6 +409,8 @@ static double migration_hold(const struct service_view *view,
     return 0.0;
   if (active->selected_endpoint_down)
     return HARD_FAILURE_HOLD;
+  if (target->quality_observation_ms < QUALITY_OBSERVATION_MS)
+    return 0.0;
   if (target->raw_score <= active->raw_score)
     return 0.0;
   active_quality = active->raw_score -
@@ -391,6 +421,10 @@ static double migration_hold(const struct service_view *view,
     active_quality = 0.0;
   if (target_quality < 0.0)
     target_quality = 0.0;
+  if (both_degraded(active, target))
+    return target_quality - active_quality >= DEGRADED_SWITCH_MARGIN
+               ? DEGRADED_SWITCH_HOLD
+               : 0.0;
   if (target_quality - active_quality >= SCORE_SWITCH_MARGIN)
     return SCORE_SWITCH_HOLD;
   return target->priority > active->priority ? SCORE_FAILBACK_HOLD : 0.0;
@@ -505,9 +539,10 @@ static struct candidate_view *select_migration(struct service_view *view,
   hold = migration_hold(view, active, best);
   snprintf(state->decision_target, sizeof(state->decision_target), "%s",
            best->member);
-  state->decision_reason = hold == HARD_FAILURE_HOLD     ? "hard-failure-wait"
-                           : hold == SCORE_FAILBACK_HOLD ? "failback-wait"
-                                                         : "quality-wait";
+  state->decision_reason = hold == HARD_FAILURE_HOLD      ? "hard-failure-wait"
+                           : hold == DEGRADED_SWITCH_HOLD ? "degraded-wait"
+                           : hold == SCORE_FAILBACK_HOLD  ? "failback-wait"
+                                                          : "quality-wait";
   if (strcmp(state->superior_member, best->member) != 0 ||
       strcmp(state->superior_address, best->selected_address) != 0 ||
       state->superior_term != best->term || state->superior_hold != hold) {
@@ -523,8 +558,9 @@ static struct candidate_view *select_migration(struct service_view *view,
   if (now - state->superior_since < hold)
     return NULL;
   state->decision_reason = *reason = hold == HARD_FAILURE_HOLD ? "hard-failure"
-                                     : hold == SCORE_FAILBACK_HOLD ? "failback"
-                                                                   : "quality";
+                                     : hold == DEGRADED_SWITCH_HOLD ? "degraded"
+                                     : hold == SCORE_FAILBACK_HOLD  ? "failback"
+                                                                    : "quality";
   return best;
 }
 
@@ -637,7 +673,7 @@ static void process_event(const char *socket_path, const char *interface_name,
         0)
       return;
     if (active != NULL && active != target)
-      state->cooldown_until = now + SCORE_SWITCH_COOLDOWN;
+      state->cooldown_until = now + migration_cooldown(active, target);
     decision_reset_superior(state);
     state->degraded = 0;
     return;

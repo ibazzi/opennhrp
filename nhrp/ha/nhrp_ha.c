@@ -66,6 +66,11 @@ struct nhrp_ha_quality {
   double last_reply;
 };
 
+struct nhrp_ha_endpoint_quality {
+  struct nhrp_address address;
+  struct nhrp_ha_quality quality;
+};
+
 struct nhrp_ha_candidate {
   struct list_head list_entry;
   struct nhrp_ha_service *service;
@@ -111,6 +116,10 @@ struct nhrp_ha_candidate {
   double rttvar;
   double rto;
   struct nhrp_ha_quality quality;
+  struct nhrp_address quality_address;
+  struct nhrp_ha_endpoint_quality
+      endpoint_quality[NHRP_HA_MANAGED_MAX_ENDPOINTS];
+  double quality_observe_since;
   unsigned int consecutive_misses;
   int auth_valid;
   uint8_t auth_key_id[NHRP_HA_AUTH_KEY_ID_SIZE];
@@ -825,13 +834,40 @@ candidate_alloc(struct nhrp_ha_service *service, const char *member_id) {
   return candidate;
 }
 
+static struct nhrp_ha_quality *
+candidate_endpoint_quality(struct nhrp_ha_candidate *candidate,
+                           const struct nhrp_address *address) {
+  size_t slot = 0;
+  size_t i;
+
+  for (i = 0; i < ARRAY_SIZE(candidate->endpoint_quality); i++) {
+    struct nhrp_ha_endpoint_quality *entry = &candidate->endpoint_quality[i];
+
+    if (nhrp_address_cmp(&entry->address, address) == 0)
+      return &entry->quality;
+    if (entry->address.type == PF_UNSPEC ||
+        entry->quality.last_reply <
+            candidate->endpoint_quality[slot].quality.last_reply)
+      slot = i;
+  }
+  candidate->endpoint_quality[slot].address = *address;
+  memset(&candidate->endpoint_quality[slot].quality, 0,
+         sizeof(candidate->endpoint_quality[slot].quality));
+  return &candidate->endpoint_quality[slot].quality;
+}
+
 static void candidate_reset_quality(struct nhrp_ha_candidate *candidate) {
+  if (candidate->quality_address.type != PF_UNSPEC)
+    *candidate_endpoint_quality(candidate, &candidate->quality_address) =
+        candidate->quality;
+  candidate->quality = *candidate_endpoint_quality(candidate, &candidate->nbma);
+  candidate->quality_address = candidate->nbma;
+  candidate->quality_observe_since = 0.0;
   candidate->serviceable = FALSE;
   candidate->srtt = 0.0;
   candidate->rttvar = 0.0;
   candidate->rto = candidate->service->active == candidate ? HA_ACTIVE_MIN_RTO
                                                            : HA_STANDBY_MIN_RTO;
-  memset(&candidate->quality, 0, sizeof(candidate->quality));
   candidate->selected_endpoint_down = FALSE;
 }
 
@@ -1769,9 +1805,13 @@ static void quality_record(struct nhrp_ha_quality *quality, double now,
 static void candidate_record_quality(struct nhrp_ha_candidate *candidate,
                                      int missed, double sample) {
   ev_tstamp now = ev_now();
+  double quality_now = monotonic_nanoseconds() / 1e9;
 
-  quality_record(&candidate->quality, monotonic_nanoseconds() / 1e9, missed,
-                 sample);
+  if (!missed &&
+      (candidate->quality_observe_since == 0.0 || !candidate->quality.has_rtt ||
+       quality_now - candidate->quality.last_reply > HA_QUALITY_RTT_STALE))
+    candidate->quality_observe_since = quality_now;
+  quality_record(&candidate->quality, quality_now, missed, sample);
   if (candidate->service->last_quality_event == 0.0 ||
       now - candidate->service->last_quality_event >= 1.0) {
     candidate->service->last_quality_event = now;
@@ -1937,6 +1977,10 @@ static void probe_reply(void *ctx, struct nhrp_packet *reply) {
   candidate->probe_pending = FALSE;
   candidate->endpoint_ready[request->endpoint_index] = TRUE;
   candidate->endpoint_misses[request->endpoint_index] = 0;
+  if (request->selected_endpoint &&
+      (candidate->selected_endpoint_down ||
+       candidate->state == NHRP_HA_CANDIDATE_OFFLINE))
+    candidate->quality_observe_since = 0.0;
   if (request->selected_endpoint)
     candidate->selected_endpoint_down = FALSE;
   candidate->last_probe_reply = ev_now();
@@ -3597,6 +3641,7 @@ struct candidate_quality_view {
   double raw_score;
   int valid;
   unsigned int score;
+  unsigned int observation_ms;
   char rtt_ms[48];
   char reply_age_ms[48];
 };
@@ -3608,6 +3653,10 @@ candidate_quality_view(struct nhrp_ha_candidate *candidate, double now) {
   double loss;
 
   quality_expire(quality, now);
+  if (candidate->quality_observe_since > 0.0 &&
+      now >= candidate->quality_observe_since)
+    view.observation_ms =
+        fmin((now - candidate->quality_observe_since) * 1000.0, UINT_MAX);
   loss = quality->samples ? (double)quality->failures / quality->samples : 1.0;
   view.loss_pct = loss * 100.0;
   view.valid = quality->samples >= HA_QUALITY_MIN_SAMPLES && quality->has_rtt &&
@@ -3770,6 +3819,7 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             "\"srtt_ms\":%.3f,\"rto_ms\":%.3f,"
             "\"quality_rtt_ms\":%s,\"quality_samples\":%u,"
             "\"quality_failures\":%u,\"last_quality_reply_age_ms\":%s,"
+            "\"quality_observation_ms\":%u,"
             "\"quality_valid\":%s,\"loss_score\":%.3f,"
             "\"latency_score\":%.3f,\"priority_score\":%.3f,"
             "\"loss_pct\":%.3f,\"raw_score\":%.6f,\"score\":%u,"
@@ -3802,9 +3852,10 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             candidate->auth_leader[0] != 0 ? "\"" : "",
             candidate->srtt * 1000.0, candidate->rto * 1000.0, quality.rtt_ms,
             candidate->quality.samples, candidate->quality.failures,
-            quality.reply_age_ms, quality.valid ? "true" : "false",
-            quality.parts.loss, quality.parts.latency, quality.parts.priority,
-            quality.loss_pct, quality.raw_score, quality.score,
+            quality.reply_age_ms, quality.observation_ms,
+            quality.valid ? "true" : "false", quality.parts.loss,
+            quality.parts.latency, quality.parts.priority, quality.loss_pct,
+            quality.raw_score, quality.score,
             candidate->selected_endpoint_down ? "true" : "false");
         first = FALSE;
       }
@@ -3876,6 +3927,7 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             "authenticated %s key-id %s term %llu commit-index %llu "
             "leader %s srtt-ms %.3f quality-rtt-ms %s quality-samples %u "
             "quality-failures %u last-quality-reply-age-ms %s quality-valid %s "
+            "quality-observation-ms %u "
             "loss-score %.3f latency-score %.3f priority-score %.3f "
             "loss-pct %.3f raw-score %.6f score %u selected-endpoint-down %s\n",
             candidate->member_id, nbma, endpoints,
@@ -3895,9 +3947,9 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
             candidate->srtt * 1000.0, quality.rtt_ms,
             candidate->quality.samples, candidate->quality.failures,
             quality.reply_age_ms, quality.valid ? "true" : "false",
-            quality.parts.loss, quality.parts.latency, quality.parts.priority,
-            quality.loss_pct, quality.raw_score, quality.score,
-            candidate->selected_endpoint_down ? "yes" : "no");
+            quality.observation_ms, quality.parts.loss, quality.parts.latency,
+            quality.parts.priority, quality.loss_pct, quality.raw_score,
+            quality.score, candidate->selected_endpoint_down ? "yes" : "no");
       }
       offset = append(buffer, size, offset, "\n");
     }
