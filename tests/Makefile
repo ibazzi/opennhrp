@@ -4,7 +4,7 @@ CFLAGS += -Wall -Wextra -Werror -std=gnu99 -I../nhrp/core -I../nhrp/ha \
 	  -I../nhrp -I../nhrp/platform
 
 BUILD_DIR ?= ../build/tests
-TESTS := test_libev test_extensions test_ha_wire test_ha_auth test_ha_seen \
+TESTS := test_libev test_extensions test_payload test_ha_wire test_ha_auth test_ha_seen \
 	test_ha_control test_ha_store test_ha_delta test_ha_failback \
 	test_ha_managed test_ha_join test_coordinator test_admin test_ha_candidate test_ha_hub test_ha_status test_multicast
 TEST_BINS := $(addprefix $(BUILD_DIR)/,$(TESTS))
@@ -28,6 +28,9 @@ $(BUILD_DIR)/test_libev: test_libev.c ../nhrp/platform/libev.c
 
 $(BUILD_DIR)/test_extensions: test_extensions.c ../nhrp/core/nhrp_extension.c
 	$(CC) $(CFLAGS) -o $@ $^
+
+$(BUILD_DIR)/test_payload: test_payload.c ../nhrp/core/nhrp_packet.c ../nhrp/core/nhrp_packet.h
+	$(CC) $(filter-out -Wextra -Werror,$(CFLAGS)) -fno-strict-aliasing -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--wrap=free -o $@ test_payload.c ../nhrp/core/nhrp_packet.c
 
 $(BUILD_DIR)/test_ha_wire: test_ha_wire.c ../nhrp/ha/nhrp_ha_wire.c
 	$(CC) $(CFLAGS) -o $@ $^

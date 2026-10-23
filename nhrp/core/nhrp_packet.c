@@ -216,6 +216,8 @@ void nhrp_payload_set_type(struct nhrp_payload *payload, int type) {
 
 void nhrp_payload_set_raw(struct nhrp_payload *payload,
                           struct nhrp_buffer *raw) {
+  if (payload->payload_type == NHRP_PAYLOAD_TYPE_RAW && payload->u.raw != raw)
+    nhrp_buffer_free(payload->u.raw);
   nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_RAW);
   payload->u.raw = raw;
 }
