@@ -152,11 +152,13 @@ instead on new installations.
 
 .BI "ha-local-nbma " member-id " " local-nbma-address
 .RS
-Overrides the local kernel neighbor and tunnel destination for one HA Hub
+Overrides the local kernel neighbor, tunnel destination and HA control packet
+destination for one HA Hub
 member learned on this interface. The member is identified by its stable HA
 member ID and does not need to have been discovered when configuration is
-loaded. Registration identity and reply validation continue to use the Hub's
-advertised NBMA address. If omitted, a non-bootstrap member uses its advertised
+loaded. Registration identity continues to use the Hub's advertised NBMA
+address; replies must come from the connection address used by the request.
+If omitted, a non-bootstrap member uses its advertised
 NBMA address. An explicit override takes precedence over bootstrap inheritance.
 .RE
 

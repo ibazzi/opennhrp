@@ -17,6 +17,7 @@ static struct nhrp_interface iface;
 static kernel_neighbor_callback neighbor_callback;
 static void *neighbor_ctx;
 static unsigned int completed;
+static struct nhrp_address sent_destination, route_destination, route_source;
 
 void nhrp_log(int level, const char *format, ...) {}
 void admin_ha_notify(struct nhrp_interface *interface) {}
@@ -48,8 +49,10 @@ struct nhrp_peer *nhrp_peer_route_full(struct nhrp_interface *interface,
 int kernel_route(struct nhrp_interface *out, struct nhrp_address *dest,
                  struct nhrp_address *source, struct nhrp_address *next,
                  uint16_t *mtu) {
-  assert(!"unexpected route lookup");
-  return FALSE;
+  assert(nhrp_address_cmp(dest, &route_destination) == 0);
+  *source = route_source;
+  *mtu = 1492;
+  return TRUE;
 }
 int kernel_inject_neighbor_async(struct nhrp_address *protocol,
                                  struct nhrp_address *nbma,
@@ -77,7 +80,124 @@ int nhrp_peer_ha_anchor_configured(struct nhrp_interface *interface,
 }
 int kernel_send(uint8_t *data, size_t length, struct nhrp_interface *interface,
                 struct nhrp_address *destination) {
+  sent_destination = *destination;
   return TRUE;
+}
+
+static void test_candidate_connect_address(void) {
+  struct nhrp_address protocol, public, local, override_address, expected;
+  struct nhrp_ha_service *service;
+  struct nhrp_ha_candidate *candidate;
+  struct nhrp_ha_local_override override = {.interface = &iface,
+                                            .configured = TRUE};
+  struct nhrp_packet *request, *reply;
+  struct nhrp_payload *payload;
+  struct nhrp_cie *cie;
+  struct nhrp_peer *peer;
+  unsigned int mode, invalid;
+
+  assert(nhrp_address_parse("10.99.0.1", &protocol, NULL));
+  assert(nhrp_address_parse("192.0.2.1", &public, NULL));
+  assert(nhrp_address_parse("172.29.1.250", &local, NULL));
+  assert(nhrp_address_parse("172.29.1.251", &override_address, NULL));
+  assert(
+      nhrp_ha_config_map(&iface, &protocol, 24, "connect-test", &public, 100));
+  service = service_find(&iface, &protocol);
+  candidate = candidate_find(service, "connect-test");
+  service->active = candidate;
+  strcpy(override.member_id, candidate->member_id);
+  override.local_nbma = override_address;
+
+  for (mode = 0; mode < 3; mode++) {
+    expected = mode == 0 ? public : mode == 1 ? local : override_address;
+    if (mode == 1)
+      candidate->bootstrap_local_nbma = local;
+    if (mode == 2)
+      list_add(&override.list_entry, &local_overrides);
+
+    registration_timer_cb(&candidate->registration_timer, 0);
+    assert(nhrp_address_cmp(&sent_destination, &expected) == 0);
+    request = list_entry(pending_requests.next, struct nhrp_packet,
+                         request_list_entry);
+    assert(nhrp_address_cmp(&request->dst_peer->next_hop_address, &public) ==
+           0);
+    reply = nhrp_packet_alloc();
+    reply->hdr.type = NHRP_PACKET_REGISTRATION_REPLY;
+    reply->src_linklayer_address = expected;
+    payload =
+        nhrp_packet_extension(reply, NHRP_EXTENSION_HA, NHRP_PAYLOAD_TYPE_RAW);
+    nhrp_payload_set_raw(payload,
+                         ha_member_payload(candidate->member_id,
+                                           candidate->registration_generation));
+    payload = nhrp_packet_payload(reply, NHRP_PAYLOAD_TYPE_CIE_LIST);
+    cie = nhrp_cie_alloc();
+    cie->hdr.code = NHRP_CODE_SUCCESS;
+    nhrp_payload_add_cie(payload, cie);
+    request->handler(request->handler_ctx, reply);
+    nhrp_packet_dequeue(request);
+    nhrp_packet_put(reply);
+    assert(candidate->registered && candidate->pending_requests == 0);
+
+    for (invalid = 0; invalid < 3; invalid++) {
+      unsigned int samples = candidate->quality.samples;
+      probe_timer_cb(&candidate->probe_timer, 0);
+      assert(nhrp_address_cmp(&sent_destination, &expected) == 0);
+      request = list_entry(pending_requests.next, struct nhrp_packet,
+                           request_list_entry);
+      reply = nhrp_packet_alloc();
+      reply->hdr.type = NHRP_PACKET_RESOLUTION_REPLY;
+      reply->src_linklayer_address = expected;
+      if (invalid == 1)
+        assert(nhrp_address_parse("198.51.100.99",
+                                  &reply->src_linklayer_address, NULL));
+      payload = nhrp_packet_extension(reply, NHRP_EXTENSION_HA,
+                                      NHRP_PAYLOAD_TYPE_RAW);
+      nhrp_payload_set_raw(
+          payload, ha_probe_payload(
+                       NHRP_HA_PROBE_REPLY, candidate->member_id,
+                       candidate->probe_sequence, candidate->probe_generation,
+                       candidate->probe_nonce + (invalid == 2), 0,
+                       iface.protocol_address.addr_len * 8, TRUE, TRUE, 0, 0));
+      /* An in-flight reply belongs to the address selected before reload. */
+      if (mode == 2)
+        override.local_nbma = public;
+      else
+        candidate->bootstrap_local_nbma = override_address;
+      request->handler(request->handler_ctx, reply);
+      override.local_nbma = override_address;
+      candidate->bootstrap_local_nbma =
+          mode == 0 ? (struct nhrp_address){0} : local;
+      nhrp_packet_dequeue(request);
+      nhrp_packet_put(reply);
+      assert(candidate->pending_requests == 0 && !candidate->probe_pending);
+      assert(candidate->quality.samples == samples + 1);
+      assert(candidate->consecutive_misses == invalid);
+    }
+    assert(candidate_release_owner_token(service, candidate, 1, &public, TRUE));
+    assert(nhrp_address_cmp(&sent_destination, &expected) == 0);
+    if (mode == 2)
+      list_del(&override.list_entry);
+  }
+
+  /* The connection address must also select the source required by IPsec. */
+  struct nhrp_address saved_source = iface.nbma_address;
+  nhrp_address_set_type(&iface.nbma_address, PF_UNSPEC);
+  route_destination = local;
+  assert(nhrp_address_parse("192.168.100.2", &route_source, NULL));
+  peer = candidate_direct_peer(candidate, &public);
+  assert(peer != NULL);
+  assert(nhrp_address_cmp(&peer->my_nbma_address, &route_source) == 0);
+  assert(nhrp_address_cmp(nhrp_peer_active_nbma(peer), &local) == 0);
+  nhrp_peer_put(peer);
+  iface.nbma_address = saved_source;
+  /* Another Hub must not inherit this member's private destination. */
+  struct nhrp_ha_candidate other = {.service = service};
+  strcpy(other.member_id, "other-hub");
+  peer = candidate_direct_peer(&other, &public);
+  assert(peer != NULL);
+  assert(nhrp_address_cmp(nhrp_peer_active_nbma(peer), &public) == 0);
+  nhrp_peer_put(peer);
+  assert(list_empty(&pending_requests));
 }
 
 static size_t candidate_count(struct nhrp_ha_service *service) {
@@ -362,6 +482,7 @@ int main(void) {
   test_configuration_retirement();
   test_managed_reload();
   test_protocol_rotation();
+  test_candidate_connect_address();
   puts("HA candidate retirement, pending request and reload lifecycle tests passed");
   ev_loop_destroy();
   return 0;

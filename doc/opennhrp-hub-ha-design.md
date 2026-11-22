@@ -444,8 +444,9 @@ opennhrpctl ha show interface gre-ha format json
   未过期的普通 dynamic 注册，以及 Spoke 学习到的 cached 邻接和 shortcut
   route；启动时按原绝对过期时间恢复，并重新执行 `peer-up`/`route-up` 和邻居
   注入。`HA_ACTIVE`、`active_member`、候选评分和 HA owner 状态不进入该快照；
-- `ha-local-nbma` 只覆盖某个 Hub 的本地 GRE/NBMA 目的地址，不启用 HA，也不
-  改变注册身份；
+- `ha-local-nbma` 覆盖某个 Hub 的本地 GRE/NBMA 及 HA 探测、注册和 owner 释放
+  目的地址，不启用 HA，也不改变注册身份；对应 bootstrap 的 Hub 未配置时继承
+  其本地地址，没有本地地址则使用公布的 NBMA。回复按请求实际使用的连接地址校验；
 - 旧 `ha-hub`、`ha-member-id`、`ha-cluster-id`、`ha-auth`、`ha-auth-key`、
   `ha-state-file`、`ha-map` 和人工 `generation` 不属于当前配置语法；
 - Managed HA 的 X25519/Ed25519 raw-key API 需要 OpenSSL 1.1.1 或更新版本。

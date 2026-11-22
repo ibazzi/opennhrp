@@ -142,6 +142,7 @@ struct nhrp_ha_registration_request {
   uint32_t registration_generation;
   uint32_t request_id;
   struct nhrp_address endpoint;
+  struct nhrp_address reply_address;
   struct nhrp_address bootstrap_local_nbma;
   int has_bootstrap_local_nbma;
 };
@@ -154,6 +155,7 @@ struct nhrp_ha_probe_request {
   uint64_t nonce;
   ev_tstamp sent;
   size_t endpoint_index;
+  struct nhrp_address reply_address;
   int selected_endpoint;
 };
 
@@ -1067,7 +1069,9 @@ candidate_direct_peer(struct nhrp_ha_candidate *candidate,
                       const struct nhrp_address *endpoint) {
   struct nhrp_peer *peer;
   struct nhrp_interface *iface = candidate->service->interface;
-  struct nhrp_address route_address = *endpoint;
+  const struct nhrp_address *local_nbma = candidate_local_nbma(candidate, NULL);
+  struct nhrp_address route_address =
+      local_nbma != NULL ? *local_nbma : *endpoint;
 
   peer = nhrp_peer_alloc(iface);
   if (peer == NULL)
@@ -1075,6 +1079,8 @@ candidate_direct_peer(struct nhrp_ha_candidate *candidate,
   peer->type = NHRP_PEER_TYPE_LOCAL_ROUTE;
   peer->flags = NHRP_PEER_FLAG_UP | NHRP_PEER_FLAG_LOWER_UP;
   peer->next_hop_address = *endpoint;
+  if (local_nbma != NULL)
+    peer->local_connect_address = *local_nbma;
   peer->protocol_address = candidate->service->protocol;
   peer->prefix_length = candidate->service->prefix_length;
   peer->afnum = nhrp_afnum_from_pf(endpoint->type);
@@ -1414,6 +1420,7 @@ static void registration_reply_process(void *ctx, struct nhrp_packet *reply) {
   int code = -1;
   uint32_t request_id = request->request_id;
   struct nhrp_address registration_endpoint = request->endpoint;
+  struct nhrp_address reply_address = request->reply_address;
 
   if (request->endpoint_generation != candidate->endpoint_generation ||
       request->registration_generation != candidate->registration_generation) {
@@ -1428,7 +1435,7 @@ static void registration_reply_process(void *ctx, struct nhrp_packet *reply) {
   if (!candidate->configured)
     return;
   if (reply == NULL || reply->hdr.type != NHRP_PACKET_REGISTRATION_REPLY ||
-      nhrp_address_cmp(&reply->src_linklayer_address, &candidate->nbma) != 0)
+      nhrp_address_cmp(&reply->src_linklayer_address, &reply_address) != 0)
     goto failed;
 
   payload = nhrp_packet_extension(
@@ -1621,7 +1628,7 @@ int nhrp_ha_handle_registration_discovery(struct nhrp_peer *peer,
       !(peer->flags & NHRP_PEER_FLAG_REGISTER) ||
       reply->hdr.type != NHRP_PACKET_REGISTRATION_REPLY ||
       nhrp_address_cmp(&reply->src_linklayer_address,
-                       &peer->next_hop_address) != 0)
+                       nhrp_peer_active_nbma(peer)) != 0)
     return FALSE;
   payload = nhrp_packet_extension(
       reply, NHRP_EXTENSION_HA | NHRP_EXTENSION_FLAG_NOCREATE,
@@ -1706,6 +1713,7 @@ int nhrp_ha_handle_registration_discovery(struct nhrp_peer *peer,
   request->endpoint_generation = candidate->endpoint_generation;
   request->registration_generation = candidate->registration_generation;
   request->endpoint = candidate->nbma;
+  request->reply_address = *nhrp_peer_active_nbma(peer);
   request->request_id = ntohl(reply->hdr.u.request_id);
   if (peer->local_connect_address.type != PF_UNSPEC) {
     request->bootstrap_local_nbma = peer->local_connect_address;
@@ -1824,6 +1832,7 @@ static void registration_timer_cb(struct ev_timer *timer, int revents) {
   request->endpoint_generation = candidate->endpoint_generation;
   request->registration_generation = candidate->registration_generation;
   request->endpoint = candidate->nbma;
+  request->reply_address = *nhrp_peer_active_nbma(direct_peer);
 
   candidate->registration_pending = TRUE;
   if (!candidate->registered && candidate->state != NHRP_HA_CANDIDATE_OFFLINE &&
@@ -2051,7 +2060,7 @@ static void probe_reply_process(void *ctx, struct nhrp_packet *reply) {
   if (request->endpoint_index >= candidate->endpoint_count || reply == NULL ||
       reply->hdr.type != NHRP_PACKET_RESOLUTION_REPLY ||
       nhrp_address_cmp(&reply->src_linklayer_address,
-                       &candidate->endpoints[request->endpoint_index]) != 0)
+                       &request->reply_address) != 0)
     goto missed;
 
   payload = nhrp_packet_extension(
@@ -2342,6 +2351,7 @@ static void probe_timer_cb(struct ev_timer *timer, int revents) {
   request->nonce = candidate->probe_nonce;
   request->sent = candidate->probe_sent;
   request->endpoint_index = endpoint_index;
+  request->reply_address = *nhrp_peer_active_nbma(direct_peer);
   request->selected_endpoint = selected_endpoint;
 
   candidate->probe_pending = TRUE;
