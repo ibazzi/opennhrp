@@ -1,3 +1,9 @@
+opennhrp (0.16-1) unstable; urgency=medium
+
+  * Add NHS address discovery and separate GRE data paths.
+
+ -- ibazzi <ibazzi@qq.com>  Tue, 24 Nov 2026 08:02:42 +0800
+
 opennhrp (0.15-1) unstable; urgency=low
 
   * feat(admin): add dynamic mapping and configuration reload functions
