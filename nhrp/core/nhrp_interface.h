@@ -38,7 +38,7 @@ struct nhrp_interface {
   uint16_t afnum;
   uint16_t mtu, nbma_mtu;
   struct nhrp_address nbma_address;
-  struct nhrp_cie nat_cie;
+  struct nhrp_address advertised_forwarding_nbma;
 
   /* Actually, we should have list of protocol addresses;
    * we might have multiple address and multiple protocol types */

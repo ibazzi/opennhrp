@@ -307,6 +307,68 @@ struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
   return p;
 }
 
+const struct nhrp_buffer *nhrp_packet_forwarding_payload(struct nhrp_packet *packet,
+                                                         uint16_t extension) {
+  struct nhrp_payload *payload = nhrp_packet_extension(
+      packet, extension | NHRP_EXTENSION_FLAG_NOCREATE, NHRP_PAYLOAD_TYPE_RAW);
+
+  return payload != NULL && payload->extension_type == extension
+             ? payload->u.raw : NULL;
+}
+
+void nhrp_packet_request_forwarding(struct nhrp_packet *packet, uint16_t extension) {
+  struct nhrp_buffer *buffer = nhrp_buffer_alloc(1);
+  struct nhrp_payload *payload;
+
+  if (buffer == NULL)
+    return;
+  payload = nhrp_packet_extension(packet, extension, NHRP_PAYLOAD_TYPE_RAW);
+  if (payload == NULL) {
+    nhrp_buffer_free(buffer);
+    return;
+  }
+  buffer->data[0] = NHRP_FORWARDING_NBMA_VERSION;
+  nhrp_payload_set_raw(payload, buffer);
+}
+
+void nhrp_packet_reply_forwarding(struct nhrp_packet *packet, uint16_t extension,
+                                   const struct nhrp_address *address) {
+  struct nhrp_payload *payload = nhrp_packet_extension(
+      packet, extension | NHRP_EXTENSION_FLAG_NOCREATE, NHRP_PAYLOAD_TYPE_RAW);
+  struct nhrp_buffer *buffer = NULL;
+
+  if (payload == NULL)
+    return;
+  if (address != NULL && payload->extension_type == extension &&
+      payload->u.raw != NULL && payload->u.raw->length == 1 &&
+      payload->u.raw->data[0] == NHRP_FORWARDING_NBMA_VERSION)
+    buffer = nhrp_buffer_alloc(NHRP_FORWARDING_NBMA_SIZE);
+  if (buffer == NULL) {
+    nhrp_payload_set_type(payload, NHRP_PAYLOAD_TYPE_NONE);
+    return;
+  }
+  buffer->data[0] = NHRP_FORWARDING_NBMA_VERSION;
+  memset(buffer->data + 1, 0, 4);
+  if (address->type == AF_INET)
+    memcpy(buffer->data + 1, address->addr, 4);
+  nhrp_payload_set_raw(payload, buffer);
+}
+
+struct nhrp_address nhrp_packet_read_forwarding(struct nhrp_packet *packet,
+                                                 uint16_t extension) {
+  struct nhrp_address address = {0};
+  const struct nhrp_buffer *buffer = nhrp_packet_forwarding_payload(packet, extension);
+
+  if (buffer != NULL && buffer->length == NHRP_FORWARDING_NBMA_SIZE &&
+      buffer->data[0] == NHRP_FORWARDING_NBMA_VERSION && buffer->data[1] != 0 &&
+      buffer->data[1] != 127 && buffer->data[1] < 224) {
+    address.type = AF_INET;
+    address.addr_len = 4;
+    memcpy(address.addr, buffer->data + 1, address.addr_len);
+  }
+  return address;
+}
+
 static void nhrp_packet_release(struct nhrp_packet *packet) {
   int i;
 
@@ -339,6 +401,19 @@ static void nhrp_packet_dequeue(struct nhrp_packet *packet) {
   if (list_hashed(&packet->request_list_entry))
     list_del(&packet->request_list_entry);
   nhrp_packet_put(packet);
+}
+
+void nhrp_packet_cancel_registration(struct nhrp_peer *peer) {
+  struct nhrp_packet *packet, *next;
+
+  list_for_each_entry_safe(packet, next, &pending_requests, request_list_entry) {
+    if (packet->hdr.type != NHRP_PACKET_REGISTRATION_REQUEST ||
+        packet->dst_peer != peer || packet->handler_ctx != peer)
+      continue;
+    /* The registration callback normally releases this reference. */
+    nhrp_peer_put(peer);
+    nhrp_packet_dequeue(packet);
+  }
 }
 
 static int nhrp_do_handle_error_indication(struct nhrp_packet *error_pkt,
@@ -721,6 +796,17 @@ static int nhrp_packet_receive_local(struct nhrp_packet *packet) {
       if (nhrp_address_cmp(&packet->src_protocol_address,
                            &req->src_protocol_address))
         continue;
+      if (req->hdr.type == NHRP_PACKET_REGISTRATION_REQUEST &&
+          req->dst_peer != NULL &&
+          (req->dst_peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS) &&
+          (packet->hdr.type != NHRP_PACKET_REGISTRATION_REPLY ||
+           packet->src_iface != req->dst_iface ||
+           nhrp_address_cmp(&packet->src_linklayer_address,
+                            nhrp_peer_active_nbma(req->dst_peer)) != 0))
+        return TRUE;
+      if (req->hdr.type == NHRP_PACKET_REGISTRATION_REQUEST &&
+          nhrp_packet_forwarding_payload(req, NHRP_EXTENSION_FORWARDING_NBMA) == NULL)
+        nhrp_packet_reply_forwarding(packet, NHRP_EXTENSION_FORWARDING_NBMA, NULL);
 
       if (req->handler != NULL)
         req->handler(req->handler_ctx, packet);
@@ -797,6 +883,16 @@ int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
     dest = &packet->dst_protocol_address;
 
   peer = nhrp_peer_route(iface, dest, 0, BIT(NHRP_PEER_TYPE_LOCAL_ADDR));
+  if (packet->hdr.type == NHRP_PACKET_REGISTRATION_REQUEST &&
+      packet->hdr.hop_count <= 1 && dest->type == AF_INET &&
+      (iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED) &&
+      iface->protocol_address.type == AF_INET &&
+      nhrp_address_cmp(dest, &packet->src_protocol_address) == 0) {
+    /* The client only knows its own protocol address during discovery. */
+    packet->dst_protocol_address = iface->protocol_address;
+    peer = nhrp_peer_route(iface, &packet->dst_protocol_address,
+                           NHRP_PEER_FIND_EXACT, BIT(NHRP_PEER_TYPE_LOCAL_ADDR));
+  }
   packet->src_linklayer_address = *from;
   packet->src_iface = iface;
   packet->dst_peer = nhrp_peer_get(peer);
@@ -1141,16 +1237,21 @@ int nhrp_packet_send(struct nhrp_packet *packet) {
 
   /* Cisco NAT extension CIE */
   if (packet_types[packet->hdr.type].type != NHRP_TYPE_INDICATION &&
-      (packet->hdr.flags & NHRP_FLAG_REGISTRATION_NAT)) {
+      (packet->hdr.flags & NHRP_FLAG_REGISTRATION_NAT) && packet->dst_peer != NULL) {
+    const struct nhrp_address *nat_nbma = nhrp_peer_nat_nbma(packet->dst_peer);
     payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS,
                                     NHRP_PAYLOAD_TYPE_CIE_LIST);
 
-    if (packet->dst_iface->nat_cie.nbma_address.addr_len && payload != NULL &&
+    if (nat_nbma && payload != NULL &&
+        (packet->hdr.type != NHRP_PACKET_RESOLUTION_REQUEST ||
+         !packet->src_nbma_address.addr_len ||
+         nhrp_address_cmp(&packet->src_nbma_address, &packet->dst_peer->my_nbma_address) == 0) &&
         list_empty(&payload->u.cie_list)) {
       cie = nhrp_cie_alloc();
       if (cie != NULL) {
-        *cie = packet->dst_iface->nat_cie;
-        nhrp_cie_reset(cie);
+        cie->hdr.prefix_length = 32;
+        cie->nbma_address = *nat_nbma;
+        cie->protocol_address = packet->dst_iface->protocol_address;
         nhrp_payload_add_cie(payload, cie);
       }
     }

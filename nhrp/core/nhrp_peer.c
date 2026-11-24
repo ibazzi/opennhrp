@@ -290,7 +290,8 @@ static void nhrp_peer_resolve_nbma(struct nhrp_peer *peer) {
   int r;
 
   if (peer->interface->nbma_address.type == PF_UNSPEC) {
-    r = kernel_route(NULL, &peer->next_hop_address, &peer->my_nbma_address,
+    nhrp_address_set_type(&peer->my_nbma_address, PF_UNSPEC);
+    r = kernel_route(NULL, nhrp_peer_active_nbma(peer), &peer->my_nbma_address,
                      NULL, &peer->my_nbma_mtu);
     if (!r) {
       nhrp_error(
@@ -586,6 +587,9 @@ static void nhrp_peer_expire_cb(struct ev_timer *w, int revents) {
 static void nhrp_peer_is_down(struct nhrp_peer *peer) {
   struct nhrp_peer_selector sel;
 
+  nhrp_address_set_type(&peer->advertised_forwarding_nbma, PF_UNSPEC);
+  nhrp_address_set_type(&peer->nat_source_address, PF_UNSPEC);
+  nhrp_address_set_type(&peer->nat_nbma_address, PF_UNSPEC);
   /* Remove UP flags if not being removed permanently, so futher
    * lookups are valid */
   if (!(peer->flags & NHRP_PEER_FLAG_REMOVED))
@@ -721,12 +725,22 @@ static void nhrp_peer_script_peer_up_done(union nhrp_peer_event e,
   struct nhrp_peer *peer = nhrp_peer_from_event(e, revents);
   char tmp[64], reason[32];
 
+  if (peer->flags & NHRP_PEER_FLAG_HA_BOOTSTRAP)
+    return;
+  if (nhrp_peer_uses_underlay_route(peer) && peer->my_nbma_address.type == PF_UNSPEC) {
+    if (peer->type == NHRP_PEER_TYPE_STATIC || peer->type == NHRP_PEER_TYPE_DYNAMIC_NHS)
+      peer->flags |= NHRP_PEER_FLAG_WAIT_UNDERLAY;
+    nhrp_peer_restart_error(peer);
+    return;
+  }
+  peer->flags &= ~NHRP_PEER_FLAG_WAIT_UNDERLAY;
   if (nhrp_peer_event_ok(e, revents)) {
     nhrp_debug("[%s] Peer up script: success",
                nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp));
 
-    kernel_inject_neighbor(&peer->protocol_address, nhrp_peer_active_nbma(peer),
-                           peer->interface);
+    if (!(peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS))
+      kernel_inject_neighbor(&peer->protocol_address, nhrp_peer_forwarding_nbma(peer),
+                             peer->interface);
     nhrp_peer_lower_is_up(peer);
   } else {
     nhrp_error("[%s] Peer up script failed: %s",
@@ -884,6 +898,14 @@ int nhrp_peer_discover_nhs(struct nhrp_peer *peer,
   return TRUE;
 }
 
+static void nhrp_peer_run_nhs_down(struct nhrp_peer *peer);
+
+static int replace_discovered_nhs_cache(void *ctx, struct nhrp_peer *peer) {
+  peer->flags |= NHRP_PEER_FLAG_REPLACED;
+  nhrp_peer_remove(peer);
+  return 0;
+}
+
 static void nhrp_peer_handle_registration_reply(void *ctx,
                                                 struct nhrp_packet *reply) {
   struct nhrp_peer *peer = (struct nhrp_peer *)ctx;
@@ -903,7 +925,14 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
               nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp),
               nhrp_error_indication_text(ec), ntohs(ec));
 
-    if (ec == NHRP_ERROR_HOP_COUNT_EXCEEDED)
+    if (peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS) {
+      if (peer->protocol_address.type == AF_INET) {
+        nhrp_peer_run_nhs_down(peer);
+        nhrp_peer_is_down(peer);
+        kernel_inject_neighbor(&peer->protocol_address, NULL, peer->interface);
+        nhrp_address_set_type(&peer->protocol_address, AF_UNSPEC);
+      }
+    } else if (ec == NHRP_ERROR_HOP_COUNT_EXCEEDED)
       nhrp_peer_discover_nhs(peer, &reply->src_protocol_address);
 
     if (reply != NULL) {
@@ -916,7 +945,8 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
   }
 
   /* Check servers protocol address */
-  if (!nhrp_peer_discover_nhs(peer, &reply->dst_protocol_address)) {
+  if (!(peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS) &&
+      !nhrp_peer_discover_nhs(peer, &reply->dst_protocol_address)) {
     peer->registration_failed = TRUE;
     nhrp_peer_restart_error(peer);
     goto ret;
@@ -941,9 +971,53 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
               nhrp_cie_code_text(ec));
 
   switch (ec) {
-  case NHRP_CODE_SUCCESS:
+  case NHRP_CODE_SUCCESS: {
+    struct nhrp_address previous_forwarding = *nhrp_peer_forwarding_nbma(peer);
+
+    if (peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS) {
+      const struct nhrp_address *address = &reply->dst_protocol_address;
+
+      if (address->type != AF_INET || address->addr_len != 4 ||
+          !address->addr[0] || address->addr[0] == 127 || address->addr[0] >= 224 ||
+          !nhrp_address_cmp(address, &peer->interface->protocol_address)) {
+        peer->registration_failed = TRUE;
+        nhrp_peer_restart_error(peer);
+        goto ret;
+      }
+      if (nhrp_address_cmp(&peer->protocol_address, address)) {
+        struct nhrp_peer_selector selector = {
+            .flags = NHRP_PEER_FIND_EXACT,
+            .type_mask = NHRP_PEER_TYPEMASK_REMOVABLE,
+            .interface = peer->interface,
+            .protocol_address = *address,
+            .prefix_length = 32,
+        };
+
+        if (peer->protocol_address.type == AF_INET) {
+          nhrp_peer_run_nhs_down(peer);
+          nhrp_peer_is_down(peer);
+          kernel_inject_neighbor(&peer->protocol_address, NULL, peer->interface);
+        }
+        nhrp_peer_foreach(replace_discovered_nhs_cache, NULL, &selector);
+        peer->protocol_address = *address;
+      }
+    }
+    nhrp_address_set_type(&peer->advertised_forwarding_nbma, PF_UNSPEC);
+    if (peer->forwarding_policy == NHRP_FORWARDING_ORDINARY &&
+        reply->src_iface == peer->interface &&
+        !nhrp_address_cmp(&reply->src_linklayer_address, nhrp_peer_active_nbma(peer)) &&
+        nhrp_packet_extension(reply, NHRP_EXTENSION_HA | NHRP_EXTENSION_FLAG_NOCREATE,
+                               NHRP_PAYLOAD_TYPE_RAW) == NULL)
+      peer->advertised_forwarding_nbma =
+          nhrp_packet_read_forwarding(reply, NHRP_EXTENSION_FORWARDING_NBMA);
+    if (!(peer->flags & NHRP_PEER_FLAG_HA_BOOTSTRAP) &&
+        ((peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS) ||
+         nhrp_address_cmp(&previous_forwarding, nhrp_peer_forwarding_nbma(peer))))
+      kernel_inject_neighbor(&peer->protocol_address, nhrp_peer_forwarding_nbma(peer),
+                             peer->interface);
     peer->registration_failed = FALSE;
     break;
+  }
   case NHRP_CODE_UNIQUE_ADDRESS_REGISTERED:
     peer->registration_failed = TRUE;
     nhrp_peer_send_protocol_purge(peer);
@@ -959,26 +1033,19 @@ static void nhrp_peer_handle_registration_reply(void *ctx,
   payload = nhrp_packet_extension(
       reply, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE,
       NHRP_PAYLOAD_TYPE_CIE_LIST);
-  if (payload != NULL) {
-    cie = nhrp_payload_get_cie(payload, 2);
-    if (cie != NULL) {
-      if (peer->interface->nat_cie.nbma_address.addr_len == 0 ||
-          nhrp_address_cmp(&peer->interface->nat_cie.nbma_address,
-                           &cie->nbma_address) != 0)
-        nhrp_info("NAT detected: our real NBMA address is %s",
-                  nhrp_address_format(&cie->nbma_address, sizeof(tmp), tmp));
-      else
-        nhrp_debug("NAT registration refresh confirms real NBMA address %s",
-                   nhrp_address_format(&cie->nbma_address, sizeof(tmp), tmp));
-      peer->interface->nat_cie = *cie;
-    }
-  }
-  if (payload == NULL || cie == NULL) {
-    if (peer->interface->nat_cie.nbma_address.addr_len != 0)
+  cie = payload ? nhrp_payload_get_cie(payload, 2) : NULL;
+  struct nhrp_address observed = cie && cie->nbma_address.type == AF_INET
+                                     ? cie->nbma_address : (struct nhrp_address){0};
+  if (nhrp_address_cmp(&peer->nat_nbma_address, &observed)) {
+    if (observed.type == AF_INET)
+      nhrp_info("NAT detected: our real NBMA address is %s",
+                nhrp_address_format(&observed, sizeof(tmp), tmp));
+    else
       nhrp_info("NAT no longer detected for registration to %s",
                 nhrp_address_format(&peer->protocol_address, sizeof(tmp), tmp));
-    memset(&peer->interface->nat_cie, 0, sizeof(peer->interface->nat_cie));
   }
+  peer->nat_source_address = peer->my_nbma_address;
+  peer->nat_nbma_address = observed;
 
   nhrp_ha_handle_registration_discovery(peer, reply);
 
@@ -1040,6 +1107,11 @@ static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents) {
 
   if (peer->flags & NHRP_PEER_FLAG_HA_BOOTSTRAP)
     return;
+  if (nhrp_peer_uses_underlay_route(peer) &&
+      peer->my_nbma_address.type == PF_UNSPEC) {
+    peer->flags |= NHRP_PEER_FLAG_WAIT_UNDERLAY;
+    goto error;
+  }
   if (peer->interface->protocol_address.type == PF_UNSPEC) {
     nhrp_info("Interface %s has no protocol address; refreshing addresses",
               peer->interface->name);
@@ -1074,7 +1146,10 @@ static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents) {
   }
   packet->dst_protocol_address = peer->protocol_address;
 
-  if (peer->type == NHRP_PEER_TYPE_DYNAMIC_NHS &&
+  if (peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS) {
+    packet->dst_protocol_address = peer->interface->protocol_address;
+    packet->hdr.hop_count = 1;
+  } else if (peer->type == NHRP_PEER_TYPE_DYNAMIC_NHS &&
       nhrp_address_is_network(&peer->protocol_address, peer->prefix_length)) {
     /* We are not yet sure of the protocol address of the NHS -
      * send registration to the broadcast address with one hop
@@ -1126,6 +1201,11 @@ static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents) {
       .nbma_address = peer->next_hop_address,
       .protocol_address = peer->protocol_address,
   };
+  if (peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS) {
+    cie->hdr.prefix_length = 32;
+    if (cie->protocol_address.type == AF_UNSPEC)
+      nhrp_address_parse("0.0.0.0", &cie->protocol_address, NULL);
+  }
 
   payload = nhrp_packet_extension(packet, NHRP_EXTENSION_NAT_ADDRESS,
                                   NHRP_PAYLOAD_TYPE_CIE_LIST);
@@ -1144,6 +1224,8 @@ static void nhrp_peer_send_register_cb(struct ev_timer *w, int revents) {
   packet->dst_iface = peer->interface;
   if (!nhrp_ha_prepare_registration_discovery(peer, packet))
     goto error_free_packet;
+  if (peer->forwarding_policy == NHRP_FORWARDING_ORDINARY)
+    nhrp_packet_request_forwarding(packet, NHRP_EXTENSION_FORWARDING_NBMA);
   sent = nhrp_packet_send_request(packet, nhrp_peer_handle_registration_reply,
                                   nhrp_peer_get(peer));
 
@@ -1410,7 +1492,7 @@ static void nhrp_peer_release(struct nhrp_peer *peer) {
   case NHRP_PEER_TYPE_STATIC:
   case NHRP_PEER_TYPE_DYNAMIC_NHS:
   case NHRP_PEER_TYPE_HA_ACTIVE:
-    if (peer->flags & NHRP_PEER_FLAG_REPLACED)
+    if (peer->flags & (NHRP_PEER_FLAG_REPLACED | NHRP_PEER_FLAG_HA_BOOTSTRAP))
       break;
 
     /* Remove cached routes using this entry as next-hop */
@@ -1446,6 +1528,7 @@ static void nhrp_peer_release(struct nhrp_peer *peer) {
     free(peer->nbma_hostname);
     peer->nbma_hostname = NULL;
   }
+  free(peer->accepted_forwarding_members);
 
   free(peer);
   nhrp_peer_num_total--;
@@ -1646,6 +1729,9 @@ void nhrp_peer_insert(struct nhrp_peer *peer) {
     sel.type_mask |= BIT(NHRP_PEER_TYPE_LOCAL_ROUTE);
   default:
     /* remove exact protocol address matches */
+    if ((peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS) &&
+        peer->protocol_address.type == AF_UNSPEC)
+      break;
     sel.flags = NHRP_PEER_FIND_EXACT;
     sel.type_mask |= NHRP_PEER_TYPEMASK_REMOVABLE;
     nhrp_peer_foreach(nhrp_peer_remove_matching, NULL, &sel);
@@ -1704,6 +1790,79 @@ void nhrp_peer_purge(struct nhrp_peer *peer, const char *purge_reason) {
   }
 }
 
+const struct nhrp_address *nhrp_peer_nat_nbma(const struct nhrp_peer *peer) {
+  const struct nhrp_address *source = &peer->my_nbma_address;
+  const struct nhrp_address *observed = NULL;
+  struct nhrp_peer *nhs;
+
+  if (source->type != AF_INET)
+    return NULL;
+  if ((peer->flags & NHRP_PEER_FLAG_REGISTER) || peer->type == NHRP_PEER_TYPE_HA_ACTIVE) {
+    if ((peer->flags & NHRP_PEER_FLAG_UP) &&
+        !(peer->flags & (NHRP_PEER_FLAG_HA_BOOTSTRAP | NHRP_PEER_FLAG_REMOVED)) &&
+        nhrp_address_cmp(&peer->nat_source_address, source) == 0 &&
+        peer->nat_nbma_address.type == AF_INET)
+      return &peer->nat_nbma_address;
+    return NULL;
+  }
+
+  /* A direct peer can inherit an observation only when NHSs on its source agree. */
+  list_for_each_entry(nhs, &peer->interface->peer_list, peer_list_entry) {
+    if (!(nhs->flags & NHRP_PEER_FLAG_UP) ||
+        (nhs->flags & (NHRP_PEER_FLAG_HA_BOOTSTRAP | NHRP_PEER_FLAG_REMOVED)) ||
+        (!(nhs->flags & NHRP_PEER_FLAG_REGISTER) && nhs->type != NHRP_PEER_TYPE_HA_ACTIVE) ||
+        nhrp_address_cmp(&nhs->nat_source_address, source) != 0 ||
+        nhrp_address_cmp(&nhs->my_nbma_address, source) != 0)
+      continue;
+    if (observed && nhrp_address_cmp(observed, &nhs->nat_nbma_address) != 0)
+      return NULL;
+    observed = &nhs->nat_nbma_address;
+  }
+  return observed && observed->type == AF_INET ? observed : NULL;
+}
+
+int nhrp_peer_uses_underlay_route(const struct nhrp_peer *peer) {
+  const struct nhrp_interface *iface = peer->interface;
+
+  return (peer->type == NHRP_PEER_TYPE_STATIC ||
+          peer->type == NHRP_PEER_TYPE_DYNAMIC_NHS ||
+          peer->type == NHRP_PEER_TYPE_DYNAMIC ||
+          peer->type == NHRP_PEER_TYPE_CACHED) &&
+         !(peer->flags & NHRP_PEER_FLAG_HA_BOOTSTRAP) &&
+         (iface->flags & NHRP_INTERFACE_FLAG_CONFIGURED) &&
+         iface->index && iface->afnum == AFNUM_INET && !iface->link_index &&
+         iface->nbma_address.type == PF_UNSPEC;
+}
+
+int nhrp_peer_refresh_underlay(void *ctx, struct nhrp_peer *peer) {
+  struct nhrp_address source = {0};
+  struct nhrp_address *destination = nhrp_peer_active_nbma(peer);
+  uint16_t mtu;
+  int waiting = peer->flags & NHRP_PEER_FLAG_WAIT_UNDERLAY;
+
+  if (!nhrp_peer_uses_underlay_route(peer) || destination->type != AF_INET ||
+      (!waiting && peer->my_nbma_address.type != AF_INET))
+    return 0;
+
+  int reachable = kernel_route(NULL, destination, &source, NULL, &mtu) &&
+                  source.type == AF_INET;
+  if (waiting) {
+    if (reachable) {
+      peer->flags &= ~NHRP_PEER_FLAG_WAIT_UNDERLAY;
+      nhrp_peer_schedule(peer, 0, nhrp_peer_restart_cb);
+    }
+  } else if (reachable && nhrp_address_cmp(&source, &peer->my_nbma_address) == 0) {
+    peer->my_nbma_mtu = mtu;
+  } else {
+    nhrp_packet_cancel_registration(peer);
+    nhrp_peer_purge(peer, "underlay route changed");
+    if (!reachable && (peer->type == NHRP_PEER_TYPE_STATIC ||
+                       peer->type == NHRP_PEER_TYPE_DYNAMIC_NHS))
+      peer->flags |= NHRP_PEER_FLAG_WAIT_UNDERLAY;
+  }
+  return 0;
+}
+
 int nhrp_peer_purge_matching(void *ctx, struct nhrp_peer *peer) {
   int *count = (int *)ctx;
   if (peer->flags & NHRP_PEER_FLAG_HA_BOOTSTRAP)
@@ -1728,7 +1887,8 @@ int nhrp_peer_reregister_matching(void *ctx, struct nhrp_peer *peer) {
   if (!(peer->flags & NHRP_PEER_FLAG_REGISTER))
     return 0;
 
-  nhrp_peer_schedule(peer, 0, nhrp_peer_send_register_cb);
+  nhrp_peer_schedule(peer, 0, (peer->flags & NHRP_PEER_FLAG_LOWER_UP) ?
+                     nhrp_peer_send_register_cb : nhrp_peer_restart_cb);
   if (count != NULL)
     (*count)++;
 
@@ -2283,22 +2443,18 @@ void nhrp_peer_ha_suspend_static(struct nhrp_interface *iface,
   nhrp_peer_foreach(suspend_static_cb, NULL, &sel);
 }
 
-static int configured_anchor_cb(void *ctx, struct nhrp_peer *peer) {
-  (void)ctx;
-  return (peer->flags & (NHRP_PEER_FLAG_REGISTER | NHRP_PEER_FLAG_MARK)) ==
-         NHRP_PEER_FLAG_REGISTER;
-}
+void nhrp_peer_ha_resume_static(struct nhrp_interface *iface,
+                                const struct nhrp_address *proto_addr) {
+  struct nhrp_peer *peer;
 
-int nhrp_peer_ha_anchor_configured(struct nhrp_interface *iface,
-                                   struct nhrp_address *proto_addr) {
-  struct nhrp_peer_selector sel;
-
-  memset(&sel, 0, sizeof(sel));
-  sel.flags = NHRP_PEER_FIND_EXACT;
-  sel.type_mask = BIT(NHRP_PEER_TYPE_STATIC);
-  sel.interface = iface;
-  sel.protocol_address = *proto_addr;
-  return nhrp_peer_foreach(configured_anchor_cb, NULL, &sel) != 0;
+  list_for_each_entry(peer, &iface->peer_list, peer_list_entry) {
+    if (!(peer->flags & NHRP_PEER_FLAG_HA_BOOTSTRAP) ||
+        (peer->flags & NHRP_PEER_FLAG_REMOVED) ||
+        nhrp_address_cmp(&peer->protocol_address, proto_addr))
+      continue;
+    peer->flags &= ~NHRP_PEER_FLAG_HA_BOOTSTRAP;
+    nhrp_peer_reregister_matching(NULL, peer);
+  }
 }
 
 struct anchor_local_nbma_ctx {

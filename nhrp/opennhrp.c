@@ -124,6 +124,7 @@ static int read_word(FILE *in, int *lineno, size_t len, char *word) {
 }
 
 struct interface_config {
+  struct nhrp_address advertised_forwarding_nbma;
   struct list_head list;
   struct nhrp_interface *interface;
   struct nhrp_buffer *auth_token;
@@ -147,6 +148,8 @@ static int save_interface_config(void *ctx, struct nhrp_interface *iface) {
   entry->mcast_addr = iface->mcast_addr;
   entry->mcast_mask = iface->mcast_mask;
   entry->mcast_numaddr = iface->mcast_numaddr;
+  entry->advertised_forwarding_nbma = iface->advertised_forwarding_nbma;
+  nhrp_address_set_type(&iface->advertised_forwarding_nbma, PF_UNSPEC);
   iface->auth_token = NULL;
   iface->mcast_addr = NULL;
   iface->mcast_mask = iface->mcast_numaddr = 0;
@@ -167,6 +170,7 @@ static void finish_interface_config(struct list_head *saved, int commit) {
       iface->mcast_addr = entry->mcast_addr;
       iface->mcast_mask = entry->mcast_mask;
       iface->mcast_numaddr = entry->mcast_numaddr;
+      iface->advertised_forwarding_nbma = entry->advertised_forwarding_nbma;
     } else {
       struct nhrp_peer *peer;
 
@@ -180,6 +184,92 @@ static void finish_interface_config(struct list_head *saved, int commit) {
   }
   if (commit)
     forward_local_addresses_changed();
+}
+
+struct peer_config_backup {
+  struct list_head list;
+  struct nhrp_peer *peer;
+  unsigned int flags;
+  struct nhrp_address local_nbma;
+  struct nhrp_address forwarding_nbma;
+  struct nhrp_address effective_forwarding_nbma;
+  enum nhrp_forwarding_policy forwarding_policy;
+  char *accepted_forwarding_members;
+  unsigned int holding_time;
+};
+
+static int save_peer_config_fields(void *ctx, struct nhrp_peer *peer) {
+  struct list_head *saved = ctx;
+  struct peer_config_backup *entry;
+
+  if (!(peer->flags & NHRP_PEER_FLAG_CONFIGURED))
+    return 0;
+  entry = malloc(sizeof(*entry));
+  if (entry == NULL)
+    return -1;
+  entry->peer = nhrp_peer_get(peer);
+  entry->flags = peer->flags;
+  entry->local_nbma = peer->local_connect_address;
+  entry->forwarding_nbma = peer->forwarding_nbma;
+  entry->effective_forwarding_nbma = *nhrp_peer_forwarding_nbma(peer);
+  entry->forwarding_policy = peer->forwarding_policy;
+  peer->forwarding_policy = NHRP_FORWARDING_DEFAULT;
+  entry->accepted_forwarding_members = peer->accepted_forwarding_members;
+  peer->accepted_forwarding_members = NULL;
+  entry->holding_time = peer->holding_time;
+  list_add_tail(&entry->list, saved);
+  return 0;
+}
+
+static void finish_peer_config(struct list_head *saved,
+                               struct list_head *pending, int commit) {
+  struct peer_config_backup *entry, *next;
+  struct nhrp_peer *peer, *next_peer;
+
+  list_for_each_entry_safe(entry, next, saved, list) {
+    if (!commit) {
+      entry->peer->flags = entry->flags;
+      entry->peer->local_connect_address = entry->local_nbma;
+      entry->peer->forwarding_nbma = entry->forwarding_nbma;
+      entry->peer->forwarding_policy = entry->forwarding_policy;
+      free(entry->peer->accepted_forwarding_members);
+      entry->peer->accepted_forwarding_members = entry->accepted_forwarding_members;
+      entry->accepted_forwarding_members = NULL;
+      entry->peer->holding_time = entry->holding_time;
+    } else if (!(entry->peer->flags & NHRP_PEER_FLAG_REMOVED)) {
+      peer = entry->peer;
+      if (peer->forwarding_policy != NHRP_FORWARDING_ORDINARY)
+        nhrp_address_set_type(&peer->advertised_forwarding_nbma, PF_UNSPEC);
+      if ((peer->flags & NHRP_PEER_FLAG_LOWER_UP) &&
+          !(peer->flags & NHRP_PEER_FLAG_HA_BOOTSTRAP) &&
+          peer->protocol_address.type == AF_INET &&
+          nhrp_address_cmp(nhrp_peer_forwarding_nbma(peer),
+                           &entry->effective_forwarding_nbma)) {
+        kernel_inject_neighbor(&peer->protocol_address, nhrp_peer_forwarding_nbma(peer),
+                               peer->interface);
+        nhrp_peer_update_multicast(peer);
+      }
+      if (((peer->flags ^ entry->flags) &
+           (NHRP_PEER_FLAG_REGISTER | NHRP_PEER_FLAG_CISCO | NHRP_PEER_FLAG_REG_NON_UNIQUE)) ||
+          nhrp_address_cmp(&peer->local_connect_address, &entry->local_nbma))
+        nhrp_peer_purge(peer, "configuration changed");
+      else if ((peer->forwarding_policy == NHRP_FORWARDING_ORDINARY) !=
+               (entry->forwarding_policy == NHRP_FORWARDING_ORDINARY))
+        nhrp_peer_reregister_matching(NULL, peer);
+    }
+    free(entry->accepted_forwarding_members);
+    nhrp_peer_put(entry->peer);
+    list_del(&entry->list);
+    free(entry);
+  }
+  list_for_each_entry_safe(peer, next_peer, pending, peer_list_entry) {
+    list_del(&peer->peer_list_entry);
+    if (commit)
+      nhrp_peer_insert(peer);
+    else
+      peer->flags |= NHRP_PEER_FLAG_REPLACED;
+    nhrp_peer_put(peer);
+  }
 }
 
 static int load_config(const char *config_file) {
@@ -207,11 +297,13 @@ static int load_config(const char *config_file) {
       "unable to allocate interface configuration",
   };
   struct list_head saved_interfaces = LIST_INITIALIZER(saved_interfaces);
+  struct list_head saved_peers = LIST_INITIALIZER(saved_peers);
+  struct list_head staged_peers = LIST_INITIALIZER(staged_peers);
   struct nhrp_interface *iface = NULL;
   struct nhrp_peer *peer = NULL, *exist = NULL;
   struct nhrp_address paddr, nbma_addr;
   uint8_t prefix_length;
-  char word[64], nbma[64], addr[64];
+  char word[64], nbma[256], addr[64];
   FILE *in;
   int lineno = 1, rc = -1;
 
@@ -225,6 +317,13 @@ static int load_config(const char *config_file) {
     finish_interface_config(&saved_interfaces, FALSE);
     return FALSE;
   }
+  if (nhrp_peer_foreach(save_peer_config_fields, &saved_peers, NULL) != 0) {
+    fclose(in);
+    finish_peer_config(&saved_peers, &staged_peers, FALSE);
+    finish_interface_config(&saved_interfaces, FALSE);
+    return FALSE;
+  }
+  nhrp_peer_mark_static();
 
   while (read_word(in, &lineno, sizeof(word), word)) {
     if (strcmp(word, "interface") == 0) {
@@ -257,19 +356,25 @@ static int load_config(const char *config_file) {
         peer = exist;
       } else {
         peer = nhrp_peer_alloc(iface);
+        if (peer == NULL) {
+          rc = 8;
+          break;
+        }
         peer->type = NHRP_PEER_TYPE_LOCAL_ADDR;
         peer->afnum = AFNUM_RESERVED;
         peer->protocol_address = paddr;
         peer->prefix_length = prefix_length;
         peer->protocol_type = nhrp_protocol_from_pf(paddr.type);
         peer->flags |= NHRP_PEER_FLAG_CONFIGURED;
-        nhrp_peer_insert(peer);
-        nhrp_peer_put(peer);
+        list_add_tail(&peer->peer_list_entry, &staged_peers);
       }
     } else if (strcmp(word, "dynamic-map") == 0) {
       NEED_INTERFACE();
-      read_word(in, &lineno, sizeof(addr), addr);
-      read_word(in, &lineno, sizeof(nbma), nbma);
+      if (!read_word(in, &lineno, sizeof(addr), addr) ||
+          !read_word(in, &lineno, sizeof(nbma), nbma)) {
+        rc = 1;
+        break;
+      }
 
       if (!nhrp_address_parse(addr, &paddr, &prefix_length)) {
         rc = 4;
@@ -287,22 +392,41 @@ static int load_config(const char *config_file) {
         peer = exist;
       } else {
         peer = nhrp_peer_alloc(iface);
+        if (peer == NULL) {
+          rc = 8;
+          break;
+        }
         peer->type = NHRP_PEER_TYPE_STATIC_DNS;
         peer->protocol_address = paddr;
         peer->prefix_length = prefix_length;
         peer->protocol_type = nhrp_protocol_from_pf(paddr.type);
         peer->nbma_hostname = strdup(nbma);
+        if (peer->nbma_hostname == NULL) {
+          nhrp_peer_put(peer);
+          rc = 8;
+          break;
+        }
         peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
         peer->flags |= NHRP_PEER_FLAG_CONFIGURED;
-        nhrp_peer_insert(peer);
-        nhrp_peer_put(peer);
+        list_add_tail(&peer->peer_list_entry, &staged_peers);
       }
     } else if (strcmp(word, "map") == 0) {
       NEED_INTERFACE();
-      read_word(in, &lineno, sizeof(addr), addr);
-      read_word(in, &lineno, sizeof(nbma), nbma);
-
-      if (!nhrp_address_parse(addr, &paddr, &prefix_length)) {
+      if (!read_word(in, &lineno, sizeof(addr), addr) ||
+          !read_word(in, &lineno, sizeof(nbma), nbma)) {
+        rc = 1;
+        break;
+      }
+      int discover = !strcmp(addr, "dynamic");
+      if (discover) {
+        if (!read_word(in, &lineno, sizeof(word), word) || strcmp(word, "register")) {
+          nhrp_error("'map dynamic' requires 'register'");
+          rc = 0;
+          break;
+        }
+        nhrp_address_set_type(&paddr, AF_UNSPEC);
+        prefix_length = 32;
+      } else if (!nhrp_address_parse(addr, &paddr, &prefix_length)) {
         rc = 4;
         break;
       }
@@ -311,29 +435,63 @@ static int load_config(const char *config_file) {
       if (!nhrp_address_parse(nbma, &nbma_addr, NULL))
         nbma_host = nbma;
 
-      exist = nhrp_peer_find_marked_static(iface, NHRP_PEER_TYPE_STATIC, &paddr,
-                                           &nbma_addr, nbma_host);
+      if (discover) {
+        struct nhrp_peer *candidate;
+
+        exist = NULL;
+        list_for_each_entry(candidate, &iface->peer_list, peer_list_entry) {
+          if (candidate->type != NHRP_PEER_TYPE_STATIC ||
+              (candidate->flags & (NHRP_PEER_FLAG_MARK | NHRP_PEER_FLAG_DISCOVER_NHS)) !=
+                  (NHRP_PEER_FLAG_MARK | NHRP_PEER_FLAG_DISCOVER_NHS))
+            continue;
+          if (nbma_host != NULL
+                  ? candidate->nbma_hostname != NULL &&
+                        !strcmp(nbma_host, candidate->nbma_hostname)
+                  : candidate->nbma_hostname == NULL &&
+                        !nhrp_address_cmp(&nbma_addr, &candidate->next_hop_address)) {
+            exist = candidate;
+            break;
+          }
+        }
+      } else {
+        exist = nhrp_peer_find_marked_static(iface, NHRP_PEER_TYPE_STATIC, &paddr,
+                                             &nbma_addr, nbma_host);
+        if (exist != NULL && (exist->flags & NHRP_PEER_FLAG_DISCOVER_NHS))
+          exist = NULL;
+      }
       if (exist != NULL) {
         exist->flags &= ~NHRP_PEER_FLAG_MARK;
         exist->flags &= ~(NHRP_PEER_FLAG_REGISTER | NHRP_PEER_FLAG_CISCO |
                           NHRP_PEER_FLAG_REG_NON_UNIQUE);
         exist->flags |= NHRP_PEER_FLAG_CONFIGURED;
         nhrp_address_set_type(&exist->local_connect_address, PF_UNSPEC);
+        nhrp_address_set_type(&exist->forwarding_nbma, PF_UNSPEC);
         peer = exist;
       } else {
         peer = nhrp_peer_alloc(iface);
+        if (peer == NULL) {
+          rc = 8;
+          break;
+        }
         peer->type = NHRP_PEER_TYPE_STATIC;
         peer->protocol_address = paddr;
         peer->prefix_length = prefix_length;
-        peer->protocol_type = nhrp_protocol_from_pf(paddr.type);
+        peer->protocol_type = nhrp_protocol_from_pf(discover ? AF_INET : paddr.type);
         peer->next_hop_address = nbma_addr;
         if (nbma_host != NULL)
           peer->nbma_hostname = strdup(nbma_host);
+        if (nbma_host != NULL && peer->nbma_hostname == NULL) {
+          peer->flags |= NHRP_PEER_FLAG_REPLACED;
+          nhrp_peer_put(peer);
+          rc = 8;
+          break;
+        }
         peer->afnum = nhrp_afnum_from_pf(peer->next_hop_address.type);
         peer->flags |= NHRP_PEER_FLAG_CONFIGURED;
-        nhrp_peer_insert(peer);
-        nhrp_peer_put(peer);
+        list_add_tail(&peer->peer_list_entry, &staged_peers);
       }
+      if (discover)
+        peer->flags |= NHRP_PEER_FLAG_DISCOVER_NHS | NHRP_PEER_FLAG_REGISTER;
     } else if (strcmp(word, "enable-ha") == 0) {
       struct nhrp_address advertised[NHRP_HA_MANAGED_MAX_ENDPOINTS];
       char member_id[NHRP_HA_MEMBER_ID_MAX + 1] = {0};
@@ -406,8 +564,71 @@ static int load_config(const char *config_file) {
       peer->flags |= NHRP_PEER_FLAG_REGISTER;
     } else if (strcmp(word, "local-nbma") == 0) {
       NEED_PEER();
-      read_word(in, &lineno, sizeof(word), word);
-      if (!nhrp_address_parse(word, &peer->local_connect_address, NULL)) {
+      if ((peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS) ||
+          !read_word(in, &lineno, sizeof(word), word) ||
+          !nhrp_address_parse(word, &peer->local_connect_address, NULL)) {
+        rc = 4;
+        break;
+      }
+    } else if (strcmp(word, "accept-data-nbma") == 0) {
+      char *members;
+      size_t previous;
+
+      NEED_PEER();
+      if (!(peer->flags & NHRP_PEER_FLAG_REGISTER) ||
+          !read_word(in, &lineno, sizeof(word), word)) {
+        rc = 0;
+        break;
+      }
+      if (!strcmp(word, "enable") || !strcmp(word, "disable")) {
+        if (peer->forwarding_policy != NHRP_FORWARDING_DEFAULT) {
+          rc = 0;
+          break;
+        }
+        peer->forwarding_policy = !strcmp(word, "enable") ? NHRP_FORWARDING_ORDINARY
+                                                         : NHRP_FORWARDING_DISABLED;
+        continue;
+      }
+      if (strcmp(word, "ha") ||
+          (peer->forwarding_policy != NHRP_FORWARDING_DEFAULT &&
+           peer->forwarding_policy != NHRP_FORWARDING_HA) ||
+          !read_word(in, &lineno, sizeof(word), word) ||
+          strlen(word) > 32 || !isalnum((unsigned char)word[0]) ||
+          strspn(word, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-") != strlen(word)) {
+        rc = 0;
+        break;
+      }
+      previous = peer->accepted_forwarding_members
+                     ? strlen(peer->accepted_forwarding_members) : 0;
+      members = realloc(peer->accepted_forwarding_members,
+                        previous + strlen(word) + 2);
+      if (members == NULL) {
+        rc = 8;
+        break;
+      }
+      members[previous] = ' ';
+      strcpy(members + previous + 1, word);
+      peer->accepted_forwarding_members = members;
+      peer->forwarding_policy = NHRP_FORWARDING_HA;
+    } else if (strcmp(word, "data-nbma") == 0 ||
+               strcmp(word, "advertise-data-nbma") == 0) {
+      struct nhrp_address *forwarding;
+
+      if (strcmp(word, "advertise-data-nbma") == 0) {
+        NEED_INTERFACE();
+        forwarding = &iface->advertised_forwarding_nbma;
+      } else {
+        NEED_PEER();
+        if (!(peer->flags & NHRP_PEER_FLAG_REGISTER)) {
+          rc = 3;
+          break;
+        }
+        forwarding = &peer->forwarding_nbma;
+      }
+      if (!read_word(in, &lineno, sizeof(word), word) ||
+          !nhrp_address_parse(word, forwarding, NULL) ||
+          forwarding->type != AF_INET || !forwarding->addr[0] ||
+          forwarding->addr[0] == 127 || forwarding->addr[0] >= 224) {
         rc = 4;
         break;
       }
@@ -489,18 +710,15 @@ static int load_config(const char *config_file) {
   }
   fclose(in);
 
-  if (rc >= 0) {
+  if (rc >= 0)
     nhrp_error("Configuration file %s in %s:%d, near word '%s'", errors[rc],
                config_file, lineno, word);
-    finish_interface_config(&saved_interfaces, FALSE);
-    return FALSE;
-  }
-  if (!nhrp_ha_config_validate()) {
-    finish_interface_config(&saved_interfaces, FALSE);
-    return FALSE;
-  }
-  finish_interface_config(&saved_interfaces, TRUE);
-  return TRUE;
+  int commit = rc < 0 && nhrp_ha_config_validate();
+  if (commit)
+    nhrp_peer_sweep_marked_static();
+  finish_peer_config(&saved_peers, &staged_peers, commit);
+  finish_interface_config(&saved_interfaces, commit);
+  return commit;
 }
 
 static void remove_pid_file(void) {
@@ -728,7 +946,6 @@ int nhrp_reload_config(void) {
   size_t new_target_count;
 
   nhrp_info("Reloading configuration file %s", nhrp_config_file);
-  nhrp_peer_mark_static();
   nhrp_ha_mark_configured();
   if (!load_config(nhrp_config_file)) {
     nhrp_ha_config_reload_abort();
@@ -740,7 +957,6 @@ int nhrp_reload_config(void) {
     nhrp_error("Failed to reload managed HA state from %s", nhrp_ha_state_dir);
     return FALSE;
   }
-  nhrp_peer_sweep_marked_static();
   nhrp_ha_sweep_unconfigured();
   nhrp_ha_start();
   new_count =
@@ -788,14 +1004,14 @@ static int save_peer_config(void *ctx, struct nhrp_peer *peer) {
     fprintf(fp, "  dynamic-map %s/%d %s\n", pbuf, peer->prefix_length,
             peer->nbma_hostname ? peer->nbma_hostname : "");
     break;
-  case NHRP_PEER_TYPE_STATIC:
-    if (peer->nbma_hostname != NULL)
-      fprintf(fp, "  map %s/%d %s", pbuf, peer->prefix_length,
-              peer->nbma_hostname);
-    else {
-      nhrp_address_format(&peer->next_hop_address, sizeof(nbuf), nbuf);
-      fprintf(fp, "  map %s/%d %s", pbuf, peer->prefix_length, nbuf);
-    }
+  case NHRP_PEER_TYPE_STATIC: {
+    const char *nbma = peer->nbma_hostname;
+    if (nbma == NULL)
+      nbma = nhrp_address_format(&peer->next_hop_address, sizeof(nbuf), nbuf);
+    if (peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS)
+      fprintf(fp, "  map dynamic %s", nbma);
+    else
+      fprintf(fp, "  map %s/%d %s", pbuf, peer->prefix_length, nbma);
     if (peer->local_connect_address.type != PF_UNSPEC) {
       char lbuf[64];
       nhrp_address_format(&peer->local_connect_address, sizeof(lbuf), lbuf);
@@ -807,8 +1023,22 @@ static int save_peer_config(void *ctx, struct nhrp_peer *peer) {
       fprintf(fp, " cisco");
     if (peer->flags & NHRP_PEER_FLAG_REG_NON_UNIQUE)
       fprintf(fp, " no-unique");
+    if (peer->forwarding_nbma.type == AF_INET)
+      fprintf(fp, " data-nbma %s", nhrp_address_format(&peer->forwarding_nbma, sizeof(nbuf), nbuf));
+    if (peer->forwarding_policy == NHRP_FORWARDING_ORDINARY)
+      fprintf(fp, " accept-data-nbma enable");
+    else if (peer->forwarding_policy == NHRP_FORWARDING_DISABLED)
+      fprintf(fp, " accept-data-nbma disable");
+    if (peer->accepted_forwarding_members != NULL) {
+      const char *member = peer->accepted_forwarding_members;
+      for (; member != NULL; member = strchr(member + 1, ' ')) {
+        size_t length = strcspn(member + 1, " ");
+        fprintf(fp, " accept-data-nbma ha %.*s", (int)length, member + 1);
+      }
+    }
     fprintf(fp, "\n");
     break;
+  }
   }
   return 0;
 }
@@ -824,6 +1054,9 @@ static int save_iface_config(void *ctx, struct nhrp_interface *iface) {
     return 0;
 
   fprintf(fp, "interface %s\n", iface->name);
+  if (iface->advertised_forwarding_nbma.type == AF_INET)
+    fprintf(fp, "  advertise-data-nbma %s\n",
+            nhrp_address_format(&iface->advertised_forwarding_nbma, sizeof(addr), addr));
 
   memset(&sel, 0, sizeof(sel));
   sel.interface = iface;

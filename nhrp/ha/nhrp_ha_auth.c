@@ -23,6 +23,7 @@
 
 static const uint8_t hkdf_salt[] = "OpenNHRP-HA-HKDF-v1";
 static const uint8_t auth_domain[] = "OpenNHRP-HA-AUTH-v1";
+static const uint8_t forwarding_domain[] = "NHRP-HA-FORWARDING";
 
 static int hmac_sha256(const uint8_t *key, size_t key_length,
                        const uint8_t *data, size_t data_length,
@@ -268,6 +269,12 @@ static int canonical(const struct nhrp_ha_auth_input *input,
                     input->ha_payload_length) ||
       !append_bytes(buffer, size, &offset, auth_prefix, auth_prefix_length) ||
       !append_bytes(buffer, size, &offset, key_id, 8))
+    return 0;
+  if (input->forwarding_payload != NULL &&
+      (!append_bytes(buffer, size, &offset, forwarding_domain,
+                     sizeof(forwarding_domain) - 1) ||
+       !append_bytes(buffer, size, &offset, input->forwarding_payload,
+                     NHRP_FORWARDING_NBMA_SIZE)))
     return 0;
   *length = offset;
   return 1;

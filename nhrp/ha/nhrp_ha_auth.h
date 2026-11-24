@@ -5,6 +5,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "nhrp_protocol.h"
 
 #define NHRP_EXTENSION_HA_AUTH 0x3802
 #define NHRP_HA_AUTH_VERSION 1
@@ -44,6 +45,7 @@ struct nhrp_ha_auth_input {
   uint8_t dst_protocol[4];
   const uint8_t *ha_payload;
   size_t ha_payload_length;
+  const uint8_t *forwarding_payload;
 };
 
 struct nhrp_ha_auth_metadata {

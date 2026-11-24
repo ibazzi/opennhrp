@@ -74,9 +74,12 @@ struct nhrp_peer *nhrp_peer_ha_commit(struct nhrp_interface *interface,
 }
 void nhrp_peer_ha_suspend_static(struct nhrp_interface *interface,
                                 struct nhrp_address *protocol) {}
-int nhrp_peer_ha_anchor_configured(struct nhrp_interface *interface,
-                                   struct nhrp_address *protocol) {
-  return TRUE;
+void nhrp_peer_ha_resume_static(struct nhrp_interface *interface,
+                                const struct nhrp_address *protocol) {}
+void nhrp_peer_remove(struct nhrp_peer *peer) {}
+void nhrp_peer_update_multicast(struct nhrp_peer *peer) {}
+const struct nhrp_address *nhrp_peer_nat_nbma(const struct nhrp_peer *peer) {
+  return NULL;
 }
 int kernel_send(uint8_t *data, size_t length, struct nhrp_interface *interface,
                 struct nhrp_address *destination) {
@@ -475,6 +478,132 @@ static void test_protocol_rotation(void) {
   assert(object_count(&services) == 0);
 }
 
+static void test_spoke_keyring_reload(void) {
+  char directory[] = "/tmp/opennhrp-spoke-keyring.XXXXXX";
+  char path[PATH_MAX], saved_directory[PATH_MAX];
+  struct nhrp_interface spoke = {.name = "gre-keys"};
+  struct nhrp_interface second_spoke = {.name = "gre-other"};
+  struct nhrp_ha_service service = {.interface = &spoke, .configured = TRUE};
+  struct nhrp_ha_service second_service = {
+      .interface = &second_spoke, .configured = TRUE};
+  struct nhrp_ha_candidate candidate = {.service = &service};
+  struct nhrp_peer anchor = {
+      .interface = &spoke, .type = NHRP_PEER_TYPE_STATIC,
+      .flags = NHRP_PEER_FLAG_REGISTER | NHRP_PEER_FLAG_CONFIGURED,
+      .accepted_forwarding_members = " hub"};
+  struct nhrp_packet *reply;
+  struct nhrp_ha_bootstrap *bootstrap;
+  struct nhrp_ha_bootstrap *second_bootstrap;
+  struct nhrp_ha_auth_profile *profile;
+  struct nhrp_ha_auth_profile *second_profile;
+  struct nhrp_ha_auth_keys keys = {0}, wrong_keys = {0};
+  struct nhrp_ha_auth_metadata expected = {
+      .cluster_id = {1}, .term = 1, .commit_index = 2, .leader = "hub"};
+  struct nhrp_ha_auth_metadata observed;
+  const uint8_t probe[] = {2, NHRP_HA_PROBE_REPLY};
+  struct nhrp_ha_auth_input input = {
+      .packet_type = NHRP_PACKET_RESOLUTION_REPLY,
+      .ha_payload = probe, .ha_payload_length = sizeof(probe)};
+  struct nhrp_buffer *auth;
+  struct nhrp_address nbma, advertised, selected;
+  uint8_t key_id[NHRP_HA_AUTH_KEY_ID_SIZE];
+  uint8_t psk[NHRP_HA_AUTH_KEY_SIZE] = {1};
+
+  assert(mkdtemp(directory) != NULL);
+  strcpy(saved_directory, managed_state_directory);
+  strcpy(managed_state_directory, directory);
+  assert(setenv("OPENNHRP_HA_KEY_DIR", directory, 1) == 0);
+  assert(nhrp_address_parse("10.90.0.1", &service.protocol, NULL));
+  assert(nhrp_address_parse("192.0.2.1", &nbma, NULL));
+  assert(bootstrap_configure(&spoke, &service.protocol, &nbma, NULL));
+  bootstrap = bootstrap_find(&spoke, FALSE);
+  bootstrap->automatic = TRUE;
+  profile = auth_profile_find(&spoke, FALSE);
+  assert(auth_profile_validate(profile));
+  list_add(&service.list_entry, &services);
+
+  list_init(&spoke.peer_list);
+  anchor.protocol_address = service.protocol;
+  anchor.next_hop_address = nbma;
+  list_add(&anchor.peer_list_entry, &spoke.peer_list);
+  strcpy(candidate.member_id, "hub");
+  assert(nhrp_address_parse("192.0.2.2", &advertised, NULL));
+  reply = nhrp_packet_alloc();
+  assert(reply != NULL);
+  nhrp_packet_request_forwarding(reply, NHRP_EXTENSION_HA_FORWARDING);
+  nhrp_packet_reply_forwarding(reply, NHRP_EXTENSION_HA_FORWARDING, &advertised);
+  candidate_observe_forwarding(&candidate, reply);
+  selected = candidate_forwarding_nbma(&candidate);
+  assert(!nhrp_address_cmp(&selected, &advertised));
+  strcpy(candidate.member_id, "other-hub");
+  assert(candidate_forwarding_nbma(&candidate).type == AF_UNSPEC);
+  strcpy(candidate.member_id, "hub");
+
+  assert(!nhrp_ha_reload_spoke_keyring(&spoke));
+  assert(spoke_keyring_path(&spoke, path, sizeof(path)));
+  assert(nhrp_ha_managed_keyring_generate(path, &keys));
+  assert(chmod(path, 0644) == 0 && !nhrp_ha_reload_spoke_keyring(&spoke));
+  assert(chmod(path, 0600) == 0 && nhrp_ha_reload_spoke_keyring(NULL));
+  assert(bootstrap->pending_auth && !profile->auth_required);
+  spoke_keyring_pending_clear(bootstrap);
+
+  second_service.protocol = service.protocol;
+  assert(bootstrap_configure(&second_spoke, &second_service.protocol, &nbma, NULL));
+  second_bootstrap = bootstrap_find(&second_spoke, FALSE);
+  second_bootstrap->automatic = TRUE;
+  list_del(&second_bootstrap->list_entry);
+  list_add(&second_bootstrap->list_entry, &bootstraps);
+  second_profile = auth_profile_find(&second_spoke, FALSE);
+  assert(auth_profile_validate(second_profile));
+  list_add(&second_service.list_entry, &services);
+  /* A missing key on the first interface must not skip the second. */
+  assert(!nhrp_ha_reload_spoke_keyring(NULL));
+  assert(!second_bootstrap->pending_auth);
+  assert(bootstrap->pending_auth && !profile->auth_required);
+  assert(nhrp_ha_reload_spoke_keyring(&spoke));
+  list_del(&second_service.list_entry);
+  list_del(&second_profile->list_entry);
+  free(second_profile);
+  list_del(&second_bootstrap->list_entry);
+  free(second_bootstrap);
+
+  assert(nhrp_ha_auth_key_from_bytes(&wrong_keys.key[0], psk));
+  auth = nhrp_buffer_alloc(nhrp_ha_auth_encoded_size(&keys, &expected));
+  assert(auth);
+  assert(nhrp_ha_auth_encode(&wrong_keys, &input, &expected, auth->data,
+                            auth->length) == NHRP_HA_AUTH_OK);
+  assert(!spoke_keyring_accept(&candidate, profile, &input, auth, &observed, key_id));
+  assert(bootstrap->pending_auth && !profile->auth_required);
+  assert(nhrp_ha_auth_encode(&keys, &input, &expected, auth->data,
+                            auth->length) == NHRP_HA_AUTH_OK);
+  assert(spoke_keyring_accept(&candidate, profile, &input, auth, &observed, key_id));
+  assert(!bootstrap->pending_auth && profile->auth_required);
+  candidate.auth_valid = TRUE;
+  assert(candidate_forwarding_nbma(&candidate).type == AF_UNSPEC);
+  candidate_observe_forwarding(&candidate, reply);
+  selected = candidate_forwarding_nbma(&candidate);
+  assert(!nhrp_address_cmp(&selected, &advertised));
+  assert(profile->seen.commit_index == expected.commit_index);
+  assert(unlink(path) == 0 && !nhrp_ha_reload_spoke_keyring(&spoke));
+  assert(profile->auth_required);
+
+  nhrp_packet_put(reply);
+  nhrp_buffer_free(auth);
+  nhrp_ha_auth_keys_clear(&keys);
+  nhrp_ha_auth_keys_clear(&wrong_keys);
+  nhrp_ha_auth_keys_clear(&profile->keys);
+  assert(unlink(profile->state_path) == 0);
+  list_del(&profile->list_entry);
+  free(profile);
+  list_del(&bootstrap->list_entry);
+  free(bootstrap);
+  list_del(&service.list_entry);
+  snprintf(path, sizeof(path), "%s/.lock", directory);
+  assert(unlink(path) == 0 && rmdir(directory) == 0);
+  strcpy(managed_state_directory, saved_directory);
+  unsetenv("OPENNHRP_HA_KEY_DIR");
+}
+
 int main(void) {
   ev_default_loop(0);
   strcpy(iface.name, "gre-test");
@@ -483,6 +612,7 @@ int main(void) {
   test_managed_reload();
   test_protocol_rotation();
   test_candidate_connect_address();
+  test_spoke_keyring_reload();
   puts("HA candidate retirement, pending request and reload lifecycle tests passed");
   ev_loop_destroy();
   return 0;

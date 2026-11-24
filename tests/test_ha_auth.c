@@ -117,6 +117,23 @@ int main(void) {
   assert(memcmp(matched, keys.key[0].id, 8) == 0 ||
          memcmp(matched, keys.key[1].id, 8) == 0);
 
+  uint8_t forwarding[] = {NHRP_FORWARDING_NBMA_VERSION, 172, 29, 1, 250};
+  input.forwarding_payload = forwarding;
+  assert(nhrp_ha_auth_verify(&keys, &input, wire, length, &decoded, matched) ==
+         NHRP_HA_AUTH_BAD_TAG);
+  assert(nhrp_ha_auth_encode(&keys, &input, &metadata, wire, length) ==
+         NHRP_HA_AUTH_OK);
+  assert(nhrp_ha_auth_verify(&keys, &input, wire, length, &decoded, matched) ==
+         NHRP_HA_AUTH_OK);
+  forwarding[4]++;
+  assert(nhrp_ha_auth_verify(&keys, &input, wire, length, &decoded, matched) ==
+         NHRP_HA_AUTH_BAD_TAG);
+  input.forwarding_payload = NULL;
+  assert(nhrp_ha_auth_verify(&keys, &input, wire, length, &decoded, matched) ==
+         NHRP_HA_AUTH_BAD_TAG);
+  assert(nhrp_ha_auth_encode(&keys, &input, &metadata, wire, length) ==
+         NHRP_HA_AUTH_OK);
+
   wire[length - 1] ^= 1;
   assert(nhrp_ha_auth_verify(&keys, &input, wire, length, &decoded, matched) ==
          NHRP_HA_AUTH_OK);

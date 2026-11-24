@@ -29,6 +29,7 @@
 
 #include "libev.h"
 #include "nhrp_common.h"
+#include "nhrp_ha.h"
 #include "nhrp_interface.h"
 #include "nhrp_peer.h"
 
@@ -60,6 +61,33 @@ static struct netlink_fd netlink_fds[ARRAY_SIZE(netlink_groups)];
 #define talk_fd netlink_fds[0]
 
 static struct ev_io packet_io;
+static ev_timer underlay_refresh;
+
+static void netlink_refresh_underlay(struct ev_timer *w, int revents) {
+  nhrp_peer_foreach(nhrp_peer_refresh_underlay, NULL, NULL);
+  nhrp_ha_refresh_underlay();
+}
+
+static void netlink_underlay_changed(const struct nlmsghdr *msg) {
+  switch (msg->nlmsg_type) {
+  case RTM_NEWROUTE:
+  case RTM_DELROUTE:
+    if (((const struct rtmsg *)NLMSG_DATA(msg))->rtm_family != AF_INET)
+      return;
+    break;
+  case RTM_NEWADDR:
+  case RTM_DELADDR:
+    if (((const struct ifaddrmsg *)NLMSG_DATA(msg))->ifa_family != AF_INET)
+      return;
+    break;
+  case RTM_NEWLINK:
+  case RTM_DELLINK:
+    break;
+  default:
+    return;
+  }
+  ev_timer_start(&underlay_refresh);
+}
 
 struct neighbor_transaction {
   int active;
@@ -188,9 +216,11 @@ static int netlink_receive(struct netlink_fd *fd, struct nlmsghdr *reply) {
         }
         memcpy(reply, h, len);
         got_reply = TRUE;
-      } else if (h->nlmsg_type <= fd->dispatch_size &&
+      } else if (h->nlmsg_type < fd->dispatch_size &&
                  fd->dispatch[h->nlmsg_type] != NULL) {
         fd->dispatch[h->nlmsg_type](h);
+        if (fd != &talk_fd)
+          netlink_underlay_changed(h);
       } else if (h->nlmsg_type != NLMSG_DONE) {
         nhrp_info("Unknown NLmsg: 0x%08x, len %d", h->nlmsg_type, h->nlmsg_len);
       }
@@ -414,7 +444,7 @@ static void netlink_neigh_request(struct nlmsghdr *msg) {
     return;
 
   if (peer->flags & NHRP_PEER_FLAG_UP)
-    kernel_inject_neighbor(&addr, nhrp_peer_active_nbma(peer), iface);
+    kernel_inject_neighbor(&addr, nhrp_peer_forwarding_nbma(peer), iface);
 
   if (peer->next_hop_address.type != PF_UNSPEC &&
       nhrp_address_cmp(&addr, &peer->protocol_address) != 0)
@@ -534,7 +564,6 @@ static void netlink_link_new(struct nlmsghdr *msg) {
     int count = 0;
 
     /* Reset the interface values we detect later */
-    memset(&iface->nat_cie, 0, sizeof(iface->nat_cie));
     iface->nbma_mtu = 0;
     if (iface->link_index) {
       /* Reenumerate addresses if needed */
@@ -673,6 +702,8 @@ static int netlink_addr_del_nbma(void *ctx, struct nhrp_interface *iface) {
 static int netlink_addr_purge_nbma(void *ctx, struct nhrp_peer *peer) {
   struct netlink_del_addr_msg *msg = (struct netlink_del_addr_msg *)ctx;
 
+  if (nhrp_peer_uses_underlay_route(peer))
+    return 0;
   if (nhrp_address_cmp(&peer->my_nbma_address, &msg->address) == 0)
     nhrp_peer_purge(peer, "address-removed");
 
@@ -951,6 +982,7 @@ int kernel_init(void) {
   ev_io_init(&packet_io, pfpacket_read_cb, fd, EV_READ);
   ev_io_start(&packet_io);
 
+  ev_timer_init(&underlay_refresh, netlink_refresh_underlay, 0., 0.);
   for (i = 0; i < ARRAY_SIZE(netlink_groups); i++) {
     netlink_fds[i].dispatch_size =
         sizeof(route_dispatch) / sizeof(route_dispatch[0]);
@@ -985,6 +1017,7 @@ void kernel_refresh_addresses(void) {
 void kernel_stop_listening(void) {
   int i;
 
+  ev_timer_stop(&underlay_refresh);
   for (i = 0; i < ARRAY_SIZE(netlink_groups); i++)
     netlink_stop_listening(&netlink_fds[i]);
   ev_io_stop(&packet_io);
@@ -993,6 +1026,7 @@ void kernel_stop_listening(void) {
 void kernel_cleanup(void) {
   int i;
 
+  ev_timer_stop(&underlay_refresh);
   if (neighbor_transaction.active)
     neighbor_transaction_complete(-ECANCELED);
 

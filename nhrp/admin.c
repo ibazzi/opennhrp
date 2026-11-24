@@ -274,6 +274,13 @@ static int admin_show_peer(void *ctx, struct nhrp_peer *peer) {
   if (peer->nbma_hostname) {
     i += admin_append(&buf[i], len - i, "Hostname: %s\n", peer->nbma_hostname);
   }
+  const struct nhrp_address *data_nbma = nhrp_peer_forwarding_nbma(peer);
+  if (data_nbma == &peer->forwarding_nbma || data_nbma == &peer->advertised_forwarding_nbma)
+    i += admin_append(&buf[i], len - i, "Data-NBMA-Address: %s\n",
+                      nhrp_address_format(data_nbma, sizeof(tmp), tmp));
+  if (peer->nat_nbma_address.type == AF_INET && (peer->flags & NHRP_PEER_FLAG_UP))
+    i += admin_append(&buf[i], len - i, "NAT-NBMA-Address: %s\n",
+                      nhrp_address_format(&peer->nat_nbma_address, sizeof(tmp), tmp));
   if (peer->type == NHRP_PEER_TYPE_STATIC) {
     i += admin_append(&buf[i], len - i,
                       "Map-Options: register=%d cisco=%d no-unique=%d\n",
@@ -563,11 +570,6 @@ static int admin_show_interface(void *ctx, struct nhrp_interface *iface) {
         iface->nbma_mtu,
         nhrp_address_format(&iface->nbma_address, sizeof(tmp), tmp));
   }
-  if (iface->nat_cie.nbma_address.addr_len != 0) {
-    i += admin_append(
-        &buf[i], len - i, "NBMA-NAT-OA: %s\n",
-        nhrp_address_format(&iface->nat_cie.nbma_address, sizeof(tmp), tmp));
-  }
 done:
   i += admin_append(&buf[i], len - i, "\n");
   admin_raw_write(ctx, buf, i);
@@ -660,6 +662,28 @@ static void admin_config_reload(void *ctx, const char *cmd) {
     admin_write(ctx, "Status: failed\n"
                      "Reason: config-reload-error\n");
   }
+}
+
+static void admin_spoke_keyring_reload(void *ctx, const char *cmd) {
+  struct nhrp_interface *iface = NULL;
+  char word[64], ifname[64];
+
+  if (parse_word(&cmd, sizeof(ifname), ifname)) {
+    if (parse_word(&cmd, sizeof(word), word)) {
+      admin_write(ctx, "Status: failed\nReason: expected at most one interface\n");
+      return;
+    }
+    iface = nhrp_interface_get_by_name(ifname, FALSE);
+    if (iface == NULL) {
+      admin_write(ctx, "Status: failed\nReason: unknown interface\n");
+      return;
+    }
+  }
+  if (!nhrp_ha_reload_spoke_keyring(iface)) {
+    admin_write(ctx, "Status: failed\nReason: spoke-keyring-reload-error\n");
+    return;
+  }
+  admin_write(ctx, "Status: ok\nKeyring: awaiting-hub-authentication\n");
 }
 
 static void admin_managed_reload(void *ctx, const char *cmd) {
@@ -1265,6 +1289,7 @@ static struct {
     {"update nbma", admin_update_nbma},
     {"ha managed stop", admin_managed_stop},
     {"ha managed reload", admin_managed_reload},
+    {"ha key reload", admin_spoke_keyring_reload},
     {"reload", admin_config_reload},
     {"config reload", admin_config_reload},
     {"map add", admin_map_add},

@@ -447,6 +447,10 @@ static int nhrp_handle_registration_request(struct nhrp_packet *packet) {
     nhrp_debug("Registration request has invalid HA member data");
     return TRUE;
   }
+  nhrp_packet_reply_forwarding(
+      packet, NHRP_EXTENSION_FORWARDING_NBMA,
+      nhrp_server_is_ha_registration(packet)
+          ? NULL : &packet->src_iface->advertised_forwarding_nbma);
 
   if (nhrp_server_request_pending(packet)) {
     nhrp_info("Already processing: resent packet ignored.");

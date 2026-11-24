@@ -107,7 +107,10 @@ struct nhrp_ha_candidate {
   uint32_t registration_generation;
   uint32_t endpoint_generation;
   enum nhrp_ha_candidate_state state;
-  struct nhrp_cie nat_cie;
+  struct nhrp_address nat_source_address;
+  struct nhrp_address nat_nbma_address;
+  struct nhrp_address advertised_forwarding_nbma;
+  int advertised_forwarding_authenticated;
   ev_tstamp last_registration_reply;
   ev_tstamp last_probe_reply;
   struct ev_timer registration_timer;
@@ -187,12 +190,14 @@ struct nhrp_ha_service {
   nhrp_ha_activate_callback switch_callback;
   void *switch_callback_ctx;
   struct nhrp_address switch_nbma;
-  int switch_has_local_nbma;
+  struct nhrp_address switch_local_nbma;
+  struct nhrp_address switch_forwarding_nbma;
   struct ev_timer reconcile_timer;
   int reconciling;
   struct nhrp_ha_candidate *reconcile_candidate;
   struct nhrp_address reconcile_nbma;
-  int reconcile_has_local_nbma;
+  struct nhrp_address reconcile_local_nbma;
+  struct nhrp_address reconcile_forwarding_nbma;
   int selection_manual;
   char manual_member[NHRP_HA_MEMBER_ID_MAX + 1];
   char manual_leader[NHRP_HA_AUTH_LEADER_MAX + 1];
@@ -264,6 +269,7 @@ struct nhrp_ha_bootstrap {
   struct nhrp_address protocol;
   struct nhrp_address nbma;
   char keyring_path[PATH_MAX];
+  struct nhrp_ha_auth_profile *pending_auth;
   int configured;
   int automatic;
   int warned_unauthenticated;
@@ -310,6 +316,7 @@ static void probe_timer_cb(struct ev_timer *timer, int revents);
 static void reconcile_timer_cb(struct ev_timer *timer, int revents);
 static void reconcile_schedule(struct nhrp_ha_service *service,
                                ev_tstamp delay);
+static void service_changed(struct nhrp_ha_service *service);
 static int candidate_begin_activation(struct nhrp_ha_service *service,
                                       struct nhrp_ha_candidate *candidate);
 static void activate_neighbor_done(void *ctx, int status);
@@ -437,6 +444,94 @@ static struct nhrp_ha_bootstrap *bootstrap_find(struct nhrp_interface *iface,
   bootstrap->interface = iface;
   list_add_tail(&bootstrap->list_entry, &bootstraps);
   return bootstrap;
+}
+
+static int spoke_keyring_path(struct nhrp_interface *iface, char *path, size_t size) {
+  const char *directory = getenv("OPENNHRP_HA_KEY_DIR");
+  if (directory == NULL)
+    directory = "/etc/opennhrp/ha";
+  int length = snprintf(path, size, "%s/%s.keys", directory, iface->name);
+
+  return length >= 0 && (size_t)length < size;
+}
+
+static void spoke_keyring_pending_clear(struct nhrp_ha_bootstrap *bootstrap) {
+  if (bootstrap->pending_auth == NULL)
+    return;
+  nhrp_ha_auth_keys_clear(&bootstrap->pending_auth->keys);
+  free(bootstrap->pending_auth);
+  bootstrap->pending_auth = NULL;
+}
+
+static struct nhrp_peer *bootstrap_peer(struct nhrp_ha_service *service) {
+  struct nhrp_ha_bootstrap *bootstrap;
+  struct nhrp_peer *peer;
+
+  bootstrap = bootstrap_find(service->interface, FALSE);
+  if (bootstrap == NULL || !bootstrap->configured)
+    return NULL;
+  list_for_each_entry(peer, &service->interface->peer_list, peer_list_entry) {
+    if (peer->type == NHRP_PEER_TYPE_STATIC &&
+        (peer->flags & (NHRP_PEER_FLAG_REGISTER | NHRP_PEER_FLAG_CONFIGURED |
+                        NHRP_PEER_FLAG_MARK | NHRP_PEER_FLAG_REMOVED)) ==
+            (NHRP_PEER_FLAG_REGISTER | NHRP_PEER_FLAG_CONFIGURED) &&
+        !nhrp_address_cmp(&peer->protocol_address, &service->protocol) &&
+        !nhrp_address_cmp(&peer->next_hop_address, &bootstrap->nbma))
+      return peer;
+  }
+  return NULL;
+}
+
+static struct nhrp_address candidate_forwarding_nbma(struct nhrp_ha_candidate *candidate) {
+  struct nhrp_ha_service *service = candidate->service;
+  struct nhrp_peer *peer = bootstrap_peer(service);
+  struct nhrp_ha_auth_profile *profile;
+  const char *member;
+  size_t length = strlen(candidate->member_id);
+
+  if (peer == NULL)
+    return (struct nhrp_address){0};
+  if (!strcmp(candidate->member_id, service->bootstrap_member) &&
+      peer->forwarding_nbma.type == AF_INET)
+    return peer->forwarding_nbma;
+  if (peer->accepted_forwarding_members == NULL)
+    return (struct nhrp_address){0};
+  profile = auth_profile_find(service->interface, FALSE);
+  if (profile != NULL && profile->auth_configured &&
+      (!candidate->auth_valid || !candidate->advertised_forwarding_authenticated))
+    return (struct nhrp_address){0};
+  for (member = peer->accepted_forwarding_members; member != NULL;
+       member = strchr(member + 1, ' ')) {
+    if (!strncmp(member + 1, candidate->member_id, length) &&
+        (member[length + 1] == ' ' || member[length + 1] == '\0'))
+      return candidate->advertised_forwarding_nbma;
+  }
+  return (struct nhrp_address){0};
+}
+
+static void reply_forwarding_address(struct nhrp_packet *packet) {
+  struct nhrp_ha_auth_profile *profile = auth_profile_find(packet->src_iface, FALSE);
+  const struct nhrp_address *address = NULL;
+
+  if (profile != NULL && profile->valid && profile->auth_configured &&
+      profile->key_configured[0])
+    address = &packet->src_iface->advertised_forwarding_nbma;
+  nhrp_packet_reply_forwarding(packet, NHRP_EXTENSION_HA_FORWARDING, address);
+}
+
+static void candidate_observe_forwarding(struct nhrp_ha_candidate *candidate,
+                                         struct nhrp_packet *reply) {
+  struct nhrp_address address =
+      nhrp_packet_read_forwarding(reply, NHRP_EXTENSION_HA_FORWARDING);
+  int authenticated = address.type == AF_INET && candidate->auth_valid;
+
+  if (!nhrp_address_cmp(&address, &candidate->advertised_forwarding_nbma) &&
+      authenticated == candidate->advertised_forwarding_authenticated)
+    return;
+  candidate->advertised_forwarding_nbma = address;
+  candidate->advertised_forwarding_authenticated = authenticated;
+  service_changed(candidate->service);
+  reconcile_schedule(candidate->service, 0.01);
 }
 
 static int
@@ -1301,6 +1396,25 @@ static int hub_list_apply(struct nhrp_ha_candidate *source,
   for (i = 0; i < group_count; i++) {
     size_t endpoint;
 
+    /* The configured bootstrap address can be a private address that the
+     * Hub leaves out of its cluster-wide endpoint list. */
+    if (service->automatic &&
+        !strcmp(service->bootstrap_member, groups[i].member)) {
+      struct nhrp_ha_bootstrap *bootstrap = bootstrap_find(service->interface, FALSE);
+
+      if (bootstrap != NULL && bootstrap->configured) {
+        for (endpoint = 0; endpoint < groups[i].address_count; endpoint++)
+          if (!nhrp_address_cmp(&bootstrap->nbma, &groups[i].addresses[endpoint]))
+            break;
+        if (endpoint == groups[i].address_count) {
+          if (endpoint < ARRAY_SIZE(groups[i].addresses))
+            groups[i].address_count++;
+          else
+            endpoint--;
+          groups[i].addresses[endpoint] = bootstrap->nbma;
+        }
+      }
+    }
     candidate = candidate_find(service, groups[i].member);
     if (candidate == NULL || !candidate->static_configured || service->automatic)
       continue;
@@ -1507,14 +1621,21 @@ static void registration_reply_process(void *ctx, struct nhrp_packet *reply) {
   if (code != NHRP_CODE_SUCCESS)
     goto failed;
 
-  memset(&candidate->nat_cie, 0, sizeof(candidate->nat_cie));
+  candidate_observe_forwarding(candidate, reply);
   payload = nhrp_packet_extension(
       reply, NHRP_EXTENSION_NAT_ADDRESS | NHRP_EXTENSION_FLAG_NOCREATE,
       NHRP_PAYLOAD_TYPE_CIE_LIST);
-  if (payload != NULL) {
-    cie = nhrp_payload_get_cie(payload, 2);
-    if (cie != NULL)
-      candidate->nat_cie = *cie;
+  cie = payload ? nhrp_payload_get_cie(payload, 2) : NULL;
+  candidate->nat_source_address = reply->src_nbma_address;
+  candidate->nat_nbma_address = cie && cie->nbma_address.type == AF_INET
+                                    ? cie->nbma_address : (struct nhrp_address){0};
+  if (candidate == candidate->service->active && candidate->service->active_peer &&
+      !nhrp_address_cmp(&candidate->service->active_peer->next_hop_address,
+                        &registration_endpoint)) {
+    struct nhrp_peer *peer = candidate->service->active_peer;
+    peer->my_nbma_address = candidate->nat_source_address;
+    peer->nat_source_address = candidate->nat_source_address;
+    peer->nat_nbma_address = candidate->nat_nbma_address;
   }
 
   candidate->registered = TRUE;
@@ -1605,6 +1726,8 @@ int nhrp_ha_prepare_registration_discovery(struct nhrp_peer *peer,
   }
   nhrp_buffer_free(member);
   nhrp_payload_set_raw(payload, compat);
+  if (peer->accepted_forwarding_members != NULL)
+    nhrp_packet_request_forwarding(packet, NHRP_EXTENSION_HA_FORWARDING);
   return TRUE;
 }
 
@@ -1618,7 +1741,6 @@ int nhrp_ha_handle_registration_discovery(struct nhrp_peer *peer,
   struct nhrp_payload *payload;
   struct nhrp_ha_hub_list list;
   const char *state_directory = managed_state_directory;
-  const char *key_directory = getenv("OPENNHRP_HA_KEY_DIR");
   const char *keyring = NULL;
   char keyring_path[PATH_MAX];
   char seen_path[PATH_MAX];
@@ -1651,10 +1773,7 @@ int nhrp_ha_handle_registration_discovery(struct nhrp_peer *peer,
     return FALSE;
   }
 
-  if (key_directory == NULL)
-    key_directory = "/etc/opennhrp/ha";
-  if (snprintf(keyring_path, sizeof(keyring_path), "%s/%s.keys", key_directory,
-               peer->interface->name) >= (int)sizeof(keyring_path))
+  if (!spoke_keyring_path(peer->interface, keyring_path, sizeof(keyring_path)))
     return FALSE;
   keyring_exists = access(keyring_path, F_OK) == 0;
   if (!keyring_exists && errno != ENOENT) {
@@ -1824,6 +1943,7 @@ static void registration_timer_cb(struct ev_timer *timer, int revents) {
   }
   nhrp_payload_set_raw(payload, member);
 
+  nhrp_packet_request_forwarding(packet, NHRP_EXTENSION_HA_FORWARDING);
   request = calloc(1, sizeof(*request));
   if (request == NULL)
     goto failed;
@@ -1857,6 +1977,29 @@ static void registration_schedule(struct nhrp_ha_candidate *candidate,
     return;
   ev_timer_set(&candidate->registration_timer, delay, 0.0);
   ev_timer_start(&candidate->registration_timer);
+}
+
+void nhrp_ha_refresh_underlay(void) {
+  struct nhrp_ha_service *service;
+
+  list_for_each_entry(service, &services, list_entry) {
+    struct nhrp_interface *iface = service->interface;
+    struct nhrp_ha_candidate *candidate = service->active;
+    struct nhrp_peer *direct_peer;
+
+    if (candidate == NULL || !candidate->configured || !candidate->registered ||
+        candidate->registration_pending || candidate->nat_source_address.type != AF_INET ||
+        !iface->index || iface->afnum != AFNUM_INET || iface->link_index ||
+        iface->nbma_address.type != AF_UNSPEC)
+      continue;
+    direct_peer = candidate_direct_peer(candidate, &candidate->nbma);
+    if (direct_peer == NULL)
+      continue;
+    if (direct_peer->my_nbma_address.type == AF_INET &&
+        nhrp_address_cmp(&direct_peer->my_nbma_address, &candidate->nat_source_address))
+      registration_schedule(candidate, 0.01);
+    nhrp_peer_put(direct_peer);
+  }
 }
 
 static double candidate_min_rto(struct nhrp_ha_candidate *candidate) {
@@ -2081,6 +2224,7 @@ static void probe_reply_process(void *ctx, struct nhrp_packet *reply) {
   previous_commit = candidate->auth_commit_index;
   if (!candidate_authenticate(candidate, reply, ha))
     goto missed;
+  candidate_observe_forwarding(candidate, reply);
   candidate->owner_term = takeover_term;
   candidate->owner_index = takeover_index;
   prefer_takeover =
@@ -2337,6 +2481,7 @@ static void probe_timer_cb(struct ev_timer *timer, int revents) {
   }
   nhrp_payload_set_raw(payload, probe);
 
+  nhrp_packet_request_forwarding(packet, NHRP_EXTENSION_HA_FORWARDING);
   request = calloc(1, sizeof(*request));
   if (request == NULL) {
     nhrp_packet_put(packet);
@@ -2445,6 +2590,7 @@ void nhrp_ha_cleanup(void) {
   struct nhrp_ha_service *service;
   struct nhrp_ha_candidate *candidate;
   struct nhrp_ha_auth_profile *profile;
+  struct nhrp_ha_bootstrap *bootstrap;
   struct nhrp_ha_local_override *override;
   struct nhrp_ha_local_override *next_override;
 
@@ -2461,6 +2607,8 @@ void nhrp_ha_cleanup(void) {
   }
   list_for_each_entry(profile, &auth_profiles, list_entry)
       nhrp_ha_auth_keys_clear(&profile->keys);
+  list_for_each_entry(bootstrap, &bootstraps, list_entry)
+      spoke_keyring_pending_clear(bootstrap);
   list_for_each_entry_safe(override, next_override, &local_overrides,
                            list_entry) {
     list_del(&override->list_entry);
@@ -2589,6 +2737,22 @@ void nhrp_ha_sweep_unconfigured(void) {
   struct nhrp_ha_auth_profile *profile;
   struct nhrp_ha_local_override *override;
   struct nhrp_ha_local_override *next;
+  struct nhrp_ha_bootstrap *bootstrap, *next_bootstrap;
+
+  list_for_each_entry_safe(bootstrap, next_bootstrap, &bootstraps, list_entry) {
+    service = service_find(bootstrap->interface, &bootstrap->protocol);
+    if (!bootstrap->automatic || (service != NULL && bootstrap_peer(service) != NULL))
+      continue;
+    profile = auth_profile_find(bootstrap->interface, FALSE);
+    if (profile != NULL && profile->bootstrap) {
+      nhrp_ha_auth_keys_clear(&profile->keys);
+      list_del(&profile->list_entry);
+      free(profile);
+    }
+    list_del(&bootstrap->list_entry);
+    spoke_keyring_pending_clear(bootstrap);
+    free(bootstrap);
+  }
 
   list_for_each_entry_safe(override, next, &local_overrides, list_entry) {
     if (!override->configured) {
@@ -2600,6 +2764,19 @@ void nhrp_ha_sweep_unconfigured(void) {
   }
 
   list_for_each_entry(service, &services, list_entry) {
+    if (service->automatic && bootstrap_peer(service) == NULL) {
+      service->configured = FALSE;
+      if (service->active_peer != NULL) {
+        nhrp_peer_remove(service->active_peer);
+        nhrp_peer_put(service->active_peer);
+        service->active_peer = NULL;
+      }
+      service->active = NULL;
+      nhrp_peer_ha_resume_static(service->interface, &service->protocol);
+      ev_timer_stop(&service->reconcile_timer);
+    } else if (service->automatic && service->active != NULL) {
+      nhrp_peer_ha_suspend_static(service->interface, &service->protocol);
+    }
     list_for_each_entry(candidate, &service->candidates, list_entry) {
       candidate->reload_existing = FALSE;
       candidate->configured =
@@ -2807,6 +2984,7 @@ static int bootstrap_configure(struct nhrp_interface *iface,
     return FALSE;
   }
   nhrp_ha_managed_state_unlock(lock_fd);
+  spoke_keyring_pending_clear(bootstrap);
   bootstrap->protocol = *protocol;
   bootstrap->nbma = *nbma;
   if (keyring_path != NULL && keyring_path[0] != 0) {
@@ -2827,6 +3005,62 @@ static int bootstrap_configure(struct nhrp_interface *iface,
   snprintf(profile->state_path, sizeof(profile->state_path), "%s", state_path);
   profile->valid = FALSE;
   return TRUE;
+}
+
+static int spoke_keyring_stage(struct nhrp_ha_bootstrap *bootstrap,
+                               struct nhrp_ha_service *service) {
+  struct nhrp_interface *iface = bootstrap->interface;
+  struct nhrp_ha_auth_profile *profile = auth_profile_find(iface, FALSE);
+  struct nhrp_ha_auth_profile *pending;
+  char path[PATH_MAX];
+
+  if (profile == NULL || !profile->bootstrap || !profile->valid ||
+      !spoke_keyring_path(iface, path, sizeof(path)))
+    return FALSE;
+
+  spoke_keyring_pending_clear(bootstrap);
+  pending = malloc(sizeof(*pending));
+  if (pending == NULL)
+    return FALSE;
+  *pending = *profile;
+  nhrp_ha_auth_keys_clear(&pending->keys);
+  if (nhrp_ha_managed_keyring_load(path, &pending->keys)) {
+    pending->key_configured[0] = pending->keys.key[0].present;
+    pending->key_configured[1] = pending->keys.key[1].present;
+    pending->auth_configured = pending->auth_required = TRUE;
+    pending->valid = FALSE;
+    if (auth_profile_validate(pending)) {
+      bootstrap->pending_auth = pending;
+      if (service->active != NULL)
+        probe_schedule(service->active, 0.01);
+      return TRUE;
+    }
+  }
+  nhrp_ha_auth_keys_clear(&pending->keys);
+  free(pending);
+  nhrp_error("Unable to reload Spoke HA keyring for %s", iface->name);
+  return FALSE;
+}
+
+int nhrp_ha_reload_spoke_keyring(struct nhrp_interface *iface) {
+  struct nhrp_ha_bootstrap *bootstrap;
+  int found = FALSE;
+  int ok = TRUE;
+
+  list_for_each_entry(bootstrap, &bootstraps, list_entry) {
+    struct nhrp_ha_service *service;
+
+    if (!bootstrap->configured || !bootstrap->automatic ||
+        (iface != NULL && bootstrap->interface != iface))
+      continue;
+    service = service_find(bootstrap->interface, &bootstrap->protocol);
+    if (service == NULL || !service->configured)
+      continue;
+    found = TRUE;
+    if (!spoke_keyring_stage(bootstrap, service))
+      ok = FALSE;
+  }
+  return found && ok;
 }
 
 static int managed_path_exists(const char *path, int *exists) {
@@ -3071,22 +3305,11 @@ int nhrp_ha_reload_managed(const char *directory) {
 
 int nhrp_ha_config_validate(void) {
   struct nhrp_ha_auth_profile *profile;
-  struct nhrp_ha_service *service;
 
   if (hub_enable.runtime_locked && !hub_enable.configured) {
     nhrp_error("enable-ha cannot be removed by configuration reload");
     return FALSE;
   }
-  if (configuration_reload) {
-    list_for_each_entry(service, &services, list_entry) {
-      if (service->automatic && !nhrp_peer_ha_anchor_configured(
-                                    service->interface, &service->protocol)) {
-        nhrp_error("An active automatic HA map cannot be removed by reload");
-        return FALSE;
-      }
-    }
-  }
-
   list_for_each_entry(profile, &auth_profiles, list_entry) {
     if (!auth_profile_validate(profile)) {
       nhrp_error("Incomplete or invalid HA authentication configuration on %s",
@@ -3440,6 +3663,7 @@ int nhrp_ha_prepare_registration_reply(struct nhrp_packet *packet) {
   if (compat)
     payload->extension_type = NHRP_EXTENSION_HA;
   nhrp_payload_set_raw(payload, member);
+  reply_forwarding_address(packet);
   return TRUE;
 
 ordinary:
@@ -3495,6 +3719,7 @@ int nhrp_ha_prepare_probe_reply(struct nhrp_packet *packet) {
   if (probe == NULL)
     return FALSE;
   nhrp_payload_set_raw(payload, probe);
+  reply_forwarding_address(packet);
   return 2;
 }
 
@@ -3565,6 +3790,7 @@ auth_advertisement_generation(struct nhrp_interface *iface,
 static int auth_input_from_packet(struct nhrp_packet *packet,
                                   const struct nhrp_buffer *ha,
                                   struct nhrp_ha_auth_input *input) {
+  const struct nhrp_buffer *forwarding;
   if (ha == NULL || packet->src_protocol_address.type != PF_INET ||
       packet->dst_protocol_address.type != PF_INET ||
       packet->src_protocol_address.addr_len != 4 ||
@@ -3577,6 +3803,9 @@ static int auth_input_from_packet(struct nhrp_packet *packet,
   memcpy(input->dst_protocol, packet->dst_protocol_address.addr, 4);
   input->ha_payload = ha->data;
   input->ha_payload_length = ha->length;
+  forwarding = nhrp_packet_forwarding_payload(packet, NHRP_EXTENSION_HA_FORWARDING);
+  if (forwarding != NULL && forwarding->length == NHRP_FORWARDING_NBMA_SIZE)
+    input->forwarding_payload = forwarding->data;
   return TRUE;
 }
 
@@ -3701,6 +3930,44 @@ static void candidate_auth_clear(struct nhrp_ha_candidate *candidate) {
     service_changed(candidate->service);
 }
 
+static int spoke_keyring_accept(struct nhrp_ha_candidate *candidate,
+                                struct nhrp_ha_auth_profile *profile,
+                                const struct nhrp_ha_auth_input *input,
+                                const struct nhrp_buffer *auth,
+                                struct nhrp_ha_auth_metadata *metadata,
+                                uint8_t key_id[NHRP_HA_AUTH_KEY_ID_SIZE]) {
+  struct nhrp_ha_service *service = candidate->service;
+  struct nhrp_ha_bootstrap *bootstrap;
+  struct nhrp_ha_auth_profile *pending;
+
+  /* Confirm the new keys against a signed reply to an existing HA probe. */
+  if (input->packet_type != NHRP_PACKET_RESOLUTION_REPLY ||
+      (service->active != NULL && candidate != service->active))
+    return FALSE;
+  bootstrap = bootstrap_find(service->interface, FALSE);
+  if (bootstrap == NULL || bootstrap->pending_auth == NULL)
+    return FALSE;
+  pending = bootstrap->pending_auth;
+  if (nhrp_ha_auth_verify(&pending->keys, input, auth->data, auth->length,
+                         metadata, key_id) != NHRP_HA_AUTH_OK ||
+      (profile->cluster_configured &&
+       CRYPTO_memcmp(profile->cluster_id, metadata->cluster_id,
+                     sizeof(profile->cluster_id)) != 0))
+    return FALSE;
+  if (profile->seen.term > pending->seen.term ||
+      (profile->seen.term == pending->seen.term &&
+       profile->seen.commit_index > pending->seen.commit_index))
+    pending->seen = profile->seen;
+  if (!auth_profile_observe(pending, metadata, key_id))
+    return FALSE;
+
+  pending->list_entry = profile->list_entry;
+  nhrp_ha_auth_keys_clear(&profile->keys);
+  *profile = *pending;
+  spoke_keyring_pending_clear(bootstrap);
+  return TRUE;
+}
+
 static int candidate_authenticate(struct nhrp_ha_candidate *candidate,
                                   struct nhrp_packet *reply,
                                   const struct nhrp_buffer *ha) {
@@ -3711,7 +3978,7 @@ static int candidate_authenticate(struct nhrp_ha_candidate *candidate,
   struct nhrp_payload *payload;
   uint8_t key_id[NHRP_HA_AUTH_KEY_ID_SIZE];
   enum nhrp_ha_auth_result res;
-  int changed;
+  int changed, reloaded;
 
   if (profile == NULL)
     return TRUE;
@@ -3733,8 +4000,14 @@ static int candidate_authenticate(struct nhrp_ha_candidate *candidate,
     return profile->auth_required ? FALSE : TRUE;
   }
 
-  res = nhrp_ha_auth_verify(&profile->keys, &input, payload->u.raw->data,
-                            payload->u.raw->length, &metadata, key_id);
+  reloaded = profile->bootstrap &&
+             spoke_keyring_accept(candidate, profile, &input, payload->u.raw,
+                                  &metadata, key_id);
+  if (reloaded)
+    res = NHRP_HA_AUTH_OK;
+  else
+    res = nhrp_ha_auth_verify(&profile->keys, &input, payload->u.raw->data,
+                              payload->u.raw->length, &metadata, key_id);
   if (profile->auth_configured) {
     int same_leader_lower_commit;
 
@@ -3763,7 +4036,7 @@ static int candidate_authenticate(struct nhrp_ha_candidate *candidate,
     }
   }
 
-  if (res == NHRP_HA_AUTH_OK || !profile->auth_configured) {
+  if (res == NHRP_HA_AUTH_OK) {
     changed = !candidate->auth_valid || candidate->auth_term != metadata.term ||
               candidate->auth_commit_index != metadata.commit_index ||
               strcmp(candidate->auth_leader, metadata.leader) != 0 ||
@@ -3775,16 +4048,26 @@ static int candidate_authenticate(struct nhrp_ha_candidate *candidate,
     candidate->auth_commit_index = metadata.commit_index;
     snprintf(candidate->auth_leader, sizeof(candidate->auth_leader), "%s",
              metadata.leader);
-    if (changed)
+    if (reloaded) {
+      struct nhrp_ha_service *service = candidate->service;
+      struct nhrp_ha_candidate *other;
+
+      list_for_each_entry(other, &service->candidates, list_entry) {
+        if (other != candidate)
+          candidate_auth_clear(other);
+      }
+      if (candidate == service->active && !candidate->registration_pending)
+        registration_schedule(candidate, 0.01);
+      nhrp_info("Reloaded Spoke HA keyring and authenticated Hub on %s",
+                service->interface->name);
+    }
+    if (changed || reloaded)
       service_changed(candidate->service);
     return TRUE;
   }
 
-  if (profile->auth_configured) {
-    candidate_auth_clear(candidate);
-    return FALSE;
-  }
-  return TRUE;
+  candidate_auth_clear(candidate);
+  return !profile->auth_required;
 }
 
 static size_t append(char *buffer, size_t size, size_t offset,
@@ -4184,16 +4467,29 @@ size_t nhrp_ha_render(char *buffer, size_t size, const char *interface_name,
 
 static int service_active_mapping_current(struct nhrp_ha_service *service) {
   const struct nhrp_address *local;
+  struct nhrp_address forwarding;
 
   if (service->active == NULL || service->active_peer == NULL ||
       nhrp_address_cmp(&service->active_peer->next_hop_address,
                        &service->active->nbma) != 0)
     return FALSE;
   local = candidate_local_nbma(service->active, NULL);
-  if (local == NULL)
-    return service->active_peer->local_connect_address.type == PF_UNSPEC;
-  return nhrp_address_cmp(&service->active_peer->local_connect_address,
-                          local) == 0;
+  forwarding = candidate_forwarding_nbma(service->active);
+  return (local == NULL ? service->active_peer->local_connect_address.type == PF_UNSPEC
+                        : !nhrp_address_cmp(&service->active_peer->local_connect_address, local)) &&
+         !nhrp_address_cmp(&service->active_peer->forwarding_nbma, &forwarding);
+}
+
+static struct nhrp_address *candidate_neighbor_nbma(struct nhrp_ha_candidate *candidate,
+                                                     struct nhrp_address *local,
+                                                     struct nhrp_address *forwarding) {
+  const struct nhrp_address *address = candidate_local_nbma(candidate, NULL);
+
+  *local = address != NULL ? *address : (struct nhrp_address){0};
+  *forwarding = candidate_forwarding_nbma(candidate);
+  if (forwarding->type != PF_UNSPEC)
+    return forwarding;
+  return local->type != PF_UNSPEC ? local : &candidate->nbma;
 }
 
 static void reconcile_schedule(struct nhrp_ha_service *service,
@@ -4215,7 +4511,7 @@ static void reconcile_neighbor_done_process(void *ctx, int status) {
   service->reconciling = FALSE;
   if (status != 0) {
     nhrp_error(
-        "Failed to update HA local NBMA for %s on %s: Netlink status %d",
+        "Failed to update HA data NBMA for %s on %s: Netlink status %d",
         nhrp_address_format(&service->protocol, sizeof(protocol), protocol),
         service->interface->name, status);
     reconcile_schedule(service, 1.0);
@@ -4225,13 +4521,14 @@ static void reconcile_neighbor_done_process(void *ctx, int status) {
     reconcile_schedule(service, 0.01);
     return;
   }
-  local = service->reconcile_has_local_nbma ? &service->reconcile_nbma : NULL;
+  local = service->reconcile_local_nbma.type != PF_UNSPEC
+              ? &service->reconcile_local_nbma : NULL;
   peer = nhrp_peer_ha_commit(service->interface, &service->protocol,
                              service->prefix_length, &service->active->nbma,
                              local);
   if (peer == NULL) {
     nhrp_error(
-        "Failed to commit HA local NBMA for %s on %s",
+        "Failed to commit HA data NBMA for %s on %s",
         nhrp_address_format(&service->protocol, sizeof(protocol), protocol),
         service->interface->name);
     reconcile_schedule(service, 1.0);
@@ -4239,7 +4536,11 @@ static void reconcile_neighbor_done_process(void *ctx, int status) {
   }
   if (service->active_peer != NULL)
     nhrp_peer_put(service->active_peer);
+  peer->forwarding_nbma = service->reconcile_forwarding_nbma;
+  nhrp_peer_update_multicast(peer);
   service->active_peer = peer;
+  peer->nat_source_address = service->active->nat_source_address;
+  peer->nat_nbma_address = service->active->nat_nbma_address;
   service_changed(service);
   reconcile_schedule(service, 0.01);
 }
@@ -4256,7 +4557,7 @@ static void reconcile_neighbor_done(void *ctx, int status) {
 static void reconcile_timer_cb(struct ev_timer *timer, int revents) {
   struct nhrp_ha_service *service =
       container_of(timer, struct nhrp_ha_service, reconcile_timer);
-  const struct nhrp_address *local;
+  struct nhrp_address *neighbor;
 
   (void)revents;
   if (service->active == NULL)
@@ -4267,13 +4568,12 @@ static void reconcile_timer_cb(struct ev_timer *timer, int revents) {
   }
   if (service_active_mapping_current(service))
     return;
-  local = candidate_local_nbma(service->active, NULL);
   service->reconcile_candidate = service->active;
-  service->reconcile_has_local_nbma = local != NULL;
-  service->reconcile_nbma = local != NULL ? *local : service->active->nbma;
+  neighbor = candidate_neighbor_nbma(service->active, &service->reconcile_local_nbma,
+                                     &service->reconcile_forwarding_nbma);
   service->reconciling = TRUE;
   if (!kernel_inject_neighbor_async(
-          &service->protocol, &service->reconcile_nbma, service->interface,
+          &service->protocol, neighbor, service->interface,
           reconcile_neighbor_done, service)) {
     service->reconciling = FALSE;
     reconcile_schedule(service, 0.1);
@@ -4282,20 +4582,18 @@ static void reconcile_timer_cb(struct ev_timer *timer, int revents) {
 
 static int candidate_begin_activation(struct nhrp_ha_service *service,
                                       struct nhrp_ha_candidate *candidate) {
+  struct nhrp_address *neighbor;
+
   service->switch_target = candidate;
   if (!service->switch_owner_set) {
     service->switch_owner_term = candidate->owner_term;
     service->switch_owner_index = candidate->owner_index;
   }
-  {
-    const struct nhrp_address *local = candidate_local_nbma(candidate, NULL);
-
-    service->switch_has_local_nbma = local != NULL;
-    service->switch_nbma = local != NULL ? *local : candidate->nbma;
-  }
+  neighbor = candidate_neighbor_nbma(candidate, &service->switch_local_nbma,
+                                     &service->switch_forwarding_nbma);
   service_changed(service);
   service->switch_committing = TRUE;
-  if (!kernel_inject_neighbor_async(&service->protocol, &service->switch_nbma,
+  if (!kernel_inject_neighbor_async(&service->protocol, neighbor,
                                     service->interface, activate_neighbor_done,
                                     service)) {
     service->switch_committing = FALSE;
@@ -4342,7 +4640,7 @@ static void activate_neighbor_done_process(void *ctx, int status) {
   peer = nhrp_peer_ha_commit(
       service->interface, &service->protocol, service->prefix_length,
       &target->nbma,
-      service->switch_has_local_nbma ? &service->switch_nbma : NULL);
+      service->switch_local_nbma.type != PF_UNSPEC ? &service->switch_local_nbma : NULL);
   if (peer == NULL) {
     service->switching = FALSE;
     service->switch_target = NULL;
@@ -4356,6 +4654,10 @@ static void activate_neighbor_done_process(void *ctx, int status) {
 
   if (service->active_peer != NULL)
     nhrp_peer_put(service->active_peer);
+  peer->forwarding_nbma = service->switch_forwarding_nbma;
+  peer->nat_source_address = target->nat_source_address;
+  peer->nat_nbma_address = target->nat_nbma_address;
+  nhrp_peer_update_multicast(peer);
   service->active_peer = peer;
   if (service->automatic)
     nhrp_peer_ha_suspend_static(service->interface, &service->protocol);
@@ -4373,7 +4675,6 @@ static void activate_neighbor_done_process(void *ctx, int status) {
   if (service->active->rto < HA_ACTIVE_MIN_RTO)
     service->active->rto = HA_ACTIVE_MIN_RTO;
   probe_schedule(service->active, 0.01);
-  service->interface->nat_cie = service->active->nat_cie;
   service->generation++;
   if (old != NULL && old != target) {
     candidate_release_owner(service, old, FALSE);

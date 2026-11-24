@@ -30,6 +30,53 @@ static void write_config(const char *path, const char *text) {
   assert(fclose(file) == 0);
 }
 
+static void test_dynamic_nhs_config(const char *path, struct nhrp_interface *iface) {
+  static const char config[] =
+      "interface test0\n advertise-data-nbma 172.29.1.251\n"
+      " map dynamic 192.0.2.10 register data-nbma 172.29.1.250"
+      " accept-data-nbma ha hub-a\n";
+  struct nhrp_peer *peer;
+  struct nhrp_address learned;
+  struct save_ctx ctx = { .iface = iface };
+  char *saved = NULL;
+  size_t length = 0;
+
+  write_config(path, config);
+  assert(load_config(path));
+  assert(!list_empty(&iface->peer_list));
+  peer = container_of(iface->peer_list.next, struct nhrp_peer, peer_list_entry);
+  assert(peer->flags & NHRP_PEER_FLAG_DISCOVER_NHS);
+  assert(peer->prefix_length == 32 && peer->protocol_address.type == AF_UNSPEC);
+  assert(peer->forwarding_policy == NHRP_FORWARDING_HA);
+  assert(nhrp_address_parse("10.164.0.254", &learned, NULL));
+  peer->protocol_address = learned;
+  assert(load_config(path));
+  assert(iface->peer_list.next == &peer->peer_list_entry);
+  assert(!nhrp_address_cmp(&peer->protocol_address, &learned));
+
+  ctx.fp = open_memstream(&saved, &length);
+  assert(ctx.fp != NULL && save_peer_config(&ctx, peer) == 0);
+  assert(fclose(ctx.fp) == 0);
+  assert(strstr(saved, "map dynamic 192.0.2.10 register data-nbma 172.29.1.250"
+                       " accept-data-nbma ha hub-a\n"));
+  free(saved);
+
+  write_config(path, "interface test0\n map dynamic 192.0.2.10\n");
+  assert(!load_config(path));
+  write_config(path, "interface test0\n map dynamic 192.0.2.10 register"
+                     " accept-data-nbma enable accept-data-nbma ha hub-b\n");
+  assert(!load_config(path));
+  assert(iface->peer_list.next == &peer->peer_list_entry);
+  assert(!nhrp_address_cmp(&peer->protocol_address, &learned));
+  assert(peer->forwarding_policy == NHRP_FORWARDING_HA);
+  assert(!strcmp(peer->accepted_forwarding_members, " hub-a"));
+  assert(iface->advertised_forwarding_nbma.type == AF_INET);
+  nhrp_address_set_type(&peer->protocol_address, AF_UNSPEC);
+  write_config(path, "interface test0\n");
+  assert(load_config(path));
+  ev_run(EVRUN_NOWAIT);
+}
+
 int main(void) {
   char path[] = "/tmp/opennhrp-config-test.XXXXXX";
   struct nhrp_interface *iface;
@@ -100,6 +147,8 @@ int main(void) {
     nhrp_peer_remove(peers[i]);
     nhrp_peer_put(peers[i]);
   }
+  ev_run(EVRUN_NOWAIT);
+  test_dynamic_nhs_config(path, iface);
   nhrp_interface_cleanup();
   ev_loop_destroy();
   assert(unlink(path) == 0);

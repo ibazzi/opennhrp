@@ -277,7 +277,7 @@ static void send_multicast(struct multicast_packet *pkt) {
       continue;
 
     /* Update NBMA destination */
-    nbma = nhrp_peer_active_nbma(peer);
+    nbma = nhrp_peer_forwarding_nbma(peer);
     if (nbma->type != PF_INET || nbma->addr_len != 4) {
       multicast_error("invalid NBMA destination");
       continue;

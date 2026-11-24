@@ -73,6 +73,8 @@
 #define NHRP_PEER_FLAG_HA_BOOTSTRAP 0x1000 /* Dormant automatic HA anchor */
 #define NHRP_PEER_FLAG_HA_CAPABLE 0x2000   /* Validated HA registration */
 #define NHRP_PEER_FLAG_HA_DIRECT 0x4000    /* Managed Hub direct owner */
+#define NHRP_PEER_FLAG_WAIT_UNDERLAY 0x8000
+#define NHRP_PEER_FLAG_DISCOVER_NHS 0x20000
 
 #define NHRP_PEER_FIND_ROUTE 0x01
 #define NHRP_PEER_FIND_EXACT 0x02
@@ -87,6 +89,13 @@ struct nhrp_pending_request;
 union __attribute__((__transparent_union__)) nhrp_peer_event {
   struct ev_timer *timer;
   struct ev_child *child;
+};
+
+enum nhrp_forwarding_policy {
+  NHRP_FORWARDING_DEFAULT,
+  NHRP_FORWARDING_DISABLED,
+  NHRP_FORWARDING_ORDINARY,
+  NHRP_FORWARDING_HA,
 };
 
 struct nhrp_peer {
@@ -127,6 +136,12 @@ struct nhrp_peer {
   struct nhrp_address next_hop_address;
   struct nhrp_address next_hop_nat_oa;
   struct nhrp_address local_connect_address;
+  struct nhrp_address nat_source_address;
+  struct nhrp_address nat_nbma_address;
+  struct nhrp_address forwarding_nbma;
+  struct nhrp_address advertised_forwarding_nbma;
+  enum nhrp_forwarding_policy forwarding_policy;
+  char *accepted_forwarding_members;
 };
 
 struct nhrp_peer_selector {
@@ -231,19 +246,32 @@ struct nhrp_peer *nhrp_peer_ha_commit(struct nhrp_interface *iface,
                                       struct nhrp_address *local_nbma_addr);
 void nhrp_peer_ha_suspend_static(struct nhrp_interface *iface,
                                  struct nhrp_address *proto_addr);
-int nhrp_peer_ha_anchor_configured(struct nhrp_interface *iface,
-                                   struct nhrp_address *proto_addr);
+void nhrp_peer_ha_resume_static(struct nhrp_interface *iface,
+                               const struct nhrp_address *proto_addr);
 int nhrp_peer_ha_anchor_local_nbma(struct nhrp_interface *iface,
                                    struct nhrp_address *proto_addr,
                                    struct nhrp_address *local_nbma_addr);
 
 void nhrp_server_finish_request(struct nhrp_pending_request *pr);
+const struct nhrp_address *nhrp_peer_nat_nbma(const struct nhrp_peer *peer);
+int nhrp_peer_uses_underlay_route(const struct nhrp_peer *peer);
+int nhrp_peer_refresh_underlay(void *ctx, struct nhrp_peer *peer);
 
 static inline struct nhrp_address *
 nhrp_peer_active_nbma(struct nhrp_peer *peer) {
   if (peer != NULL && peer->local_connect_address.type != PF_UNSPEC)
     return &peer->local_connect_address;
   return &peer->next_hop_address;
+}
+
+static inline struct nhrp_address *
+nhrp_peer_forwarding_nbma(struct nhrp_peer *peer) {
+  if (peer->forwarding_nbma.type != PF_UNSPEC)
+    return &peer->forwarding_nbma;
+  if (peer->forwarding_policy == NHRP_FORWARDING_ORDINARY &&
+      peer->advertised_forwarding_nbma.type == AF_INET)
+    return &peer->advertised_forwarding_nbma;
+  return nhrp_peer_active_nbma(peer);
 }
 
 #endif

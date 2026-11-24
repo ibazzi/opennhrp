@@ -76,6 +76,7 @@ typedef void (*nhrp_ha_activate_callback)(void *ctx, int status,
 typedef void (*nhrp_ha_coordinator_callback)(struct nhrp_interface *iface);
 
 void nhrp_ha_start(void);
+void nhrp_ha_refresh_underlay(void);
 void nhrp_ha_cleanup(void);
 void nhrp_ha_mark_configured(void);
 void nhrp_ha_config_reload_abort(void);
@@ -83,6 +84,7 @@ void nhrp_ha_sweep_unconfigured(void);
 int nhrp_ha_load_managed(const char *directory);
 int nhrp_ha_prepare_managed(const char *directory);
 int nhrp_ha_reload_managed(const char *directory);
+int nhrp_ha_reload_spoke_keyring(struct nhrp_interface *iface);
 int nhrp_ha_config_enable(struct nhrp_interface *iface, const char *member_id,
                           const struct nhrp_address *advertised,
                           size_t advertised_count);

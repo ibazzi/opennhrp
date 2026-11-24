@@ -936,9 +936,10 @@ static int usage(const char *program) {
           "       %s ha join --interface IFACE "
           "[--advertise-address IP ...]\n"
           "       %s ha mode <manual MEMBER|auto>\n"
+          "       %s ha key reload [IFACE]\n"
           "       %s ha leave\n"
           "       %s ha destroy --force\n",
-          program, program, program, program, program, program, program);
+          program, program, program, program, program, program, program, program);
   return 1;
 }
 

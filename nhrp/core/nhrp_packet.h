@@ -105,6 +105,14 @@ struct nhrp_payload *nhrp_packet_payload(struct nhrp_packet *packet,
 struct nhrp_payload *nhrp_packet_extension(struct nhrp_packet *packet,
                                            uint32_t extension,
                                            int payload_type);
+const struct nhrp_buffer *nhrp_packet_forwarding_payload(struct nhrp_packet *packet,
+                                                         uint16_t extension);
+void nhrp_packet_request_forwarding(struct nhrp_packet *packet, uint16_t extension);
+void nhrp_packet_reply_forwarding(struct nhrp_packet *packet, uint16_t extension,
+                                  const struct nhrp_address *address);
+struct nhrp_address nhrp_packet_read_forwarding(struct nhrp_packet *packet,
+                                                uint16_t extension);
+void nhrp_packet_cancel_registration(struct nhrp_peer *peer);
 int nhrp_packet_receive(uint8_t *pdu, size_t pdulen,
                         struct nhrp_interface *iface,
                         struct nhrp_address *from);

@@ -135,6 +135,13 @@ keyring disappears. Tests and isolated instances may override the directory
 with
 .BR OPENNHRP_HA_KEY_DIR .
 .PP
+After installing a keyring on a running automatic HA Spoke, use
+.BR "opennhrpctl ha key reload [IFACE]" .
+Omit the interface to try every running automatic HA Spoke interface.
+The daemon continues with the other interfaces if a keyring fails to load.
+The daemon switches to the new keyring after verifying a signed Hub probe
+reply and keeps its current GRE neighbor during verification.
+.PP
 Use
 .B no-unique
 keyword to disable setting of unique flag for registration requests.
@@ -148,6 +155,44 @@ a matching Purge Request can be sent if NBMA address has changed.
 Use
 .B no-unique
 instead on new installations.
+.RE
+
+.BI "map dynamic " nbma-address " register"
+.RS
+Learn the NHS IPv4 protocol address from the registration reply.
+The NBMA address or hostname remains the registration destination.
+Use a fixed map for an NHS that does not support this discovery request.
+.RE
+
+.BI "data-nbma " nbma-address
+.RS
+Sets the destination for outgoing GRE data on the preceding registering map.
+For automatic HA the local setting applies to the bootstrap member.
+The data address takes precedence over an accepted announcement.
+.RE
+
+.BI "advertise-data-nbma " nbma-address
+.RS
+Announces the interface's GRE data destination to capable clients.
+Ordinary NHS and HA Hub use the same setting.
+.RE
+
+.BI "accept-data-nbma " "enable|disable|ha member-id"
+.RS
+Applies to the preceding registering map.
+.B enable
+accepts an ordinary NHS announcement from its registration reply.
+.B disable
+ignores announcements and is the default.
+.BI "ha " member-id
+accepts announcements from the named HA member.
+When the Spoke has a keyring, the announcement must pass HA authentication.
+Without a keyring, use this policy on a trusted underlay.
+Repeat the HA form to select multiple members.
+When neither an explicit
+.B data-nbma
+nor an accepted announcement supplies a data address, GRE data uses the
+registration destination.
 .RE
 
 .BI "ha-local-nbma " member-id " " local-nbma-address
